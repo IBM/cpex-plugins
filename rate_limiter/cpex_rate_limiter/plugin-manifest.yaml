@@ -1,0 +1,10 @@
+description: "Rate limiting by user/tenant/tool — memory (single-process) or Redis (shared across instances)"
+author: "ContextForge Team"
+version: "0.0.1"
+available_hooks:
+  - "prompt_pre_fetch"
+  - "tool_pre_invoke"
+default_configs:
+  by_user: "60/m"
+  by_tenant: "600/m"
+  by_tool: {}
