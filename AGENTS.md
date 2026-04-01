@@ -30,3 +30,13 @@ make check-all             # fmt-check + clippy + Rust tests
 - Rust: stable toolchain, `cargo fmt`, `clippy -- -D warnings`.
 - All source files must include Apache-2.0 SPDX license headers.
 - Versions are defined in `Cargo.toml` and pulled dynamically by maturin (`dynamic = ["version"]`).
+
+## Versioning
+
+When bumping a plugin version, update all of these:
+
+1. `Cargo.toml` — the single source of truth for the version number.
+2. `cpex_<plugin>/plugin-manifest.yaml` — the `version` field.
+3. `Cargo.lock` — updates automatically on the next build.
+
+Tag releases as `<plugin>-v<version>` (e.g., `rate-limiter-v0.0.2`) on `main` to trigger the PyPI publish workflow.
