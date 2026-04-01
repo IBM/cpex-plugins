@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+.venv/
+
+# Rust
+target/
+**/*.rs.bk
+
+# Maturin / PyO3 built extensions
+*.so
+*.dylib
+*.dll
+*.pyd
+
+# Build output
+dist/
+
+# Environment and secrets
+.env
+.env.*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
