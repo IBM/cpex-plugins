@@ -3,7 +3,7 @@ requires = ["maturin>=1.4,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "cpex-rate-limiter-plugin"
+name = "cpex-rate-limiter"
 dynamic = ["version"]
 description = "High-performance rate limiter engine for MCP Gateway"
 authors = [{ name = "ContextForge Contributors" }]
