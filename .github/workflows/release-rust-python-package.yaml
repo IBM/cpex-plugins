@@ -1,0 +1,232 @@
+name: Release Rust Python Package Plugin
+
+on:
+  push:
+    tags:
+      - "*-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag in the form <slug>-v<version>"
+        required: true
+        type: string
+      repository:
+        description: "Target package repository"
+        required: true
+        default: testpypi
+        type: choice
+        options:
+          - testpypi
+          - pypi
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      plugin: ${{ steps.resolve.outputs.plugin }}
+      plugin_path: ${{ steps.resolve.outputs.plugin_path }}
+      publish_env: ${{ steps.resolve.outputs.publish_env }}
+      checkout_ref: ${{ steps.resolve.outputs.checkout_ref }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      - name: Validate plugin catalog
+        run: python3 tools/plugin_catalog.py validate .
+
+      - id: resolve
+        shell: bash
+        env:
+          TAG_INPUT: ${{ inputs.tag }}
+          REPOSITORY_INPUT: ${{ inputs.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            tag="${TAG_INPUT}"
+            repository="${REPOSITORY_INPUT}"
+            git fetch --force origin "refs/tags/${tag}:refs/tags/${tag}"
+            git show-ref --verify --quiet "refs/tags/${tag}"
+            checkout_ref="refs/tags/${tag}"
+          else
+            tag="${GITHUB_REF_NAME}"
+            repository="pypi"
+            checkout_ref="${GITHUB_REF}"
+          fi
+
+          release_info="$(python3 tools/plugin_catalog.py release-info . "${tag}")"
+          plugin="$(printf '%s' "${release_info}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["slug"])')"
+          plugin_path="$(printf '%s' "${release_info}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["path"])')"
+
+          {
+            echo "plugin=${plugin}"
+            echo "plugin_path=${plugin_path}"
+            echo "checkout_ref=${checkout_ref}"
+            if [[ "${repository}" == "testpypi" ]]; then
+              echo "publish_env=testpypi"
+            else
+              echo "publish_env=pypi"
+            fi
+          } >> "$GITHUB_OUTPUT"
+
+  preflight:
+    needs: resolve
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ needs.resolve.outputs.checkout_ref }}
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      - name: Verify Rust toolchain
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Generate stubs
+        working-directory: ${{ needs.resolve.outputs.plugin_path }}
+        run: cargo run --bin stub_gen
+
+      - name: Verify generated stubs are checked in
+        working-directory: ${{ needs.resolve.outputs.plugin_path }}
+        run: git diff --exit-code
+
+  build-wheel:
+    needs: [resolve, preflight]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ needs.resolve.outputs.checkout_ref }}
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      - name: Verify Rust toolchain
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Install uv
+        run: python -m pip install uv==0.9.30 maturin==1.12.6
+
+      - name: Build wheel
+        working-directory: ${{ needs.resolve.outputs.plugin_path }}
+        run: uv run maturin build --release --out dist
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: wheel-${{ matrix.os }}
+          path: ${{ needs.resolve.outputs.plugin_path }}/dist/*.whl
+
+      - name: Test built wheel in isolated virtualenv
+        working-directory: ${{ needs.resolve.outputs.plugin_path }}
+        run: |
+          tmpdir="$(mktemp -d)"
+          python -m venv "${tmpdir}/venv"
+          venv_python="${tmpdir}/venv/bin/python"
+          if [[ ! -f "${venv_python}" ]]; then
+            venv_python="${tmpdir}/venv/Scripts/python.exe"
+          fi
+          "${venv_python}" -m pip install dist/*.whl pytest pytest-asyncio
+          cp -R "${GITHUB_WORKSPACE}/${{ needs.resolve.outputs.plugin_path }}/tests" "${tmpdir}/tests"
+          printf "[pytest]\npythonpath = tests\nasyncio_mode = auto\n" > "${tmpdir}/pytest.ini"
+          cd "${tmpdir}"
+          "${venv_python}" -m pytest \
+            -c "${tmpdir}/pytest.ini" \
+            "${tmpdir}/tests" -v
+
+  build-sdist:
+    needs: [resolve, preflight]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ needs.resolve.outputs.checkout_ref }}
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: python -m pip install uv==0.9.30 maturin==1.12.6
+
+      - name: Build sdist
+        working-directory: ${{ needs.resolve.outputs.plugin_path }}
+        run: uv run maturin sdist --out dist
+
+      - name: Upload sdist artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sdist
+          path: ${{ needs.resolve.outputs.plugin_path }}/dist/*.tar.gz
+
+      - name: Test built sdist in isolated virtualenv
+        working-directory: ${{ needs.resolve.outputs.plugin_path }}
+        run: |
+          tmpdir="$(mktemp -d)"
+          python -m venv "${tmpdir}/venv"
+          venv_python="${tmpdir}/venv/bin/python"
+          if [[ ! -f "${venv_python}" ]]; then
+            venv_python="${tmpdir}/venv/Scripts/python.exe"
+          fi
+          "${venv_python}" -m pip install dist/*.tar.gz pytest pytest-asyncio
+          cp -R "${GITHUB_WORKSPACE}/${{ needs.resolve.outputs.plugin_path }}/tests" "${tmpdir}/tests"
+          printf "[pytest]\npythonpath = tests\nasyncio_mode = auto\n" > "${tmpdir}/pytest.ini"
+          cd "${tmpdir}"
+          "${venv_python}" -m pytest \
+            -c "${tmpdir}/pytest.ini" \
+            "${tmpdir}/tests" -v
+
+  publish:
+    needs: [resolve, build-wheel, build-sdist]
+    runs-on: ubuntu-latest
+    environment: ${{ needs.resolve.outputs.publish_env }}
+    permissions:
+      id-token: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish distributions to TestPyPI
+        if: needs.resolve.outputs.publish_env == 'testpypi'
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e
+        with:
+          packages-dir: dist/
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+      - name: Publish distributions to PyPI
+        if: needs.resolve.outputs.publish_env == 'pypi'
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e
+        with:
+          packages-dir: dist/
+          skip-existing: true

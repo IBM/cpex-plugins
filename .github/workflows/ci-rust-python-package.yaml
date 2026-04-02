@@ -1,0 +1,115 @@
+name: CI Rust Python Package Plugins
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Makefile"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**"
+      - "README.md"
+      - "DEVELOPING.md"
+      - "TESTING.md"
+      - "plugins/rust/python-package/**"
+      - "tests/**"
+      - "tools/**"
+      - ".github/workflows/ci-rust-python-package.yaml"
+      - ".github/workflows/release-rust-python-package.yaml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "Makefile"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**"
+      - "README.md"
+      - "DEVELOPING.md"
+      - "TESTING.md"
+      - "plugins/rust/python-package/**"
+      - "tests/**"
+      - "tools/**"
+      - ".github/workflows/ci-rust-python-package.yaml"
+      - ".github/workflows/release-rust-python-package.yaml"
+
+concurrency:
+  group: ci-rust-python-package-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  validate-and-detect:
+    runs-on: ubuntu-latest
+    outputs:
+      plugins: ${{ steps.detect.outputs.plugins }}
+      has_plugins: ${{ steps.detect.outputs.has_plugins }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      - name: Run catalog tests
+        run: python3 -m unittest tests/test_plugin_catalog.py tests/test_install_built_wheel.py
+
+      - id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            selection="$(python3 tools/plugin_catalog.py ci-selection . diff "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}")"
+          elif [[ "${{ github.event.before }}" == "0000000000000000000000000000000000000000" ]]; then
+            selection="$(python3 tools/plugin_catalog.py ci-selection . all '' '')"
+          else
+            selection="$(python3 tools/plugin_catalog.py ci-selection . diff "${{ github.event.before }}" "${{ github.sha }}")"
+          fi
+
+          plugins="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["plugins"]))')"
+          has_plugins="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(str(json.load(sys.stdin)["has_plugins"]).lower())')"
+          echo "plugins=${plugins}" >> "$GITHUB_OUTPUT"
+          if [[ "${has_plugins}" == "false" ]]; then
+            echo "has_plugins=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_plugins=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-test:
+    needs: validate-and-detect
+    if: needs.validate-and-detect.outputs.has_plugins == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        plugin: ${{ fromJson(needs.validate-and-detect.outputs.plugins) }}
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      - name: Verify Rust toolchain
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Install uv
+        run: python -m pip install uv==0.9.30 maturin==1.12.6
+
+      - name: Sync plugin environment
+        working-directory: plugins/rust/python-package/${{ matrix.plugin }}
+        run: make sync
+
+      - name: Plugin CI verification
+        working-directory: plugins/rust/python-package/${{ matrix.plugin }}
+        run: make ci
