@@ -1,0 +1,30 @@
+description: "Rust-backed PII detection and masking for prompt arguments, tool inputs, and tool outputs"
+author: "ContextForge Contributors"
+version: "0.2.0"
+available_hooks:
+  - "prompt_pre_fetch"
+  - "prompt_post_fetch"
+  - "tool_pre_invoke"
+  - "tool_post_invoke"
+default_configs:
+  detect_ssn: true
+  detect_bsn: true
+  detect_credit_card: true
+  detect_email: true
+  detect_phone: true
+  detect_ip_address: true
+  detect_date_of_birth: true
+  detect_passport: true
+  detect_driver_license: true
+  detect_bank_account: true
+  detect_medical_record: true
+  default_mask_strategy: "redact"
+  redaction_text: "[REDACTED]"
+  block_on_detection: false
+  log_detections: false
+  include_detection_details: false
+  max_text_bytes: 10485760
+  max_nested_depth: 32
+  max_collection_items: 4096
+  custom_patterns: []
+  whitelist_patterns: []
