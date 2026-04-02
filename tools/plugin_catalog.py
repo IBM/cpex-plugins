@@ -39,6 +39,25 @@ class PluginRecord:
     package_name: str
     module_name: str
     version: str
+    release_wheel_matrix: list[dict[str, str]]
+
+
+def _release_wheel_matrix(slug: str) -> list[dict[str, str]]:
+    if slug == "rate_limiter":
+        return [
+            {"runner": "ubuntu-latest", "platform": "linux-x86_64"},
+            {"runner": "ubuntu-24.04-arm", "platform": "linux-aarch64"},
+            {"runner": "ubuntu-24.04-s390x", "platform": "linux-s390x"},
+            {"runner": "ubuntu-24.04-ppc64le", "platform": "linux-ppc64le"},
+            {"runner": "macos-latest", "platform": "macos-arm64"},
+            {"runner": "windows-latest", "platform": "windows-x86_64"},
+        ]
+
+    return [
+        {"runner": "ubuntu-latest", "platform": "linux-x86_64"},
+        {"runner": "macos-latest", "platform": "macos-arm64"},
+        {"runner": "windows-latest", "platform": "windows-x86_64"},
+    ]
 
 
 def _manifest_version(manifest_path: Path) -> str:
@@ -224,6 +243,7 @@ def validate_plugin_dir(
         package_name=expected_package_name,
         module_name=expected_module_name,
         version=version,
+        release_wheel_matrix=_release_wheel_matrix(slug),
     )
 
 
@@ -376,7 +396,17 @@ def build_parser() -> argparse.ArgumentParser:
     release_field_parser = subparsers.add_parser("release-info-field")
     release_field_parser.add_argument("root", nargs="?", default=".")
     release_field_parser.add_argument("tag")
-    release_field_parser.add_argument("field", choices=("slug", "path", "package_name", "module_name", "version"))
+    release_field_parser.add_argument(
+        "field",
+        choices=(
+            "slug",
+            "path",
+            "package_name",
+            "module_name",
+            "version",
+            "release_wheel_matrix",
+        ),
+    )
 
     ci_parser = subparsers.add_parser("ci-selection")
     ci_parser.add_argument("root", nargs="?", default=".")

@@ -477,6 +477,17 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["slug"], "rate_limiter")
+        self.assertEqual(
+            payload["release_wheel_matrix"],
+            [
+                {"runner": "ubuntu-latest", "platform": "linux-x86_64"},
+                {"runner": "ubuntu-24.04-arm", "platform": "linux-aarch64"},
+                {"runner": "ubuntu-24.04-s390x", "platform": "linux-s390x"},
+                {"runner": "ubuntu-24.04-ppc64le", "platform": "linux-ppc64le"},
+                {"runner": "macos-latest", "platform": "macos-arm64"},
+                {"runner": "windows-latest", "platform": "windows-x86_64"},
+            ],
+        )
 
     def test_release_info_rejects_noncanonical_tag(self) -> None:
         result = run_catalog("release-info", str(REPO_ROOT), "rate_limiter-v0.0.3")
@@ -788,6 +799,14 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertEqual(workflow.count("cargo run --bin stub_gen"), 1)
         self.assertIn('git show-ref --verify --quiet "refs/tags/${tag}"', workflow)
         self.assertIn("python3 tools/plugin_catalog.py release-info .", workflow)
+        self.assertIn(
+            'wheel_matrix="$(printf \'%s\' "${release_info}" | python3 -c \'import json, sys; print(json.dumps(json.load(sys.stdin)["release_wheel_matrix"]))\')"',
+            workflow,
+        )
+        self.assertIn("wheel_matrix: ${{ steps.resolve.outputs.wheel_matrix }}", workflow)
+        self.assertIn("matrix:\n        include: ${{ fromJson(needs.resolve.outputs.wheel_matrix) }}", workflow)
+        self.assertIn("runs-on: ${{ matrix.runner }}", workflow)
+        self.assertIn("name: wheel-${{ matrix.platform }}", workflow)
         self.assertNotIn("tools/plugin_catalog.py release-info-field", workflow)
         self.assertNotIn("python3 - <<'PY'", workflow)
         self.assertIn("uv==0.9.30", workflow)

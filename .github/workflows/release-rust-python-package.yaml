@@ -28,6 +28,7 @@ jobs:
     outputs:
       plugin: ${{ steps.resolve.outputs.plugin }}
       plugin_path: ${{ steps.resolve.outputs.plugin_path }}
+      wheel_matrix: ${{ steps.resolve.outputs.wheel_matrix }}
       publish_env: ${{ steps.resolve.outputs.publish_env }}
       checkout_ref: ${{ steps.resolve.outputs.checkout_ref }}
     steps:
@@ -64,10 +65,12 @@ jobs:
           release_info="$(python3 tools/plugin_catalog.py release-info . "${tag}")"
           plugin="$(printf '%s' "${release_info}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["slug"])')"
           plugin_path="$(printf '%s' "${release_info}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["path"])')"
+          wheel_matrix="$(printf '%s' "${release_info}" | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["release_wheel_matrix"]))')"
 
           {
             echo "plugin=${plugin}"
             echo "plugin_path=${plugin_path}"
+            echo "wheel_matrix=${wheel_matrix}"
             echo "checkout_ref=${checkout_ref}"
             if [[ "${repository}" == "testpypi" ]]; then
               echo "publish_env=testpypi"
@@ -109,8 +112,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+        include: ${{ fromJson(needs.resolve.outputs.wheel_matrix) }}
+    runs-on: ${{ matrix.runner }}
     defaults:
       run:
         shell: bash
@@ -138,7 +141,7 @@ jobs:
       - name: Upload wheel artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: wheel-${{ matrix.os }}
+          name: wheel-${{ matrix.platform }}
           path: ${{ needs.resolve.outputs.plugin_path }}/dist/*.whl
 
       - name: Test built wheel in isolated virtualenv
