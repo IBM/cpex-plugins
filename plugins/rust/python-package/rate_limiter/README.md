@@ -1,6 +1,6 @@
 # Rate Limiter Plugin
 
-> Author: Mihai Criveti
+> Author: ContextForge Contributors
 
 Enforces rate limits per user, tenant, and tool across `tool_pre_invoke` and `prompt_pre_fetch` hooks. Supports pluggable counting algorithms (fixed window, sliding window, token bucket), an in-process memory backend (single-instance), and a Redis backend (shared across all gateway instances).
 

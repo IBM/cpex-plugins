@@ -7,6 +7,7 @@ __all__ = [
     "EvalDimension",
     "EvalResult",
     "RateLimiterEngine",
+    "RateLimiterPluginCore",
 ]
 
 @typing.final
@@ -125,3 +126,13 @@ class RateLimiterEngine:
         Returns an awaitable that resolves to `(allowed, headers_dict, meta_dict)`.
         """
 
+@typing.final
+class RateLimiterPluginCore:
+    def __new__(cls, config: dict) -> RateLimiterPluginCore: ...
+    def prompt_pre_fetch(self, payload: typing.Any, context: typing.Any) -> typing.Any: ...
+    def tool_pre_invoke(self, payload: typing.Any, context: typing.Any) -> typing.Any: ...
+
+
+
+def compat_default_config() -> dict: ...
+def compat_parse_rate(rate: builtins.str) -> tuple[builtins.int, builtins.int]: ...

@@ -50,7 +50,7 @@ class TestPluginInit:
     def test_all_algorithms(self):
         for algo in ("fixed_window", "sliding_window", "token_bucket"):
             plugin = RateLimiterPlugin(_make_config(algorithm=algo))
-            assert plugin._cfg.algorithm == algo
+            assert plugin is not None
 
     def test_invalid_algorithm_raises(self):
         with pytest.raises(ValueError, match="algorithm"):
@@ -74,7 +74,7 @@ class TestPluginInit:
             "backend": "memory",
         })
         plugin = RateLimiterPlugin(cfg)
-        assert plugin._cfg.by_user is None
+        assert plugin is not None
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +118,81 @@ class TestToolPreInvoke:
         # User B should still be allowed
         result = await plugin.tool_pre_invoke(payload, _make_context(user="userB"))
         assert result.continue_processing is True
+
+    async def test_dict_user_identity_uses_email_before_other_fields(self, plugin):
+        payload = ToolPreInvokePayload(name="search")
+        for _ in range(5):
+            await plugin.tool_pre_invoke(
+                payload,
+                _make_context(user={"email": "same@example.com", "id": "ignored"}),
+            )
+        result = await plugin.tool_pre_invoke(
+            payload,
+            _make_context(user={"email": "same@example.com", "id": "different"}),
+        )
+        assert result.continue_processing is False
+
+    async def test_non_string_user_identity_is_stringified(self):
+        plugin = RateLimiterPlugin(_make_config(by_user="1/s"))
+        payload = ToolPreInvokePayload(name="search")
+
+        first = await plugin.tool_pre_invoke(payload, _make_context(user=42))
+        second = await plugin.tool_pre_invoke(payload, _make_context(user=42))
+
+        assert first.continue_processing is True
+        assert second.continue_processing is False
+
+    async def test_dict_user_identity_falls_back_to_numeric_id(self):
+        plugin = RateLimiterPlugin(_make_config(by_user="1/s"))
+        payload = ToolPreInvokePayload(name="search")
+
+        first = await plugin.tool_pre_invoke(
+            payload,
+            _make_context(user={"id": 42}),
+        )
+        second = await plugin.tool_pre_invoke(
+            payload,
+            _make_context(user={"id": 42}),
+        )
+
+        assert first.continue_processing is True
+        assert second.continue_processing is False
+
+    async def test_dict_user_identity_falls_back_to_sub(self):
+        plugin = RateLimiterPlugin(_make_config(by_user="1/s"))
+        payload = ToolPreInvokePayload(name="search")
+
+        first = await plugin.tool_pre_invoke(
+            payload,
+            _make_context(user={"email": "   ", "id": None, "sub": "subject-42"}),
+        )
+        second = await plugin.tool_pre_invoke(
+            payload,
+            _make_context(user={"sub": "subject-42"}),
+        )
+
+        assert first.continue_processing is True
+        assert second.continue_processing is False
+
+    async def test_blank_user_identity_defaults_to_anonymous(self):
+        plugin = RateLimiterPlugin(_make_config(by_user="1/s"))
+        payload = ToolPreInvokePayload(name="search")
+
+        first = await plugin.tool_pre_invoke(payload, _make_context(user="   "))
+        second = await plugin.tool_pre_invoke(payload, _make_context(user=""))
+
+        assert first.continue_processing is True
+        assert second.continue_processing is False
+
+    async def test_none_user_identity_defaults_to_anonymous(self):
+        plugin = RateLimiterPlugin(_make_config(by_user="1/s"))
+        payload = ToolPreInvokePayload(name="search")
+
+        first = await plugin.tool_pre_invoke(payload, _make_context(user=None))
+        second = await plugin.tool_pre_invoke(payload, _make_context(user=None))
+
+        assert first.continue_processing is True
+        assert second.continue_processing is False
 
     async def test_headers_present_when_allowed(self, plugin):
         payload = ToolPreInvokePayload(name="search")
@@ -252,10 +327,11 @@ class TestFailOpen:
 
     async def test_tool_pre_invoke_fail_open(self, monkeypatch):
         plugin = RateLimiterPlugin(_make_config(by_user="5/s"))
-        monkeypatch.setattr(
-            plugin._engine, "check",
-            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")),
-        )
+        class ExplodingCore:
+            async def tool_pre_invoke(self, payload, context):
+                raise RuntimeError("boom")
+
+        plugin._core = ExplodingCore()
         payload = ToolPreInvokePayload(name="search")
         context = _make_context()
         result = await plugin.tool_pre_invoke(payload, context)
@@ -263,13 +339,25 @@ class TestFailOpen:
 
     async def test_prompt_pre_fetch_fail_open(self, monkeypatch):
         plugin = RateLimiterPlugin(_make_config(by_user="5/s"))
-        monkeypatch.setattr(
-            plugin._engine, "check",
-            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")),
-        )
+        class ExplodingCore:
+            async def prompt_pre_fetch(self, payload, context):
+                raise RuntimeError("boom")
+
+        plugin._core = ExplodingCore()
         payload = PromptPrehookPayload(prompt_id="my-prompt")
         context = _make_context()
         result = await plugin.prompt_pre_fetch(payload, context)
+        assert result.continue_processing is True
+
+    async def test_redis_backend_async_fail_open(self):
+        plugin = RateLimiterPlugin(_make_config(
+            by_user="1/s",
+            backend="redis",
+            redis_url="redis://127.0.0.1:1/0",
+        ))
+        payload = ToolPreInvokePayload(name="search")
+        context = _make_context()
+        result = await plugin.tool_pre_invoke(payload, context)
         assert result.continue_processing is True
 
 

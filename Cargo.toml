@@ -1,0 +1,31 @@
+[workspace]
+members = [
+    "plugins/rust/python-package/pii_filter",
+    "plugins/rust/python-package/rate_limiter",
+]
+resolver = "3"
+
+[workspace.package]
+authors = ["ContextForge Contributors"]
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/IBM/cpex-plugins"
+
+[workspace.dependencies]
+log = "0.4"
+pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
+pyo3 = { version = "0.28.2", features = ["abi3-py311"] }
+pyo3-log = "0.13"
+pyo3-stub-gen = "0.20.0"
+thiserror = "2.0"
+tokio = { version = "1", features = ["full"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+
+[profile.bench]
+inherits = "release"
+debug = true

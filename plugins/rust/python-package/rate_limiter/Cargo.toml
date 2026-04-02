@@ -1,0 +1,35 @@
+[package]
+name = "rate_limiter"
+version = "0.0.3"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "High-performance rate limiter engine for MCP Gateway"
+
+[lib]
+name = "rate_limiter_rust"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "stub_gen"
+path = "src/bin/stub_gen.rs"
+
+[dependencies]
+cpex_framework_bridge = { path = "../../../../crates/framework_bridge" }
+log = { workspace = true }
+pyo3 = { workspace = true }
+pyo3-async-runtimes = { workspace = true }
+pyo3-stub-gen = { workspace = true }
+pyo3-log = { workspace = true }
+parking_lot = "0.12"
+thiserror = { workspace = true }
+redis = { version = "0.27", features = ["aio", "tokio-comp"] }
+tokio = { workspace = true }
+
+[dev-dependencies]
+criterion = { version = "0.8", features = ["html_reports"] }
+
+[[bench]]
+name = "rate_limiter"
+harness = false

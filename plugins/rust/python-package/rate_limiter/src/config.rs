@@ -31,6 +31,8 @@ pub enum ConfigError {
     InvalidRateString(String),
     #[error("rate count must be > 0, got {0}")]
     ZeroCount(u64),
+    #[error("{field}: {message}")]
+    FieldError { field: String, message: String },
     #[error(
         "invalid algorithm {0:?}: expected \"fixed_window\", \"sliding_window\", or \"token_bucket\""
     )]
@@ -109,13 +111,32 @@ impl EngineConfig {
         by_tool: HashMap<String, String>,
         algorithm: &str,
     ) -> Result<Self, ConfigError> {
-        let by_user = by_user.map(parse_rate).transpose()?;
-        let by_tenant = by_tenant.map(parse_rate).transpose()?;
+        let by_user = by_user
+            .map(|rate| {
+                parse_rate(rate).map_err(|err| ConfigError::FieldError {
+                    field: format!("by_user={rate:?}"),
+                    message: err.to_string(),
+                })
+            })
+            .transpose()?;
+        let by_tenant = by_tenant
+            .map(|rate| {
+                parse_rate(rate).map_err(|err| ConfigError::FieldError {
+                    field: format!("by_tenant={rate:?}"),
+                    message: err.to_string(),
+                })
+            })
+            .transpose()?;
         let by_tool = by_tool
             .into_iter()
             .map(|(k, v)| {
                 let normalised_key = k.trim().to_ascii_lowercase();
-                parse_rate(&v).map(|limit| (normalised_key, limit))
+                parse_rate(&v)
+                    .map(|limit| (normalised_key, limit))
+                    .map_err(|err| ConfigError::FieldError {
+                        field: format!("by_tool[{k:?}]={v:?}"),
+                        message: err.to_string(),
+                    })
             })
             .collect::<Result<HashMap<_, _>, _>>()?;
         let algorithm = Algorithm::from_str(algorithm)

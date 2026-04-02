@@ -54,8 +54,9 @@ enum EngineBackend {
 /// - `backend: "memory"` (default) — in-process counting via `MemoryStore`
 /// - `backend: "redis"` — Rust owns the Redis connection; same batch Lua
 ///   scripts as the Python `RedisBackend`, one EVAL per hook invocation
+#[derive(Clone)]
 #[gen_stub_pyclass]
-#[pyclass]
+#[pyclass(skip_from_py_object)]
 pub struct RateLimiterEngine {
     config: EngineConfig,
     backend: EngineBackend,
@@ -71,6 +72,10 @@ impl RateLimiterEngine {
             config,
             clock,
         }
+    }
+
+    pub fn uses_async_backend(&self) -> bool {
+        matches!(self.backend, EngineBackend::Redis(_))
     }
 }
 
@@ -133,8 +138,12 @@ impl RateLimiterEngine {
                     pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
                 })?;
             EngineBackend::Redis(Arc::new(redis_limiter))
-        } else {
+        } else if backend_str == "memory" {
             EngineBackend::Memory(Arc::new(MemoryStore::new()))
+        } else {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "backend={backend_str:?}: must be 'memory' or 'redis'"
+            )));
         };
 
         Ok(Self {
