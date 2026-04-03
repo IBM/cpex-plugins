@@ -842,6 +842,19 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertEqual(workflow.count("cargo run --bin stub_gen"), 1)
         self.assertIn('git show-ref --verify --quiet "refs/tags/${tag}"', workflow)
         self.assertIn("python3 tools/plugin_catalog.py release-info .", workflow)
+        self.assertIn('if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then', workflow)
+        self.assertIn(
+            'wheel_matrix="$(python3 -c \'import json; print(json.dumps([{',
+            workflow,
+        )
+        self.assertIn(
+            '{"runner":"ubuntu-24.04-s390x","platform":"linux-s390x"}',
+            workflow,
+        )
+        self.assertIn(
+            '{"runner":"ubuntu-24.04-ppc64le","platform":"linux-ppc64le"}',
+            workflow,
+        )
         self.assertIn(
             'wheel_matrix="$(printf \'%s\' "${release_info}" | python3 -c \'import json, sys; print(json.dumps(json.load(sys.stdin)["release_wheel_matrix"]))\')"',
             workflow,
