@@ -489,6 +489,23 @@ class PluginCatalogTests(unittest.TestCase):
             ],
         )
 
+    def test_release_info_gives_pii_filter_the_same_target_matrix(self) -> None:
+        result = run_catalog("release-info", str(REPO_ROOT), "pii-filter-v0.2.0")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["slug"], "pii_filter")
+        self.assertEqual(
+            payload["release_wheel_matrix"],
+            [
+                {"runner": "ubuntu-latest", "platform": "linux-x86_64"},
+                {"runner": "ubuntu-24.04-arm", "platform": "linux-aarch64"},
+                {"runner": "ubuntu-24.04-s390x", "platform": "linux-s390x"},
+                {"runner": "ubuntu-24.04-ppc64le", "platform": "linux-ppc64le"},
+                {"runner": "macos-latest", "platform": "macos-arm64"},
+                {"runner": "windows-latest", "platform": "windows-x86_64"},
+            ],
+        )
+
     def test_release_info_rejects_noncanonical_tag(self) -> None:
         result = run_catalog("release-info", str(REPO_ROOT), "rate_limiter-v0.0.3")
         self.assertNotEqual(result.returncode, 0)
@@ -807,6 +824,17 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("matrix:\n        include: ${{ fromJson(needs.resolve.outputs.wheel_matrix) }}", workflow)
         self.assertIn("runs-on: ${{ matrix.runner }}", workflow)
         self.assertIn("name: wheel-${{ matrix.platform }}", workflow)
+        self.assertIn(
+            "matrix.runner != 'ubuntu-24.04-s390x' && matrix.runner != 'ubuntu-24.04-ppc64le'",
+            workflow,
+        )
+        self.assertIn(
+            "matrix.runner == 'ubuntu-24.04-s390x' || matrix.runner == 'ubuntu-24.04-ppc64le'",
+            workflow,
+        )
+        self.assertIn("sudo apt-get install -y python3.12 python3.12-dev python3.12-venv", workflow)
+        self.assertIn('ln -sf /usr/bin/python3.12 "${python_bin_dir}/python"', workflow)
+        self.assertIn('python -m ensurepip --upgrade', workflow)
         self.assertNotIn("tools/plugin_catalog.py release-info-field", workflow)
         self.assertNotIn("python3 - <<'PY'", workflow)
         self.assertIn("uv==0.9.30", workflow)
