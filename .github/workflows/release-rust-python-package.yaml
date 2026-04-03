@@ -132,14 +132,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y python3.12 python3.12-dev python3.12-venv
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
           python_bin_dir="${RUNNER_TEMP}/python-bin"
           mkdir -p "${python_bin_dir}"
-          ln -sf /usr/bin/python3.12 "${python_bin_dir}/python"
+          ln -sf "$(which python3.12)" "${python_bin_dir}/python"
           export PATH="${python_bin_dir}:$PATH"
           echo "${python_bin_dir}" >> "$GITHUB_PATH"
           python --version
           python -m ensurepip --upgrade
-          python -m pip install --upgrade pip
 
       - name: Verify Rust toolchain
         run: |

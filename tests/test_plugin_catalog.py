@@ -24,6 +24,30 @@ def run_catalog(*args: str, cwd: Path | None = None) -> subprocess.CompletedProc
 
 
 class PluginCatalogTests(unittest.TestCase):
+    def _extract_workflow_job_section(self, workflow: str, job_name: str) -> str:
+        lines = workflow.splitlines()
+        in_jobs = False
+        job_header = f"  {job_name}:"
+        section_lines: list[str] = []
+
+        for line in lines:
+            if line == "jobs:":
+                in_jobs = True
+                continue
+            if not in_jobs:
+                continue
+            if line.startswith("  ") and not line.startswith("    "):
+                if section_lines:
+                    break
+                if line == job_header:
+                    section_lines.append(line)
+                continue
+            if section_lines:
+                section_lines.append(line)
+
+        self.assertTrue(section_lines, f"expected to find workflow job {job_name!r}")
+        return "\n".join(section_lines) + "\n"
+
     def _source_tree_has_extension(self, package_dir: Path, module_name: str) -> bool:
         return any(package_dir.glob(f"{module_name}*.so")) or any(
             package_dir.glob(f"{module_name}*.pyd")
@@ -804,12 +828,8 @@ class PluginCatalogTests(unittest.TestCase):
         workflow = (
             REPO_ROOT / ".github" / "workflows" / "release-rust-python-package.yaml"
         ).read_text()
-        preflight_section = workflow.split("  preflight:\n", maxsplit=1)[1].split(
-            "  build-wheel:\n", maxsplit=1
-        )[0]
-        build_wheel_section = workflow.split("  build-wheel:\n", maxsplit=1)[1].split(
-            "  build-sdist:\n", maxsplit=1
-        )[0]
+        preflight_section = self._extract_workflow_job_section(workflow, "preflight")
+        build_wheel_section = self._extract_workflow_job_section(workflow, "build-wheel")
         self.assertIn("preflight:", workflow)
         self.assertIn("needs: [resolve, preflight]", workflow)
         self.assertIn("shell: bash", workflow)
@@ -844,11 +864,14 @@ class PluginCatalogTests(unittest.TestCase):
             build_wheel_section,
         )
         self.assertIn(
-            'ln -sf /usr/bin/python3.12 "${python_bin_dir}/python"',
+            'ln -sf "$(which python3.12)" "${python_bin_dir}/python"',
             build_wheel_section,
         )
+        self.assertIn("sudo apt-get clean", build_wheel_section)
+        self.assertIn("sudo rm -rf /var/lib/apt/lists/*", build_wheel_section)
         self.assertIn('export PATH="${python_bin_dir}:$PATH"', build_wheel_section)
         self.assertIn('python -m ensurepip --upgrade', build_wheel_section)
+        self.assertNotIn("python -m pip install --upgrade pip", build_wheel_section)
         self.assertNotIn("tools/plugin_catalog.py release-info-field", workflow)
         self.assertNotIn("python3 - <<'PY'", workflow)
         self.assertIn("uv==0.9.30", workflow)
