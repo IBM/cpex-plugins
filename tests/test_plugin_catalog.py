@@ -860,7 +860,7 @@ class PluginCatalogTests(unittest.TestCase):
             build_wheel_section,
         )
         self.assertIn(
-            "sudo apt-get install -y python3.12 python3.12-dev python3.12-venv",
+            "sudo apt-get install -y python3.12 python3.12-dev python3.12-venv python3-pip",
             build_wheel_section,
         )
         self.assertIn(
@@ -870,7 +870,8 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("sudo apt-get clean", build_wheel_section)
         self.assertIn("sudo rm -rf /var/lib/apt/lists/*", build_wheel_section)
         self.assertIn('export PATH="${python_bin_dir}:$PATH"', build_wheel_section)
-        self.assertIn('python -m ensurepip --upgrade', build_wheel_section)
+        self.assertNotIn('python -m ensurepip --upgrade', build_wheel_section)
+        self.assertIn('python -m pip --version', build_wheel_section)
         self.assertNotIn("python -m pip install --upgrade pip", build_wheel_section)
         self.assertNotIn("tools/plugin_catalog.py release-info-field", workflow)
         self.assertNotIn("python3 - <<'PY'", workflow)
