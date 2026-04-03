@@ -4,6 +4,21 @@ on:
   push:
     tags:
       - "*-v*"
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag in the form <slug>-v<version>"
+        required: true
+        type: string
+      repository:
+        description: "Target package repository"
+        required: true
+        type: string
+      publish_enabled:
+        description: "Whether to run the publish job"
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
     inputs:
       tag:
@@ -33,8 +48,6 @@ jobs:
       checkout_ref: ${{ steps.resolve.outputs.checkout_ref }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
@@ -50,7 +63,7 @@ jobs:
           REPOSITORY_INPUT: ${{ inputs.repository }}
         run: |
           set -euo pipefail
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" || "${GITHUB_EVENT_NAME}" == "workflow_call" ]]; then
             tag="${TAG_INPUT}"
             repository="${REPOSITORY_INPUT}"
             git fetch --force origin "refs/tags/${tag}:refs/tags/${tag}"
@@ -65,7 +78,11 @@ jobs:
           release_info="$(python3 tools/plugin_catalog.py release-info . "${tag}")"
           plugin="$(printf '%s' "${release_info}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["slug"])')"
           plugin_path="$(printf '%s' "${release_info}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["path"])')"
-          wheel_matrix="$(printf '%s' "${release_info}" | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["release_wheel_matrix"]))')"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" || "${GITHUB_EVENT_NAME}" == "workflow_call" ]]; then
+            wheel_matrix="$(python3 -c 'import json; print(json.dumps([{"runner":"ubuntu-latest","platform":"linux-x86_64"},{"runner":"ubuntu-24.04-arm","platform":"linux-aarch64"},{"runner":"ubuntu-24.04-s390x","platform":"linux-s390x"},{"runner":"ubuntu-24.04-ppc64le","platform":"linux-ppc64le"},{"runner":"macos-latest","platform":"macos-arm64"},{"runner":"windows-latest","platform":"windows-x86_64"}]))')"
+          else
+            wheel_matrix="$(printf '%s' "${release_info}" | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["release_wheel_matrix"]))')"
+          fi
 
           {
             echo "plugin=${plugin}"
@@ -131,7 +148,7 @@ jobs:
         if: ${{ matrix.runner == 'ubuntu-24.04-s390x' || matrix.runner == 'ubuntu-24.04-ppc64le' }}
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3.12 python3.12-dev python3.12-venv
+          sudo apt-get install -y python3.12 python3.12-dev python3.12-venv python3-pip
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/*
           python_bin_dir="${RUNNER_TEMP}/python-bin"
@@ -140,7 +157,7 @@ jobs:
           export PATH="${python_bin_dir}:$PATH"
           echo "${python_bin_dir}" >> "$GITHUB_PATH"
           python --version
-          python -m ensurepip --upgrade
+          python -m pip --version
 
       - name: Verify Rust toolchain
         run: |
@@ -223,6 +240,7 @@ jobs:
             "${tmpdir}/tests" -v
 
   publish:
+    if: ${{ github.event_name != 'workflow_call' || inputs.publish_enabled }}
     needs: [resolve, build-wheel, build-sdist]
     runs-on: ubuntu-latest
     environment: ${{ needs.resolve.outputs.publish_env }}

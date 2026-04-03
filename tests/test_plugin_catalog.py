@@ -800,6 +800,11 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("shell: bash", workflow)
         self.assertIn("rustc --version", workflow)
         self.assertIn("working-directory: plugins/rust/python-package/${{ matrix.plugin }}", workflow)
+        self.assertIn("release-validation:", workflow)
+        self.assertIn("uses: ./.github/workflows/release-rust-python-package.yaml", workflow)
+        self.assertIn("tag: rate-limiter-v0.0.3", workflow)
+        self.assertIn("repository: testpypi", workflow)
+        self.assertIn("publish_enabled: false", workflow)
         self.assertNotIn("tools/plugin_catalog.py ci-selection-field", workflow)
         self.assertNotIn("tools/plugin_catalog.py changed", workflow)
         self.assertNotIn("tools/plugin_catalog.py list", workflow)
@@ -843,6 +848,25 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn('git show-ref --verify --quiet "refs/tags/${tag}"', workflow)
         self.assertIn("python3 tools/plugin_catalog.py release-info .", workflow)
         self.assertIn(
+            'if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" || "${GITHUB_EVENT_NAME}" == "workflow_call" ]]; then',
+            workflow,
+        )
+        self.assertIn("workflow_call:", workflow)
+        self.assertIn("publish_enabled:", workflow)
+        self.assertIn('default: false', workflow)
+        self.assertIn(
+            'wheel_matrix="$(python3 -c \'import json; print(json.dumps([{',
+            workflow,
+        )
+        self.assertIn(
+            '{"runner":"ubuntu-24.04-s390x","platform":"linux-s390x"}',
+            workflow,
+        )
+        self.assertIn(
+            '{"runner":"ubuntu-24.04-ppc64le","platform":"linux-ppc64le"}',
+            workflow,
+        )
+        self.assertIn(
             'wheel_matrix="$(printf \'%s\' "${release_info}" | python3 -c \'import json, sys; print(json.dumps(json.load(sys.stdin)["release_wheel_matrix"]))\')"',
             workflow,
         )
@@ -850,6 +874,10 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("matrix:\n        include: ${{ fromJson(needs.resolve.outputs.wheel_matrix) }}", workflow)
         self.assertIn("runs-on: ${{ matrix.runner }}", workflow)
         self.assertIn("name: wheel-${{ matrix.platform }}", workflow)
+        self.assertIn(
+            "if: ${{ github.event_name != 'workflow_call' || inputs.publish_enabled }}",
+            workflow,
+        )
         self.assertNotIn("matrix.", preflight_section)
         self.assertIn(
             "matrix.runner != 'ubuntu-24.04-s390x' && matrix.runner != 'ubuntu-24.04-ppc64le'",
@@ -860,7 +888,7 @@ class PluginCatalogTests(unittest.TestCase):
             build_wheel_section,
         )
         self.assertIn(
-            "sudo apt-get install -y python3.12 python3.12-dev python3.12-venv",
+            "sudo apt-get install -y python3.12 python3.12-dev python3.12-venv python3-pip",
             build_wheel_section,
         )
         self.assertIn(
@@ -870,7 +898,8 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("sudo apt-get clean", build_wheel_section)
         self.assertIn("sudo rm -rf /var/lib/apt/lists/*", build_wheel_section)
         self.assertIn('export PATH="${python_bin_dir}:$PATH"', build_wheel_section)
-        self.assertIn('python -m ensurepip --upgrade', build_wheel_section)
+        self.assertNotIn('python -m ensurepip --upgrade', build_wheel_section)
+        self.assertIn('python -m pip --version', build_wheel_section)
         self.assertNotIn("python -m pip install --upgrade pip", build_wheel_section)
         self.assertNotIn("tools/plugin_catalog.py release-info-field", workflow)
         self.assertNotIn("python3 - <<'PY'", workflow)

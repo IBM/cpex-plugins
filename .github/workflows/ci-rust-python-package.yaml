@@ -113,3 +113,12 @@ jobs:
       - name: Plugin CI verification
         working-directory: plugins/rust/python-package/${{ matrix.plugin }}
         run: make ci
+
+  release-validation:
+    if: github.event_name == 'pull_request'
+    needs: validate-and-detect
+    uses: ./.github/workflows/release-rust-python-package.yaml
+    with:
+      tag: rate-limiter-v0.0.3
+      repository: testpypi
+      publish_enabled: false
