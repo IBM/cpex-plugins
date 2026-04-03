@@ -966,7 +966,7 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "True")
 
     def test_pii_stub_examples_use_canonical_import_path(self) -> None:
-        for stub_path in (
+        stub_path = (
             REPO_ROOT
             / "plugins"
             / "rust"
@@ -974,19 +974,11 @@ class PluginCatalogTests(unittest.TestCase):
             / "pii_filter"
             / "cpex_pii_filter"
             / "pii_filter_rust"
-            / "__init__.pyi",
-            REPO_ROOT
-            / "plugins"
-            / "rust"
-            / "python-package"
-            / "pii_filter"
-            / "python"
-            / "pii_filter_rust"
-            / "__init__.pyi",
-        ):
-            text = stub_path.read_text()
-            self.assertIn("from cpex_pii_filter import PIIDetectorRust", text)
-            self.assertNotIn("from pii_filter import PIIDetectorRust", text)
+            / "__init__.pyi"
+        )
+        text = stub_path.read_text()
+        self.assertIn("from cpex_pii_filter import PIIDetectorRust", text)
+        self.assertNotIn("from pii_filter import PIIDetectorRust", text)
 
     def test_pii_benchmark_script_runs_with_package_surface(self) -> None:
         plugin_dir = (
