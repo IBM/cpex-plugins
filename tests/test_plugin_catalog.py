@@ -830,7 +830,7 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("matrix:\n        include: ${{ fromJson(needs.resolve.outputs.wheel_matrix) }}", workflow)
         self.assertIn("runs-on: ${{ matrix.runner }}", workflow)
         self.assertIn("name: wheel-${{ matrix.platform }}", workflow)
-        self.assertNotIn("matrix.runner", preflight_section)
+        self.assertNotIn("matrix.", preflight_section)
         self.assertIn(
             "matrix.runner != 'ubuntu-24.04-s390x' && matrix.runner != 'ubuntu-24.04-ppc64le'",
             build_wheel_section,
@@ -847,6 +847,7 @@ class PluginCatalogTests(unittest.TestCase):
             'ln -sf /usr/bin/python3.12 "${python_bin_dir}/python"',
             build_wheel_section,
         )
+        self.assertIn('export PATH="${python_bin_dir}:$PATH"', build_wheel_section)
         self.assertIn('python -m ensurepip --upgrade', build_wheel_section)
         self.assertNotIn("tools/plugin_catalog.py release-info-field", workflow)
         self.assertNotIn("python3 - <<'PY'", workflow)
