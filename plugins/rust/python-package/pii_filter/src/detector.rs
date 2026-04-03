@@ -20,7 +20,16 @@ pub fn detect_pii(
     patterns: &CompiledPatterns,
     config: &PIIConfig,
 ) -> HashMap<PIIType, Vec<Detection>> {
+    collect_detections(text, patterns, config)
+}
+
+fn collect_detections(
+    text: &str,
+    patterns: &CompiledPatterns,
+    config: &PIIConfig,
+) -> HashMap<PIIType, Vec<Detection>> {
     let mut detections: HashMap<PIIType, Vec<Detection>> = HashMap::new();
+    let mut candidates = Vec::new();
 
     // Use RegexSet for parallel matching
     let matches = patterns.regex_set.matches(text);
@@ -30,21 +39,56 @@ pub fn detect_pii(
 
         for capture in pattern.regex.captures_iter(text) {
             if let Some(mat) = capture.get(0) {
-                let detection = Detection {
-                    value: mat.as_str().to_string(),
-                    start: mat.start(),
-                    end: mat.end(),
+                let start = mat.start();
+                let end = mat.end();
+                let value = mat.as_str().to_string();
+
+                if is_whitelisted(patterns, text, start, end) {
+                    continue;
+                }
+
+                if !is_valid_detection(pattern.pii_type, &value) {
+                    continue;
+                }
+
+                candidates.push(CandidateDetection {
+                    pii_type: pattern.pii_type,
+                    value,
+                    start,
+                    end,
                     mask_strategy: pattern
                         .mask_strategy
                         .unwrap_or(config.default_mask_strategy),
-                };
-
-                detections
-                    .entry(pattern.pii_type)
-                    .or_default()
-                    .push(detection);
+                    pattern_idx,
+                });
             }
         }
+    }
+
+    candidates.sort_by(|a, b| {
+        a.start
+            .cmp(&b.start)
+            .then(b.end.cmp(&a.end))
+            .then(a.pii_type.as_str().cmp(b.pii_type.as_str()))
+            .then(a.pattern_idx.cmp(&b.pattern_idx))
+    });
+
+    let mut last_end = 0usize;
+    for candidate in candidates {
+        if candidate.start < last_end {
+            continue;
+        }
+
+        last_end = candidate.end;
+        detections
+            .entry(candidate.pii_type)
+            .or_default()
+            .push(Detection {
+                value: candidate.value,
+                start: candidate.start,
+                end: candidate.end,
+                mask_strategy: candidate.mask_strategy,
+            });
     }
 
     detections
@@ -503,73 +547,7 @@ impl PIIDetectorRust {
 
     /// Internal detection logic (returns Rust types)
     fn detect_internal(&self, text: &str) -> HashMap<PIIType, Vec<Detection>> {
-        let mut detections: HashMap<PIIType, Vec<Detection>> = HashMap::new();
-        let mut candidates = Vec::new();
-
-        // Use RegexSet for parallel matching (5-10x faster)
-        let matches = self.patterns.regex_set.matches(text);
-
-        // For each matched pattern index, extract details
-        for pattern_idx in matches.iter() {
-            let pattern = &self.patterns.patterns[pattern_idx];
-
-            // Find all matches for this specific pattern
-            for capture in pattern.regex.captures_iter(text) {
-                if let Some(mat) = capture.get(0) {
-                    let start = mat.start();
-                    let end = mat.end();
-                    let value = mat.as_str().to_string();
-
-                    // Check whitelist
-                    if self.is_whitelisted(text, start, end) {
-                        continue;
-                    }
-
-                    if !self.is_valid_detection(pattern.pii_type, &value) {
-                        continue;
-                    }
-
-                    candidates.push(CandidateDetection {
-                        pii_type: pattern.pii_type,
-                        value,
-                        start,
-                        end,
-                        mask_strategy: pattern
-                            .mask_strategy
-                            .unwrap_or(self.config.default_mask_strategy),
-                        pattern_idx,
-                    });
-                }
-            }
-        }
-
-        candidates.sort_by(|a, b| {
-            a.start
-                .cmp(&b.start)
-                .then(b.end.cmp(&a.end))
-                .then(a.pii_type.as_str().cmp(b.pii_type.as_str()))
-                .then(a.pattern_idx.cmp(&b.pattern_idx))
-        });
-
-        let mut last_end = 0usize;
-        for candidate in candidates {
-            if candidate.start < last_end {
-                continue;
-            }
-
-            last_end = candidate.end;
-            detections
-                .entry(candidate.pii_type)
-                .or_default()
-                .push(Detection {
-                    value: candidate.value,
-                    start: candidate.start,
-                    end: candidate.end,
-                    mask_strategy: candidate.mask_strategy,
-                });
-        }
-
-        detections
+        collect_detections(text, &self.patterns, &self.config)
     }
 
     pub(crate) fn detect_rust(&self, text: &str) -> PyResult<HashMap<PIIType, Vec<Detection>>> {
@@ -586,24 +564,6 @@ impl PIIDetectorRust {
         masking::mask_pii(text, detections, &self.config)
             .map(|masked| masked.into_owned())
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
-    }
-
-    /// Check if a match is whitelisted
-    fn is_whitelisted(&self, text: &str, start: usize, end: usize) -> bool {
-        let match_text = &text[start..end];
-        self.patterns
-            .whitelist
-            .iter()
-            .any(|pattern| pattern.is_match(match_text))
-    }
-
-    /// Validate a regex hit before returning it to callers.
-    fn is_valid_detection(&self, pii_type: PIIType, value: &str) -> bool {
-        match pii_type {
-            PIIType::Ssn => is_valid_ssn(value),
-            PIIType::CreditCard => passes_luhn(value),
-            _ => true,
-        }
     }
 
     /// Convert Python detections to Rust format
@@ -801,6 +761,22 @@ fn validate_text_size(text: &str, max_text_bytes: usize) -> PyResult<()> {
     }
 
     Ok(())
+}
+
+fn is_whitelisted(patterns: &CompiledPatterns, text: &str, start: usize, end: usize) -> bool {
+    let match_text = &text[start..end];
+    patterns
+        .whitelist
+        .iter()
+        .any(|pattern| pattern.is_match(match_text))
+}
+
+fn is_valid_detection(pii_type: PIIType, value: &str) -> bool {
+    match pii_type {
+        PIIType::Ssn => is_valid_ssn(value),
+        PIIType::CreditCard => passes_luhn(value),
+        _ => true,
+    }
 }
 
 fn required_detection_field<'py, T>(dict: &Bound<'py, PyDict>, field: &str) -> PyResult<T>
@@ -1045,6 +1021,58 @@ mod tests {
             !detector
                 .detect_internal("Card 0000-0000-0000-0000")
                 .contains_key(&PIIType::CreditCard)
+        );
+    }
+
+    #[test]
+    fn test_public_detect_pii_matches_validation_and_whitelist_behavior() {
+        let config = PIIConfig {
+            detect_credit_card: true,
+            detect_email: true,
+            whitelist_patterns: vec!["test@example\\.com".to_string()],
+            ..Default::default()
+        };
+        let patterns = compile_patterns(&config).unwrap();
+
+        let detections = detect_pii(
+            "Email1: test@example.com, Email2: john@example.com, Card 4111-1111-1111-1112",
+            &patterns,
+            &config,
+        );
+
+        assert_eq!(
+            detections[&PIIType::Email]
+                .iter()
+                .map(|d| d.value.as_str())
+                .collect::<Vec<_>>(),
+            vec!["john@example.com"]
+        );
+        assert!(!detections.contains_key(&PIIType::CreditCard));
+    }
+
+    #[test]
+    fn test_benchmark_detect_pii_respects_whitelist_and_validation() {
+        let config = PIIConfig {
+            detect_credit_card: true,
+            detect_email: true,
+            whitelist_patterns: vec!["test@example\\.com".to_string()],
+            ..Default::default()
+        };
+        let patterns = compile_patterns(&config).unwrap();
+
+        let detections = detect_pii(
+            "Email test@example.com Card 4111-1111-1111-1112",
+            &patterns,
+            &config,
+        );
+
+        assert!(
+            !detections.contains_key(&PIIType::Email),
+            "benchmark helper should apply whitelist filtering"
+        );
+        assert!(
+            !detections.contains_key(&PIIType::CreditCard),
+            "benchmark helper should reject invalid credit cards"
         );
     }
 

@@ -909,6 +909,22 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("compat_default_config", rate_ext_stub)
         self.assertIn("compat_parse_rate", rate_ext_stub)
 
+    def test_pii_filter_has_single_authoritative_extension_stub(self) -> None:
+        plugin_dir = (
+            REPO_ROOT / "plugins" / "rust" / "python-package" / "pii_filter"
+        )
+        self.assertTrue(
+            (
+                plugin_dir
+                / "cpex_pii_filter"
+                / "pii_filter_rust"
+                / "__init__.pyi"
+            ).exists()
+        )
+        self.assertFalse(
+            (plugin_dir / "python" / "pii_filter_rust" / "__init__.pyi").exists()
+        )
+
     def test_pii_package_imports_without_mcpgateway(self) -> None:
         plugin_dir = (
             REPO_ROOT / "plugins" / "rust" / "python-package" / "pii_filter"
