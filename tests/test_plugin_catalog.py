@@ -800,6 +800,11 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("shell: bash", workflow)
         self.assertIn("rustc --version", workflow)
         self.assertIn("working-directory: plugins/rust/python-package/${{ matrix.plugin }}", workflow)
+        self.assertIn("release-validation:", workflow)
+        self.assertIn("uses: ./.github/workflows/release-rust-python-package.yaml", workflow)
+        self.assertIn("tag: rate-limiter-v0.0.3", workflow)
+        self.assertIn("repository: testpypi", workflow)
+        self.assertIn("publish_enabled: false", workflow)
         self.assertNotIn("tools/plugin_catalog.py ci-selection-field", workflow)
         self.assertNotIn("tools/plugin_catalog.py changed", workflow)
         self.assertNotIn("tools/plugin_catalog.py list", workflow)
@@ -842,7 +847,13 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertEqual(workflow.count("cargo run --bin stub_gen"), 1)
         self.assertIn('git show-ref --verify --quiet "refs/tags/${tag}"', workflow)
         self.assertIn("python3 tools/plugin_catalog.py release-info .", workflow)
-        self.assertIn('if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then', workflow)
+        self.assertIn(
+            'if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" || "${GITHUB_EVENT_NAME}" == "workflow_call" ]]; then',
+            workflow,
+        )
+        self.assertIn("workflow_call:", workflow)
+        self.assertIn("publish_enabled:", workflow)
+        self.assertIn('default: false', workflow)
         self.assertIn(
             'wheel_matrix="$(python3 -c \'import json; print(json.dumps([{',
             workflow,
@@ -863,6 +874,10 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("matrix:\n        include: ${{ fromJson(needs.resolve.outputs.wheel_matrix) }}", workflow)
         self.assertIn("runs-on: ${{ matrix.runner }}", workflow)
         self.assertIn("name: wheel-${{ matrix.platform }}", workflow)
+        self.assertIn(
+            "if: ${{ github.event_name != 'workflow_call' || inputs.publish_enabled }}",
+            workflow,
+        )
         self.assertNotIn("matrix.", preflight_section)
         self.assertIn(
             "matrix.runner != 'ubuntu-24.04-s390x' && matrix.runner != 'ubuntu-24.04-ppc64le'",
