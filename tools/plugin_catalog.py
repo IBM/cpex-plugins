@@ -42,7 +42,7 @@ class PluginRecord:
     release_wheel_matrix: list[dict[str, str]]
 
 
-def _release_wheel_matrix(slug: str) -> list[dict[str, str]]:
+def _release_wheel_matrix() -> list[dict[str, str]]:
     return [
         {"runner": "ubuntu-latest", "platform": "linux-x86_64"},
         {"runner": "ubuntu-24.04-arm", "platform": "linux-aarch64"},
@@ -236,7 +236,7 @@ def validate_plugin_dir(
         package_name=expected_package_name,
         module_name=expected_module_name,
         version=version,
-        release_wheel_matrix=_release_wheel_matrix(slug),
+        release_wheel_matrix=_release_wheel_matrix(),
     )
 
 

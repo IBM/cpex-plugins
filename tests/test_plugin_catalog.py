@@ -804,6 +804,12 @@ class PluginCatalogTests(unittest.TestCase):
         workflow = (
             REPO_ROOT / ".github" / "workflows" / "release-rust-python-package.yaml"
         ).read_text()
+        preflight_section = workflow.split("  preflight:\n", maxsplit=1)[1].split(
+            "  build-wheel:\n", maxsplit=1
+        )[0]
+        build_wheel_section = workflow.split("  build-wheel:\n", maxsplit=1)[1].split(
+            "  build-sdist:\n", maxsplit=1
+        )[0]
         self.assertIn("preflight:", workflow)
         self.assertIn("needs: [resolve, preflight]", workflow)
         self.assertIn("shell: bash", workflow)
@@ -824,17 +830,24 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("matrix:\n        include: ${{ fromJson(needs.resolve.outputs.wheel_matrix) }}", workflow)
         self.assertIn("runs-on: ${{ matrix.runner }}", workflow)
         self.assertIn("name: wheel-${{ matrix.platform }}", workflow)
+        self.assertNotIn("matrix.runner", preflight_section)
         self.assertIn(
             "matrix.runner != 'ubuntu-24.04-s390x' && matrix.runner != 'ubuntu-24.04-ppc64le'",
-            workflow,
+            build_wheel_section,
         )
         self.assertIn(
             "matrix.runner == 'ubuntu-24.04-s390x' || matrix.runner == 'ubuntu-24.04-ppc64le'",
-            workflow,
+            build_wheel_section,
         )
-        self.assertIn("sudo apt-get install -y python3.12 python3.12-dev python3.12-venv", workflow)
-        self.assertIn('ln -sf /usr/bin/python3.12 "${python_bin_dir}/python"', workflow)
-        self.assertIn('python -m ensurepip --upgrade', workflow)
+        self.assertIn(
+            "sudo apt-get install -y python3.12 python3.12-dev python3.12-venv",
+            build_wheel_section,
+        )
+        self.assertIn(
+            'ln -sf /usr/bin/python3.12 "${python_bin_dir}/python"',
+            build_wheel_section,
+        )
+        self.assertIn('python -m ensurepip --upgrade', build_wheel_section)
         self.assertNotIn("tools/plugin_catalog.py release-info-field", workflow)
         self.assertNotIn("python3 - <<'PY'", workflow)
         self.assertIn("uv==0.9.30", workflow)
