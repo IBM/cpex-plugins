@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import subprocess
@@ -69,7 +70,18 @@ def _manifest_scalar(manifest_path: Path, key_name: str) -> str:
             continue
         if key.strip() != key_name:
             continue
-        candidate = raw_value.split("#", maxsplit=1)[0].strip().strip('"').strip("'")
+        raw_candidate = raw_value.strip()
+        if raw_candidate[:1] in {'"', "'"}:
+            quote = raw_candidate[:1]
+            closing_index = raw_candidate.find(quote, 1)
+            while closing_index != -1 and raw_candidate[closing_index - 1] == "\\":
+                closing_index = raw_candidate.find(quote, closing_index + 1)
+            if closing_index == -1:
+                candidate = raw_candidate
+            else:
+                candidate = ast.literal_eval(raw_candidate[: closing_index + 1])
+        else:
+            candidate = raw_candidate.split("#", maxsplit=1)[0].strip()
         if not candidate:
             raise CatalogError(f"Empty {key_name} in {manifest_path}")
         if value is not None:
@@ -176,6 +188,8 @@ def _workspace_members(root: Path) -> set[str]:
         raise CatalogError(f"Workspace Cargo.toml not found at {cargo_toml}")
     cargo = _parse_cargo(cargo_toml)
     workspace = cargo.get("workspace", {})
+    if not isinstance(workspace, dict):
+        raise CatalogError("Workspace Cargo.toml must define [workspace] metadata as a table")
     members = workspace.get("members")
     if not isinstance(members, list):
         raise CatalogError("Workspace Cargo.toml must define [workspace].members")
@@ -188,6 +202,8 @@ def _workspace_package_metadata(root: Path) -> dict:
         raise CatalogError(f"Workspace Cargo.toml not found at {cargo_toml}")
     cargo = _parse_cargo(cargo_toml)
     workspace = cargo.get("workspace", {})
+    if not isinstance(workspace, dict):
+        raise CatalogError("Workspace Cargo.toml must define [workspace] metadata as a table")
     package = workspace.get("package", {})
     if not isinstance(package, dict):
         raise CatalogError("Workspace Cargo.toml must define [workspace.package] metadata")
@@ -227,6 +243,8 @@ def validate_plugin_dir(
         raise CatalogError(f"{plugin_dir}: pyproject.toml [project] must be a table")
     tool = pyproject.get("tool", {})
     maturin = tool.get("maturin", {}) if isinstance(tool, dict) else {}
+    if not isinstance(maturin, dict):
+        raise CatalogError(f"{plugin_dir}: pyproject.toml tool.maturin must be a table")
     package = cargo.get("package", {})
     if not isinstance(package, dict):
         raise CatalogError(f"{plugin_dir}: Cargo.toml [package] must be a table")
@@ -244,6 +262,10 @@ def validate_plugin_dir(
         )
 
     dynamic = project.get("dynamic", [])
+    if not isinstance(dynamic, list) or any(not isinstance(item, str) for item in dynamic):
+        raise CatalogError(
+            f"{plugin_dir}: pyproject.toml must declare dynamic version sourced from Cargo.toml"
+        )
     if "version" not in dynamic or "version" in project:
         raise CatalogError(
             f"{plugin_dir}: pyproject.toml must declare dynamic version sourced from Cargo.toml"

@@ -526,6 +526,50 @@ class PluginCatalogTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("module:object", result.stderr.lower())
 
+    def test_validator_rejects_whitespace_padded_kind_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/demo_plugin"]\n'
+                '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n',
+            )
+            plugin_dir = self._create_plugin(root, "demo_plugin")
+            package_dir = plugin_dir / "cpex_demo_plugin"
+            (plugin_dir / "pyproject.toml").write_text(
+                textwrap.dedent(
+                    """
+                    [project]
+                    name = "cpex-demo-plugin"
+                    dynamic = ["version"]
+
+                    [project.entry-points."cpex.plugins"]
+                    demo_plugin = " cpex_demo_plugin.demo_plugin:DemoPluginPlugin "
+
+                    [tool.maturin]
+                    module-name = "cpex_demo_plugin.demo_plugin_rust"
+                    python-source = "."
+                    """
+                ).strip()
+                + "\n"
+            )
+            (package_dir / "plugin-manifest.yaml").write_text(
+                textwrap.dedent(
+                    """
+                    description: "Demo plugin"
+                    author: "ContextForge Team"
+                    version: "0.0.1"
+                    kind: " cpex_demo_plugin.demo_plugin:DemoPluginPlugin "
+                    available_hooks:
+                      - "tool_pre_invoke"
+                    """
+                ).strip()
+                + "\n"
+            )
+
+            result = run_catalog("validate", str(root))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("module:object", result.stderr.lower())
+
     def test_validator_rejects_nondict_project_table_without_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -565,6 +609,100 @@ class PluginCatalogTests(unittest.TestCase):
             result = run_catalog("validate", str(root))
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("cargo.toml", result.stderr.lower())
+            self.assertNotIn("traceback", result.stderr.lower())
+
+    def test_validator_rejects_malformed_workspace_cargo_toml_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "plugins" / "rust" / "python-package").mkdir(parents=True)
+            (root / "Cargo.toml").write_text("[workspace\nmembers = []\n")
+
+            result = run_catalog("validate", str(root))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("invalid toml", result.stderr.lower())
+            self.assertNotIn("traceback", result.stderr.lower())
+
+    def test_validator_rejects_nondict_workspace_table_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "plugins" / "rust" / "python-package").mkdir(parents=True)
+            (root / "Cargo.toml").write_text("workspace = []\n")
+
+            result = run_catalog("validate", str(root))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("workspace", result.stderr.lower())
+            self.assertNotIn("traceback", result.stderr.lower())
+
+    def test_validator_rejects_nondict_workspace_package_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "plugins" / "rust" / "python-package").mkdir(parents=True)
+            (root / "Cargo.toml").write_text("[workspace]\nmembers = []\npackage = []\n")
+
+            result = run_catalog("validate", str(root))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("workspace.package", result.stderr.lower())
+            self.assertNotIn("traceback", result.stderr.lower())
+
+    def test_validator_rejects_nondict_project_dynamic_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/demo_plugin"]\n'
+                '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n',
+            )
+            plugin_dir = self._create_plugin(root, "demo_plugin")
+            (plugin_dir / "pyproject.toml").write_text(
+                textwrap.dedent(
+                    """
+                    [project]
+                    name = "cpex-demo-plugin"
+                    dynamic = "version"
+
+                    [project.entry-points."cpex.plugins"]
+                    demo_plugin = "cpex_demo_plugin.demo_plugin:DemoPluginPlugin"
+
+                    [tool.maturin]
+                    module-name = "cpex_demo_plugin.demo_plugin_rust"
+                    python-source = "."
+                    """
+                ).strip()
+                + "\n"
+            )
+
+            result = run_catalog("validate", str(root))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("dynamic version", result.stderr.lower())
+            self.assertNotIn("traceback", result.stderr.lower())
+
+    def test_validator_rejects_nondict_tool_maturin_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/demo_plugin"]\n'
+                '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n',
+            )
+            plugin_dir = self._create_plugin(root, "demo_plugin")
+            (plugin_dir / "pyproject.toml").write_text(
+                textwrap.dedent(
+                    """
+                    [project]
+                    name = "cpex-demo-plugin"
+                    dynamic = ["version"]
+
+                    [project.entry-points."cpex.plugins"]
+                    demo_plugin = "cpex_demo_plugin.demo_plugin:DemoPluginPlugin"
+
+                    [tool]
+                    maturin = []
+                    """
+                ).strip()
+                + "\n"
+            )
+
+            result = run_catalog("validate", str(root))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("tool.maturin", result.stderr.lower())
             self.assertNotIn("traceback", result.stderr.lower())
 
     def test_validator_rejects_malformed_pyproject_toml_without_traceback(self) -> None:
