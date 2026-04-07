@@ -336,6 +336,38 @@ class PluginCatalogTests(unittest.TestCase):
             self.assertIn("cpex.plugins", result.stderr.lower())
             self.assertNotIn("traceback", result.stderr.lower())
 
+    def test_validator_rejects_nonstring_sibling_cpex_plugins_entry_point_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/demo_plugin"]\n'
+                '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n',
+            )
+            plugin_dir = self._create_plugin(root, "demo_plugin")
+            (plugin_dir / "pyproject.toml").write_text(
+                textwrap.dedent(
+                    """
+                    [project]
+                    name = "cpex-demo-plugin"
+                    dynamic = ["version"]
+
+                    [project.entry-points."cpex.plugins"]
+                    demo_plugin = "cpex_demo_plugin.demo_plugin:DemoPluginPlugin"
+                    other = 123
+
+                    [tool.maturin]
+                    module-name = "cpex_demo_plugin.demo_plugin_rust"
+                    python-source = "."
+                    """
+                ).strip()
+                + "\n"
+            )
+
+            result = run_catalog("validate", str(root))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("cpex.plugins", result.stderr.lower())
+            self.assertNotIn("traceback", result.stderr.lower())
+
     def test_validator_rejects_missing_slug_specific_plugin_entry_point(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -725,6 +757,17 @@ class PluginCatalogTests(unittest.TestCase):
             root = Path(tmpdir)
             (root / "plugins" / "rust" / "python-package").mkdir(parents=True)
             (root / "Cargo.toml").write_text("[workspace]\nmembers = \"demo_plugin\"\n")
+
+            result = run_catalog("validate", str(root))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("workspace", result.stderr.lower())
+            self.assertNotIn("traceback", result.stderr.lower())
+
+    def test_validator_rejects_nonstr_workspace_member_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "plugins" / "rust" / "python-package").mkdir(parents=True)
+            (root / "Cargo.toml").write_text('[workspace]\nmembers = ["plugins/rust/python-package/demo_plugin", 123]\n')
 
             result = run_catalog("validate", str(root))
             self.assertNotEqual(result.returncode, 0)

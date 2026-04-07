@@ -143,6 +143,8 @@ def _project_entry_point(pyproject: dict, slug: str) -> str:
     cpex_plugins = entry_points.get("cpex.plugins")
     if not isinstance(cpex_plugins, dict):
         raise CatalogError('pyproject.toml must define [project.entry-points."cpex.plugins"]')
+    if any(not isinstance(name, str) or not isinstance(value, str) for name, value in cpex_plugins.items()):
+        raise CatalogError('pyproject.toml [project.entry-points."cpex.plugins"] must map plugin names to strings')
     entry_point = cpex_plugins.get(slug)
     if not isinstance(entry_point, str) or not entry_point:
         raise CatalogError(
@@ -198,7 +200,9 @@ def _workspace_members(root: Path) -> set[str]:
     members = workspace.get("members")
     if not isinstance(members, list):
         raise CatalogError("Workspace Cargo.toml must define [workspace].members")
-    return {str(member) for member in members}
+    if any(not isinstance(member, str) for member in members):
+        raise CatalogError("Workspace Cargo.toml [workspace].members must contain only strings")
+    return set(members)
 
 
 def _workspace_package_metadata(root: Path) -> dict:
