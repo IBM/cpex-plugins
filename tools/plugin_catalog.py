@@ -79,6 +79,11 @@ def _manifest_scalar(manifest_path: Path, key_name: str) -> str:
             if closing_index == -1:
                 candidate = raw_candidate
             else:
+                trailing = raw_candidate[closing_index + 1 :].strip()
+                if trailing and not trailing.startswith("#"):
+                    raise CatalogError(
+                        f"Invalid trailing content for {key_name} in {manifest_path}"
+                    )
                 candidate = ast.literal_eval(raw_candidate[: closing_index + 1])
         else:
             candidate = raw_candidate.split("#", maxsplit=1)[0].strip()
