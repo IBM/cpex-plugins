@@ -5,11 +5,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import tomllib
 from dataclasses import asdict, dataclass
-from importlib.metadata import EntryPoint
 from pathlib import Path
 
 
@@ -26,6 +26,10 @@ SHARED_PATH_PREFIXES = (
     "TESTING.md",
     "tests/",
     "tools/",
+)
+
+KIND_REFERENCE_PATTERN = re.compile(
+    r"^(?P<module>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*):(?P<object>[A-Za-z_][A-Za-z0-9_]*)$"
 )
 
 
@@ -85,13 +89,19 @@ def _manifest_kind(manifest_path: Path) -> str:
 
 
 def _parse_pyproject(pyproject_path: Path) -> dict:
-    with pyproject_path.open("rb") as handle:
-        return tomllib.load(handle)
+    try:
+        with pyproject_path.open("rb") as handle:
+            return tomllib.load(handle)
+    except tomllib.TOMLDecodeError as exc:
+        raise CatalogError(f"Invalid TOML in {pyproject_path}: {exc}") from exc
 
 
 def _parse_cargo(cargo_path: Path) -> dict:
-    with cargo_path.open("rb") as handle:
-        return tomllib.load(handle)
+    try:
+        with cargo_path.open("rb") as handle:
+            return tomllib.load(handle)
+    except tomllib.TOMLDecodeError as exc:
+        raise CatalogError(f"Invalid TOML in {cargo_path}: {exc}") from exc
 
 
 def _expected_package_name(slug: str) -> str:
@@ -108,6 +118,8 @@ def _expected_maturin_module_name(slug: str) -> str:
 
 def _project_entry_point(pyproject: dict, slug: str) -> str:
     project = pyproject.get("project", {})
+    if not isinstance(project, dict):
+        raise CatalogError("pyproject.toml [project] must be a table")
     entry_points = project.get("entry-points", {}) if isinstance(project, dict) else {}
     if not isinstance(entry_points, dict):
         raise CatalogError("pyproject.toml project.entry-points must be a table")
@@ -123,14 +135,7 @@ def _project_entry_point(pyproject: dict, slug: str) -> str:
 
 
 def _validate_kind_reference(value: str, source: str) -> str:
-    try:
-        entry_point = EntryPoint(name="plugin", value=value, group="cpex.plugins")
-        attr = entry_point.attr
-    except AssertionError as exc:
-        raise CatalogError(
-            f"{source}: kind must use canonical module:object form, got {value}"
-        ) from exc
-    if attr is None:
+    if KIND_REFERENCE_PATTERN.fullmatch(value) is None:
         raise CatalogError(
             f"{source}: kind must use canonical module:object form, got {value}"
         )
@@ -218,9 +223,13 @@ def validate_plugin_dir(
     cargo = _parse_cargo(plugin_dir / "Cargo.toml")
 
     project = pyproject.get("project", {})
+    if not isinstance(project, dict):
+        raise CatalogError(f"{plugin_dir}: pyproject.toml [project] must be a table")
     tool = pyproject.get("tool", {})
     maturin = tool.get("maturin", {}) if isinstance(tool, dict) else {}
     package = cargo.get("package", {})
+    if not isinstance(package, dict):
+        raise CatalogError(f"{plugin_dir}: Cargo.toml [package] must be a table")
     relative_plugin_path = str(plugin_dir.relative_to(root))
 
     if relative_plugin_path not in workspace_members:
