@@ -272,6 +272,33 @@ class PluginCatalogTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("kind mismatch", result.stderr.lower())
 
+    def test_validator_rejects_noncanonical_manifest_kind_separator(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/demo_plugin"]\n'
+                '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n',
+            )
+            plugin_dir = self._create_plugin(root, "demo_plugin")
+            package_dir = plugin_dir / "cpex_demo_plugin"
+            (package_dir / "plugin-manifest.yaml").write_text(
+                textwrap.dedent(
+                    """
+                    description: "Demo plugin"
+                    author: "ContextForge Team"
+                    version: "0.0.1"
+                    kind: "cpex_demo_plugin.demo_plugin.DemoPluginPlugin"
+                    available_hooks:
+                      - "tool_pre_invoke"
+                    """
+                ).strip()
+                + "\n"
+            )
+
+            result = run_catalog("validate", str(root))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("kind mismatch", result.stderr.lower())
+
     def test_pii_manifest_defaults_match_runtime_defaults(self) -> None:
         manifest_defaults = self._parse_manifest_defaults(
             REPO_ROOT
@@ -627,6 +654,11 @@ class PluginCatalogTests(unittest.TestCase):
         result = run_catalog("release-info", str(REPO_ROOT), "rate_limiter-v0.0.3")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("canonical", result.stderr.lower())
+
+    def test_release_info_field_supports_kind(self) -> None:
+        result = run_catalog("release-info-field", str(REPO_ROOT), "pii-filter-v0.2.0", "kind")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "cpex_pii_filter.pii_filter:PIIFilterPlugin")
 
     def test_ci_selection_returns_has_plugins_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

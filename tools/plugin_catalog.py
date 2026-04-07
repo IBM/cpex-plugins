@@ -257,7 +257,7 @@ def validate_plugin_dir(
 
     manifest_kind = _manifest_kind(manifest_path)
     entry_point = _project_entry_point(pyproject, slug)
-    if manifest_kind.replace(":", ".") != entry_point.replace(":", "."):
+    if manifest_kind != entry_point:
         raise CatalogError(
             f"{plugin_dir}: kind mismatch between plugin-manifest.yaml ({manifest_kind}) and pyproject.toml entry point ({entry_point})"
         )
@@ -429,6 +429,7 @@ def build_parser() -> argparse.ArgumentParser:
             "path",
             "package_name",
             "module_name",
+            "kind",
             "version",
             "release_wheel_matrix",
         ),
