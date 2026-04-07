@@ -123,8 +123,14 @@ def _project_entry_point(pyproject: dict, slug: str) -> str:
 
 
 def _validate_kind_reference(value: str, source: str) -> str:
-    entry_point = EntryPoint(name="plugin", value=value, group="cpex.plugins")
-    if entry_point.attr is None:
+    try:
+        entry_point = EntryPoint(name="plugin", value=value, group="cpex.plugins")
+        attr = entry_point.attr
+    except AssertionError as exc:
+        raise CatalogError(
+            f"{source}: kind must use canonical module:object form, got {value}"
+        ) from exc
+    if attr is None:
         raise CatalogError(
             f"{source}: kind must use canonical module:object form, got {value}"
         )

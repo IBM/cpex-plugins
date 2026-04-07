@@ -377,6 +377,67 @@ class PluginCatalogTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("module:object", result.stderr.lower())
 
+    def test_validator_rejects_noncanonical_entry_point_with_canonical_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/demo_plugin"]\n'
+                '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n',
+            )
+            plugin_dir = self._create_plugin(root, "demo_plugin")
+            (plugin_dir / "pyproject.toml").write_text(
+                textwrap.dedent(
+                    """
+                    [project]
+                    name = "cpex-demo-plugin"
+                    dynamic = ["version"]
+
+                    [project.entry-points."cpex.plugins"]
+                    demo_plugin = "cpex_demo_plugin.demo_plugin.DemoPluginPlugin"
+
+                    [tool.maturin]
+                    module-name = "cpex_demo_plugin.demo_plugin_rust"
+                    python-source = "."
+                    """
+                ).strip()
+                + "\n"
+            )
+
+            result = run_catalog("validate", str(root))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("module:object", result.stderr.lower())
+
+    def test_validator_rejects_malformed_entry_point_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/demo_plugin"]\n'
+                '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n',
+            )
+            plugin_dir = self._create_plugin(root, "demo_plugin")
+            (plugin_dir / "pyproject.toml").write_text(
+                textwrap.dedent(
+                    """
+                    [project]
+                    name = "cpex-demo-plugin"
+                    dynamic = ["version"]
+
+                    [project.entry-points."cpex.plugins"]
+                    demo_plugin = "cpex_demo_plugin.demo_plugin:"
+
+                    [tool.maturin]
+                    module-name = "cpex_demo_plugin.demo_plugin_rust"
+                    python-source = "."
+                    """
+                ).strip()
+                + "\n"
+            )
+
+            result = run_catalog("validate", str(root))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("module:object", result.stderr.lower())
+            self.assertNotIn("traceback", result.stderr.lower())
+
     def test_pii_manifest_defaults_match_runtime_defaults(self) -> None:
         manifest_defaults = self._parse_manifest_defaults(
             REPO_ROOT
@@ -699,6 +760,10 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["slug"], "rate_limiter")
+        self.assertEqual(
+            payload["kind"],
+            "cpex_rate_limiter.rate_limiter:RateLimiterPlugin",
+        )
         self.assertEqual(
             payload["release_wheel_matrix"],
             [
