@@ -38,6 +38,7 @@ class PluginRecord:
     path: str
     package_name: str
     module_name: str
+    kind: str
     version: str
     release_wheel_matrix: list[dict[str, str]]
 
@@ -53,25 +54,33 @@ def _release_wheel_matrix() -> list[dict[str, str]]:
     ]
 
 
-def _manifest_version(manifest_path: Path) -> str:
-    version: str | None = None
+def _manifest_scalar(manifest_path: Path, key_name: str) -> str:
+    value: str | None = None
     for line in manifest_path.read_text(encoding="utf-8").splitlines():
         if not line or line[:1].isspace():
             continue
         key, separator, raw_value = line.partition(":")
         if separator != ":":
             continue
-        if key.strip() != "version":
+        if key.strip() != key_name:
             continue
         candidate = raw_value.split("#", maxsplit=1)[0].strip().strip('"').strip("'")
         if not candidate:
-            raise CatalogError(f"Empty version in {manifest_path}")
-        if version is not None:
-            raise CatalogError(f"Duplicate top-level version in {manifest_path}")
-        version = candidate
-    if version is not None:
-        return version
-    raise CatalogError(f"Missing version in {manifest_path}")
+            raise CatalogError(f"Empty {key_name} in {manifest_path}")
+        if value is not None:
+            raise CatalogError(f"Duplicate top-level {key_name} in {manifest_path}")
+        value = candidate
+    if value is not None:
+        return value
+    raise CatalogError(f"Missing {key_name} in {manifest_path}")
+
+
+def _manifest_version(manifest_path: Path) -> str:
+    return _manifest_scalar(manifest_path, "version")
+
+
+def _manifest_kind(manifest_path: Path) -> str:
+    return _manifest_scalar(manifest_path, "kind")
 
 
 def _parse_pyproject(pyproject_path: Path) -> dict:
@@ -94,6 +103,22 @@ def _expected_module_name(slug: str) -> str:
 
 def _expected_maturin_module_name(slug: str) -> str:
     return f"{_expected_module_name(slug)}.{slug}_rust"
+
+
+def _project_entry_point(pyproject: dict, slug: str) -> str:
+    project = pyproject.get("project", {})
+    entry_points = project.get("entry-points", {}) if isinstance(project, dict) else {}
+    if not isinstance(entry_points, dict):
+        raise CatalogError("pyproject.toml project.entry-points must be a table")
+    cpex_plugins = entry_points.get("cpex.plugins")
+    if not isinstance(cpex_plugins, dict):
+        raise CatalogError('pyproject.toml must define [project.entry-points."cpex.plugins"]')
+    entry_point = cpex_plugins.get(slug)
+    if not isinstance(entry_point, str) or not entry_point:
+        raise CatalogError(
+            f'pyproject.toml must define entry point {slug!r} in [project.entry-points."cpex.plugins"]'
+        )
+    return entry_point
 
 
 def discover_plugins(root: Path) -> list[PluginRecord]:
@@ -230,11 +255,19 @@ def validate_plugin_dir(
             f"{plugin_dir}: version mismatch between Cargo.toml ({version}) and plugin-manifest.yaml ({manifest_version})"
         )
 
+    manifest_kind = _manifest_kind(manifest_path)
+    entry_point = _project_entry_point(pyproject, slug)
+    if manifest_kind.replace(":", ".") != entry_point.replace(":", "."):
+        raise CatalogError(
+            f"{plugin_dir}: kind mismatch between plugin-manifest.yaml ({manifest_kind}) and pyproject.toml entry point ({entry_point})"
+        )
+
     return PluginRecord(
         slug=slug,
         path=relative_plugin_path,
         package_name=expected_package_name,
         module_name=expected_module_name,
+        kind=entry_point,
         version=version,
         release_wheel_matrix=_release_wheel_matrix(),
     )

@@ -17,6 +17,10 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
+
+[project.entry-points."cpex.plugins"]
+pii_filter = "cpex_pii_filter.pii_filter:PIIFilterPlugin"
+
 [tool.maturin]
 module-name = "cpex_pii_filter.pii_filter_rust"
 python-source = "."

@@ -56,11 +56,14 @@ class PluginCatalogTests(unittest.TestCase):
     def _create_plugin(self, root: Path, slug: str) -> Path:
         plugin_dir = root / "plugins" / "rust" / "python-package" / slug
         package_dir = plugin_dir / f"cpex_{slug}"
+        kind = f"cpex_{slug}.{slug}:{slug.title().replace('_', '')}Plugin"
         package_dir.mkdir(parents=True)
         (plugin_dir / "tests").mkdir()
         (plugin_dir / "pyproject.toml").write_text(
             (
                 f"[project]\nname = \"cpex-{slug.replace('_', '-')}\"\ndynamic = [\"version\"]\n\n"
+                "[project.entry-points.\"cpex.plugins\"]\n"
+                f"{slug} = \"{kind}\"\n\n"
                 "[tool.maturin]\n"
                 f"module-name = \"cpex_{slug}.{slug}_rust\"\n"
                 "python-source = \".\"\n"
@@ -73,7 +76,7 @@ class PluginCatalogTests(unittest.TestCase):
         (plugin_dir / "README.md").write_text(f"# {slug}\n")
         (package_dir / "__init__.py").write_text("")
         (package_dir / "plugin-manifest.yaml").write_text(
-            f'description: "{slug}"\nauthor: "ContextForge Team"\nversion: "0.0.1"\navailable_hooks:\n  - "tool_pre_invoke"\n'
+            f'description: "{slug}"\nauthor: "ContextForge Team"\nversion: "0.0.1"\nkind: "{kind}"\navailable_hooks:\n  - "tool_pre_invoke"\n'
         )
         return plugin_dir
 
@@ -181,6 +184,93 @@ class PluginCatalogTests(unittest.TestCase):
             {entry["module_name"] for entry in payload["plugins"]},
             {"cpex_rate_limiter", "cpex_pii_filter"},
         )
+        self.assertEqual(
+            {entry["kind"] for entry in payload["plugins"]},
+            {
+                "cpex_rate_limiter.rate_limiter:RateLimiterPlugin",
+                "cpex_pii_filter.pii_filter:PIIFilterPlugin",
+            },
+        )
+
+    def test_validator_rejects_manifest_missing_kind(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/demo_plugin"]\n'
+                '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n',
+            )
+            plugin_dir = self._create_plugin(root, "demo_plugin")
+            package_dir = plugin_dir / "cpex_demo_plugin"
+            (package_dir / "plugin-manifest.yaml").write_text(
+                textwrap.dedent(
+                    """
+                    description: "Demo plugin"
+                    author: "ContextForge Team"
+                    version: "0.0.1"
+                    available_hooks:
+                      - "tool_pre_invoke"
+                    """
+                ).strip()
+                + "\n"
+            )
+
+            result = run_catalog("validate", str(root))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("missing kind", result.stderr.lower())
+
+    def test_validator_rejects_missing_plugin_entry_point(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/demo_plugin"]\n'
+                '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n',
+            )
+            plugin_dir = self._create_plugin(root, "demo_plugin")
+            (plugin_dir / "pyproject.toml").write_text(
+                textwrap.dedent(
+                    """
+                    [project]
+                    name = "cpex-demo-plugin"
+                    dynamic = ["version"]
+
+                    [tool.maturin]
+                    module-name = "cpex_demo_plugin.demo_plugin_rust"
+                    python-source = "."
+                    """
+                ).strip()
+                + "\n"
+            )
+
+            result = run_catalog("validate", str(root))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("project.entry-points", result.stderr.lower())
+
+    def test_validator_rejects_mismatched_manifest_kind_and_entry_point(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/demo_plugin"]\n'
+                '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n',
+            )
+            plugin_dir = self._create_plugin(root, "demo_plugin")
+            package_dir = plugin_dir / "cpex_demo_plugin"
+            (package_dir / "plugin-manifest.yaml").write_text(
+                textwrap.dedent(
+                    """
+                    description: "Demo plugin"
+                    author: "ContextForge Team"
+                    version: "0.0.1"
+                    kind: "cpex_demo_plugin.other:OtherPlugin"
+                    available_hooks:
+                      - "tool_pre_invoke"
+                    """
+                ).strip()
+                + "\n"
+            )
+
+            result = run_catalog("validate", str(root))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("kind mismatch", result.stderr.lower())
 
     def test_pii_manifest_defaults_match_runtime_defaults(self) -> None:
         manifest_defaults = self._parse_manifest_defaults(
@@ -257,6 +347,7 @@ class PluginCatalogTests(unittest.TestCase):
                     description: "Demo plugin"
                     author: "ContextForge Team"
                     version: "1.2.3"  # inline comment
+                    kind: "cpex_demo_plugin.demo_plugin:DemoPluginPlugin"
                     available_hooks:
                       - "tool_pre_invoke"
                     """
@@ -334,13 +425,15 @@ class PluginCatalogTests(unittest.TestCase):
             pyproject = readme.parent / "pyproject.toml"
             pyproject.write_text(
                 "[project]\nname = \"cpex-rate-limiter\"\ndynamic = [\"version\"]\n\n"
+                "[project.entry-points.\"cpex.plugins\"]\n"
+                "rate_limiter = \"cpex_rate_limiter.rate_limiter:RateLimiterPlugin\"\n\n"
                 "[tool.maturin]\nmodule-name = \"cpex_rate_limiter.rate_limiter_rust\"\npython-source = \".\"\n"
             )
             package_dir = readme.parent / "cpex_rate_limiter"
             package_dir.mkdir()
             (package_dir / "__init__.py").write_text("")
             (package_dir / "plugin-manifest.yaml").write_text(
-                'description: "Rate limiter"\nauthor: "ContextForge Team"\nversion: "0.0.1"\navailable_hooks:\n  - "tool_pre_invoke"\n'
+                'description: "Rate limiter"\nauthor: "ContextForge Team"\nversion: "0.0.1"\nkind: "cpex_rate_limiter.rate_limiter:RateLimiterPlugin"\navailable_hooks:\n  - "tool_pre_invoke"\n'
             )
             (readme.parent / "Makefile").write_text("all:\n\t@true\n")
             (readme.parent / "tests").mkdir()
