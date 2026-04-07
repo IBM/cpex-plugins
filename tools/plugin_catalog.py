@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tomllib
 from dataclasses import asdict, dataclass
+from importlib.metadata import EntryPoint
 from pathlib import Path
 
 
@@ -119,6 +120,15 @@ def _project_entry_point(pyproject: dict, slug: str) -> str:
             f'pyproject.toml must define entry point {slug!r} in [project.entry-points."cpex.plugins"]'
         )
     return entry_point
+
+
+def _validate_kind_reference(value: str, source: str) -> str:
+    entry_point = EntryPoint(name="plugin", value=value, group="cpex.plugins")
+    if entry_point.attr is None:
+        raise CatalogError(
+            f"{source}: kind must use canonical module:object form, got {value}"
+        )
+    return value
 
 
 def discover_plugins(root: Path) -> list[PluginRecord]:
@@ -257,6 +267,8 @@ def validate_plugin_dir(
 
     manifest_kind = _manifest_kind(manifest_path)
     entry_point = _project_entry_point(pyproject, slug)
+    _validate_kind_reference(manifest_kind, str(manifest_path))
+    _validate_kind_reference(entry_point, f"{plugin_dir / 'pyproject.toml'} entry point {slug!r}")
     if manifest_kind != entry_point:
         raise CatalogError(
             f"{plugin_dir}: kind mismatch between plugin-manifest.yaml ({manifest_kind}) and pyproject.toml entry point ({entry_point})"

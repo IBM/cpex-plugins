@@ -180,15 +180,19 @@ class PluginCatalogTests(unittest.TestCase):
             {entry["slug"] for entry in payload["plugins"]},
             {"rate_limiter", "pii_filter"},
         )
+        by_slug = {entry["slug"]: entry for entry in payload["plugins"]}
         self.assertEqual(
-            {entry["module_name"] for entry in payload["plugins"]},
-            {"cpex_rate_limiter", "cpex_pii_filter"},
+            {slug: entry["module_name"] for slug, entry in by_slug.items()},
+            {
+                "rate_limiter": "cpex_rate_limiter",
+                "pii_filter": "cpex_pii_filter",
+            },
         )
         self.assertEqual(
-            {entry["kind"] for entry in payload["plugins"]},
+            {slug: entry["kind"] for slug, entry in by_slug.items()},
             {
-                "cpex_rate_limiter.rate_limiter:RateLimiterPlugin",
-                "cpex_pii_filter.pii_filter:PIIFilterPlugin",
+                "rate_limiter": "cpex_rate_limiter.rate_limiter:RateLimiterPlugin",
+                "pii_filter": "cpex_pii_filter.pii_filter:PIIFilterPlugin",
             },
         )
 
@@ -245,6 +249,36 @@ class PluginCatalogTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("project.entry-points", result.stderr.lower())
 
+    def test_validator_rejects_missing_slug_specific_plugin_entry_point(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/demo_plugin"]\n'
+                '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n',
+            )
+            plugin_dir = self._create_plugin(root, "demo_plugin")
+            (plugin_dir / "pyproject.toml").write_text(
+                textwrap.dedent(
+                    """
+                    [project]
+                    name = "cpex-demo-plugin"
+                    dynamic = ["version"]
+
+                    [project.entry-points."cpex.plugins"]
+                    other_plugin = "cpex_demo_plugin.demo_plugin:DemoPluginPlugin"
+
+                    [tool.maturin]
+                    module-name = "cpex_demo_plugin.demo_plugin_rust"
+                    python-source = "."
+                    """
+                ).strip()
+                + "\n"
+            )
+
+            result = run_catalog("validate", str(root))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("entry point", result.stderr.lower())
+
     def test_validator_rejects_mismatched_manifest_kind_and_entry_point(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -297,7 +331,51 @@ class PluginCatalogTests(unittest.TestCase):
 
             result = run_catalog("validate", str(root))
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("kind mismatch", result.stderr.lower())
+            self.assertIn("module:object", result.stderr.lower())
+
+    def test_validator_rejects_equal_noncanonical_kind_strings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/demo_plugin"]\n'
+                '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n',
+            )
+            plugin_dir = self._create_plugin(root, "demo_plugin")
+            package_dir = plugin_dir / "cpex_demo_plugin"
+            (plugin_dir / "pyproject.toml").write_text(
+                textwrap.dedent(
+                    """
+                    [project]
+                    name = "cpex-demo-plugin"
+                    dynamic = ["version"]
+
+                    [project.entry-points."cpex.plugins"]
+                    demo_plugin = "cpex_demo_plugin.demo_plugin.DemoPluginPlugin"
+
+                    [tool.maturin]
+                    module-name = "cpex_demo_plugin.demo_plugin_rust"
+                    python-source = "."
+                    """
+                ).strip()
+                + "\n"
+            )
+            (package_dir / "plugin-manifest.yaml").write_text(
+                textwrap.dedent(
+                    """
+                    description: "Demo plugin"
+                    author: "ContextForge Team"
+                    version: "0.0.1"
+                    kind: "cpex_demo_plugin.demo_plugin.DemoPluginPlugin"
+                    available_hooks:
+                      - "tool_pre_invoke"
+                    """
+                ).strip()
+                + "\n"
+            )
+
+            result = run_catalog("validate", str(root))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("module:object", result.stderr.lower())
 
     def test_pii_manifest_defaults_match_runtime_defaults(self) -> None:
         manifest_defaults = self._parse_manifest_defaults(
