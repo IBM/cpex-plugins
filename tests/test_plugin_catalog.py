@@ -56,14 +56,16 @@ class PluginCatalogTests(unittest.TestCase):
     def _create_plugin(self, root: Path, slug: str) -> Path:
         plugin_dir = root / "plugins" / "rust" / "python-package" / slug
         package_dir = plugin_dir / f"cpex_{slug}"
-        kind = f"cpex_{slug}.{slug}:{slug.title().replace('_', '')}Plugin"
+        class_name = f"{slug.title().replace('_', '')}Plugin"
+        manifest_kind = f"cpex_{slug}.{slug}.{class_name}"
+        entry_point_kind = f"cpex_{slug}.{slug}:{class_name}"
         package_dir.mkdir(parents=True)
         (plugin_dir / "tests").mkdir()
         (plugin_dir / "pyproject.toml").write_text(
             (
                 f"[project]\nname = \"cpex-{slug.replace('_', '-')}\"\ndynamic = [\"version\"]\n\n"
                 "[project.entry-points.\"cpex.plugins\"]\n"
-                f"{slug} = \"{kind}\"\n\n"
+                f"{slug} = \"{entry_point_kind}\"\n\n"
                 "[tool.maturin]\n"
                 f"module-name = \"cpex_{slug}.{slug}_rust\"\n"
                 "python-source = \".\"\n"
@@ -76,7 +78,7 @@ class PluginCatalogTests(unittest.TestCase):
         (plugin_dir / "README.md").write_text(f"# {slug}\n")
         (package_dir / "__init__.py").write_text("")
         (package_dir / "plugin-manifest.yaml").write_text(
-            f'description: "{slug}"\nauthor: "ContextForge Team"\nversion: "0.0.1"\nkind: "{kind}"\navailable_hooks:\n  - "tool_pre_invoke"\n'
+            f'description: "{slug}"\nauthor: "ContextForge Team"\nversion: "0.0.1"\nkind: "{manifest_kind}"\navailable_hooks:\n  - "tool_pre_invoke"\n'
         )
         return plugin_dir
 
@@ -191,8 +193,8 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertEqual(
             {slug: entry["kind"] for slug, entry in by_slug.items()},
             {
-                "rate_limiter": "cpex_rate_limiter.rate_limiter:RateLimiterPlugin",
-                "pii_filter": "cpex_pii_filter.pii_filter:PIIFilterPlugin",
+                "rate_limiter": "cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
+                "pii_filter": "cpex_pii_filter.pii_filter.PIIFilterPlugin",
             },
         )
 
@@ -237,7 +239,7 @@ class PluginCatalogTests(unittest.TestCase):
                     description: "Demo plugin"
                     author: "ContextForge Team"
                     version: "0.0.1"
-                    kind: "cpex_demo_plugin.demo_plugin:DemoPluginPlugin" garbage
+                    kind: "cpex_demo_plugin.demo_plugin.DemoPluginPlugin" garbage
                     available_hooks:
                       - "tool_pre_invoke"
                     """
@@ -413,7 +415,7 @@ class PluginCatalogTests(unittest.TestCase):
                     description: "Demo plugin"
                     author: "ContextForge Team"
                     version: "0.0.1"
-                    kind: "cpex_demo_plugin.other:OtherPlugin"
+                    kind: "cpex_demo_plugin.other.OtherPlugin"
                     available_hooks:
                       - "tool_pre_invoke"
                     """
@@ -440,7 +442,7 @@ class PluginCatalogTests(unittest.TestCase):
                     description: "Demo plugin"
                     author: "ContextForge Team"
                     version: "0.0.1"
-                    kind: "cpex_demo_plugin.demo_plugin.DemoPluginPlugin"
+                    kind: "cpex_demo_plugin.demo_plugin:DemoPluginPlugin"
                     available_hooks:
                       - "tool_pre_invoke"
                     """
@@ -450,7 +452,7 @@ class PluginCatalogTests(unittest.TestCase):
 
             result = run_catalog("validate", str(root))
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("module:object", result.stderr.lower())
+            self.assertIn("module.object", result.stderr.lower())
 
     def test_validator_rejects_equal_noncanonical_kind_strings(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -469,7 +471,7 @@ class PluginCatalogTests(unittest.TestCase):
                     dynamic = ["version"]
 
                     [project.entry-points."cpex.plugins"]
-                    demo_plugin = "cpex_demo_plugin.demo_plugin.DemoPluginPlugin"
+                    demo_plugin = "cpex_demo_plugin.demo_plugin:DemoPluginPlugin"
 
                     [tool.maturin]
                     module-name = "cpex_demo_plugin.demo_plugin_rust"
@@ -484,7 +486,7 @@ class PluginCatalogTests(unittest.TestCase):
                     description: "Demo plugin"
                     author: "ContextForge Team"
                     version: "0.0.1"
-                    kind: "cpex_demo_plugin.demo_plugin.DemoPluginPlugin"
+                    kind: "cpex_demo_plugin.demo_plugin:DemoPluginPlugin"
                     available_hooks:
                       - "tool_pre_invoke"
                     """
@@ -494,7 +496,7 @@ class PluginCatalogTests(unittest.TestCase):
 
             result = run_catalog("validate", str(root))
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("module:object", result.stderr.lower())
+            self.assertIn("module.object", result.stderr.lower())
 
     def test_validator_rejects_noncanonical_entry_point_with_canonical_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -574,7 +576,7 @@ class PluginCatalogTests(unittest.TestCase):
                     dynamic = ["version"]
 
                     [project.entry-points."cpex.plugins"]
-                    demo_plugin = "cpex_demo_plugin.demo_plugin:DemoPluginPlugin.nested"
+                    demo_plugin = "cpex_demo_plugin.demo_plugin:DemoPluginPlugin"
 
                     [tool.maturin]
                     module-name = "cpex_demo_plugin.demo_plugin_rust"
@@ -589,7 +591,7 @@ class PluginCatalogTests(unittest.TestCase):
                     description: "Demo plugin"
                     author: "ContextForge Team"
                     version: "0.0.1"
-                    kind: "cpex_demo_plugin.demo_plugin:DemoPluginPlugin.nested"
+                    kind: "cpex_demo_plugin.demo_plugin.DemoPluginPlugin.nested"
                     available_hooks:
                       - "tool_pre_invoke"
                     """
@@ -599,7 +601,7 @@ class PluginCatalogTests(unittest.TestCase):
 
             result = run_catalog("validate", str(root))
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("module:object", result.stderr.lower())
+            self.assertIn("kind mismatch", result.stderr.lower())
 
     def test_validator_rejects_entry_point_with_extras(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -633,7 +635,7 @@ class PluginCatalogTests(unittest.TestCase):
                     description: "Demo plugin"
                     author: "ContextForge Team"
                     version: "0.0.1"
-                    kind: "cpex_demo_plugin.demo_plugin:DemoPluginPlugin[extra]"
+                    kind: "cpex_demo_plugin.demo_plugin.DemoPluginPlugin[extra]"
                     available_hooks:
                       - "tool_pre_invoke"
                     """
@@ -643,7 +645,7 @@ class PluginCatalogTests(unittest.TestCase):
 
             result = run_catalog("validate", str(root))
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("module:object", result.stderr.lower())
+            self.assertIn("module.object", result.stderr.lower())
 
     def test_validator_rejects_whitespace_padded_kind_reference(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -677,7 +679,7 @@ class PluginCatalogTests(unittest.TestCase):
                     description: "Demo plugin"
                     author: "ContextForge Team"
                     version: "0.0.1"
-                    kind: " cpex_demo_plugin.demo_plugin:DemoPluginPlugin "
+                    kind: " cpex_demo_plugin.demo_plugin.DemoPluginPlugin "
                     available_hooks:
                       - "tool_pre_invoke"
                     """
@@ -687,7 +689,7 @@ class PluginCatalogTests(unittest.TestCase):
 
             result = run_catalog("validate", str(root))
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("module:object", result.stderr.lower())
+            self.assertIn("module.object", result.stderr.lower())
 
     def test_validator_rejects_nondict_project_table_without_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -951,7 +953,7 @@ class PluginCatalogTests(unittest.TestCase):
                     description: "Demo plugin"
                     author: "ContextForge Team"
                     version: "1.2.3"  # inline comment
-                    kind: "cpex_demo_plugin.demo_plugin:DemoPluginPlugin"
+                    kind: "cpex_demo_plugin.demo_plugin.DemoPluginPlugin"
                     available_hooks:
                       - "tool_pre_invoke"
                     """
@@ -1037,7 +1039,7 @@ class PluginCatalogTests(unittest.TestCase):
             package_dir.mkdir()
             (package_dir / "__init__.py").write_text("")
             (package_dir / "plugin-manifest.yaml").write_text(
-                'description: "Rate limiter"\nauthor: "ContextForge Team"\nversion: "0.0.1"\nkind: "cpex_rate_limiter.rate_limiter:RateLimiterPlugin"\navailable_hooks:\n  - "tool_pre_invoke"\n'
+                'description: "Rate limiter"\nauthor: "ContextForge Team"\nversion: "0.0.1"\nkind: "cpex_rate_limiter.rate_limiter.RateLimiterPlugin"\navailable_hooks:\n  - "tool_pre_invoke"\n'
             )
             (readme.parent / "Makefile").write_text("all:\n\t@true\n")
             (readme.parent / "tests").mkdir()
@@ -1200,7 +1202,7 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertEqual(payload["slug"], "rate_limiter")
         self.assertEqual(
             payload["kind"],
-            "cpex_rate_limiter.rate_limiter:RateLimiterPlugin",
+            "cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
         )
         self.assertEqual(
             payload["release_wheel_matrix"],
@@ -1239,7 +1241,7 @@ class PluginCatalogTests(unittest.TestCase):
     def test_release_info_field_supports_kind(self) -> None:
         result = run_catalog("release-info-field", str(REPO_ROOT), "pii-filter-v0.2.0", "kind")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "cpex_pii_filter.pii_filter:PIIFilterPlugin")
+        self.assertEqual(result.stdout.strip(), "cpex_pii_filter.pii_filter.PIIFilterPlugin")
 
     def test_ci_selection_returns_has_plugins_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

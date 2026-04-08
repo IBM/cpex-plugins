@@ -29,8 +29,11 @@ SHARED_PATH_PREFIXES = (
     "tools/",
 )
 
-KIND_REFERENCE_PATTERN = re.compile(
+ENTRY_POINT_PATTERN = re.compile(
     r"^(?P<module>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*):(?P<object>[A-Za-z_][A-Za-z0-9_]*)$"
+)
+MANIFEST_KIND_PATTERN = re.compile(
+    r"^(?P<module>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\.(?P<object>[A-Za-z_][A-Za-z0-9_]*)$"
 )
 
 
@@ -153,8 +156,19 @@ def _project_entry_point(pyproject: dict, slug: str) -> str:
     return entry_point
 
 
-def _validate_kind_reference(value: str, source: str) -> str:
-    if KIND_REFERENCE_PATTERN.fullmatch(value) is None:
+def _manifest_kind_to_entry_point(value: str, source: str) -> str:
+    match = MANIFEST_KIND_PATTERN.fullmatch(value)
+    if match is None:
+        raise CatalogError(
+            f"{source}: kind must use canonical module.object form, got {value}"
+        )
+    module = match.group("module")
+    object_name = match.group("object")
+    return f"{module}:{object_name}"
+
+
+def _validate_entry_point_target(value: str, source: str) -> str:
+    if ENTRY_POINT_PATTERN.fullmatch(value) is None:
         raise CatalogError(
             f"{source}: kind must use canonical module:object form, got {value}"
         )
@@ -312,10 +326,12 @@ def validate_plugin_dir(
         )
 
     manifest_kind = _manifest_kind(manifest_path)
+    manifest_entry_point = _manifest_kind_to_entry_point(manifest_kind, str(manifest_path))
     entry_point = _project_entry_point(pyproject, slug)
-    _validate_kind_reference(manifest_kind, str(manifest_path))
-    _validate_kind_reference(entry_point, f"{plugin_dir / 'pyproject.toml'} entry point {slug!r}")
-    if manifest_kind != entry_point:
+    entry_point = _validate_entry_point_target(
+        entry_point, f"{plugin_dir / 'pyproject.toml'} entry point {slug!r}"
+    )
+    if manifest_entry_point != entry_point:
         raise CatalogError(
             f"{plugin_dir}: kind mismatch between plugin-manifest.yaml ({manifest_kind}) and pyproject.toml entry point ({entry_point})"
         )
@@ -325,7 +341,7 @@ def validate_plugin_dir(
         path=relative_plugin_path,
         package_name=expected_package_name,
         module_name=expected_module_name,
-        kind=entry_point,
+        kind=manifest_kind,
         version=version,
         release_wheel_matrix=_release_wheel_matrix(),
     )

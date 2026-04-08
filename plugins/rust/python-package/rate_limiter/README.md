@@ -17,7 +17,7 @@ If any configured dimension is exceeded, the plugin returns a violation with HTT
 
 ```yaml
 - name: RateLimiterPlugin
-  kind: cpex_rate_limiter.rate_limiter:RateLimiterPlugin
+  kind: cpex_rate_limiter.rate_limiter.RateLimiterPlugin
   hooks:
     - prompt_pre_fetch
     - tool_pre_invoke
