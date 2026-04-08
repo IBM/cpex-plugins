@@ -4,15 +4,24 @@
 // Regex Filter Plugin - Rust Implementation
 
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::sync::Once;
 
 use log::debug;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyModule, PyTuple};
 use pyo3_stub_gen::define_stub_info_gatherer;
+use pyo3_stub_gen::derive::*;
 use regex::{Regex, RegexSet};
 
 pub mod plugin;
+
+const MAX_NESTED_DEPTH: usize = 64;
+
+enum TraversalResult {
+    Unchanged(Py<PyAny>),
+    Modified(Py<PyAny>),
+}
 
 #[derive(Debug, Clone)]
 pub struct SearchReplace {
@@ -85,12 +94,161 @@ impl SearchReplaceConfig {
     }
 }
 
+#[gen_stub_pyclass]
 #[derive(Debug)]
 #[pyclass]
 pub struct SearchReplacePluginRust {
     pub config: SearchReplaceConfig,
 }
 
+fn apply_patterns_impl<'a>(config: &'a SearchReplaceConfig, text: &'a str) -> Cow<'a, str> {
+    if let Some(ref pattern_set) = config.pattern_set
+        && !pattern_set.is_match(text)
+    {
+        return Cow::Borrowed(text);
+    }
+
+    let mut result = Cow::Borrowed(text);
+    let mut modified = false;
+
+    for pattern in &config.words {
+        if pattern.compiled.is_match(&result) {
+            let replaced = pattern.compiled.replace_all(&result, &pattern.replace);
+            if let Cow::Owned(new_text) = replaced {
+                result = Cow::Owned(new_text);
+                modified = true;
+            } else if modified {
+                result = Cow::Owned(replaced.into_owned());
+            }
+        }
+    }
+
+    result
+}
+
+fn process_nested_impl(
+    plugin: &SearchReplacePluginRust,
+    py: Python<'_>,
+    data: &Bound<'_, PyAny>,
+    depth: usize,
+    seen: &mut HashSet<usize>,
+) -> PyResult<TraversalResult> {
+    if depth >= MAX_NESTED_DEPTH {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Maximum nested depth of {} exceeded",
+            MAX_NESTED_DEPTH
+        )));
+    }
+
+    if let Ok(text) = data.extract::<String>() {
+        let modified_text = apply_patterns_impl(&plugin.config, &text);
+        return match modified_text {
+            Cow::Borrowed(_) => Ok(TraversalResult::Unchanged(data.clone().unbind())),
+            Cow::Owned(value) => Ok(TraversalResult::Modified(
+                value.into_pyobject(py)?.into_any().unbind(),
+            )),
+        };
+    }
+
+    if let Ok(dict) = data.cast::<PyDict>() {
+        let identity = dict.as_ptr() as usize;
+        if !seen.insert(identity) {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "Cyclic containers are not supported",
+            ));
+        }
+
+        let mut any_modified = false;
+        let mut processed_items = Vec::with_capacity(dict.len());
+        for (key, value) in dict.iter() {
+            match process_nested_impl(plugin, py, &value, depth + 1, seen)? {
+                TraversalResult::Unchanged(new_value) => {
+                    processed_items.push((key.clone().unbind(), new_value));
+                }
+                TraversalResult::Modified(new_value) => {
+                    any_modified = true;
+                    processed_items.push((key.clone().unbind(), new_value));
+                }
+            }
+        }
+        seen.remove(&identity);
+
+        if !any_modified {
+            return Ok(TraversalResult::Unchanged(data.clone().unbind()));
+        }
+
+        let new_dict = PyDict::new(py);
+        for (key, value) in processed_items {
+            new_dict.set_item(key.bind(py), value.bind(py))?;
+        }
+        return Ok(TraversalResult::Modified(new_dict.into_any().unbind()));
+    }
+
+    if let Ok(list) = data.cast::<PyList>() {
+        let identity = list.as_ptr() as usize;
+        if !seen.insert(identity) {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "Cyclic containers are not supported",
+            ));
+        }
+
+        let mut any_modified = false;
+        let mut new_items = Vec::with_capacity(list.len());
+        for item in list.iter() {
+            match process_nested_impl(plugin, py, &item, depth + 1, seen)? {
+                TraversalResult::Unchanged(new_item) => new_items.push(new_item),
+                TraversalResult::Modified(new_item) => {
+                    any_modified = true;
+                    new_items.push(new_item);
+                }
+            }
+        }
+        seen.remove(&identity);
+
+        if !any_modified {
+            return Ok(TraversalResult::Unchanged(data.clone().unbind()));
+        }
+
+        let new_list = PyList::empty(py);
+        for item in new_items {
+            new_list.append(item.bind(py))?;
+        }
+        return Ok(TraversalResult::Modified(new_list.into_any().unbind()));
+    }
+
+    if let Ok(tuple) = data.cast::<PyTuple>() {
+        let identity = tuple.as_ptr() as usize;
+        if !seen.insert(identity) {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "Cyclic containers are not supported",
+            ));
+        }
+
+        let mut any_modified = false;
+        let mut new_items = Vec::with_capacity(tuple.len());
+        for item in tuple.iter() {
+            match process_nested_impl(plugin, py, &item, depth + 1, seen)? {
+                TraversalResult::Unchanged(new_item) => new_items.push(new_item),
+                TraversalResult::Modified(new_item) => {
+                    any_modified = true;
+                    new_items.push(new_item);
+                }
+            }
+        }
+        seen.remove(&identity);
+
+        if !any_modified {
+            return Ok(TraversalResult::Unchanged(data.clone().unbind()));
+        }
+
+        let new_tuple = PyTuple::new(py, new_items.iter().map(|item| item.bind(py)))?;
+        return Ok(TraversalResult::Modified(new_tuple.into_any().unbind()));
+    }
+
+    Ok(TraversalResult::Unchanged(data.clone().unbind()))
+}
+
+#[gen_stub_pymethods]
 #[pymethods]
 impl SearchReplacePluginRust {
     #[new]
@@ -102,28 +260,7 @@ impl SearchReplacePluginRust {
     }
 
     pub fn apply_patterns(&self, text: &str) -> String {
-        if let Some(ref pattern_set) = self.config.pattern_set
-            && !pattern_set.is_match(text)
-        {
-            return text.to_string();
-        }
-
-        let mut result = Cow::Borrowed(text);
-        let mut modified = false;
-
-        for pattern in &self.config.words {
-            if pattern.compiled.is_match(&result) {
-                let replaced = pattern.compiled.replace_all(&result, &pattern.replace);
-                if let Cow::Owned(new_text) = replaced {
-                    result = Cow::Owned(new_text);
-                    modified = true;
-                } else if modified {
-                    result = Cow::Owned(replaced.into_owned());
-                }
-            }
-        }
-
-        result.into_owned()
+        apply_patterns_impl(&self.config, text).into_owned()
     }
 
     pub fn process_nested(
@@ -131,72 +268,11 @@ impl SearchReplacePluginRust {
         py: Python<'_>,
         data: &Bound<'_, PyAny>,
     ) -> PyResult<(bool, Py<PyAny>)> {
-        if let Ok(text) = data.extract::<String>() {
-            let modified_text = self.apply_patterns(&text);
-            if modified_text == text {
-                return Ok((false, data.clone().unbind()));
-            }
-            return Ok((true, modified_text.into_pyobject(py)?.into_any().unbind()));
-        }
-
-        if let Ok(dict) = data.cast::<PyDict>() {
-            let mut any_modified = false;
-            let mut processed_items = Vec::with_capacity(dict.len());
-            for (key, value) in dict.iter() {
-                let (item_modified, new_value) = self.process_nested(py, &value)?;
-                any_modified |= item_modified;
-                processed_items.push((key.clone().unbind(), new_value));
-            }
-
-            if !any_modified {
-                return Ok((false, data.clone().unbind()));
-            }
-
-            let new_dict = PyDict::new(py);
-            for (key, value) in processed_items {
-                new_dict.set_item(key.bind(py), value.bind(py))?;
-            }
-            return Ok((true, new_dict.into_any().unbind()));
-        }
-
-        if let Ok(list) = data.cast::<PyList>() {
-            let mut any_modified = false;
-            let mut new_items = Vec::with_capacity(list.len());
-            for item in list.iter() {
-                let (item_modified, new_item) = self.process_nested(py, &item)?;
-                any_modified |= item_modified;
-                new_items.push(new_item);
-            }
-
-            if !any_modified {
-                return Ok((false, data.clone().unbind()));
-            }
-
-            let new_list = PyList::empty(py);
-            for item in new_items {
-                new_list.append(item.bind(py))?;
-            }
-            return Ok((true, new_list.into_any().unbind()));
-        }
-
-        if let Ok(tuple) = data.cast::<PyTuple>() {
-            let mut any_modified = false;
-            let mut new_items = Vec::with_capacity(tuple.len());
-            for item in tuple.iter() {
-                let (item_modified, new_item) = self.process_nested(py, &item)?;
-                any_modified |= item_modified;
-                new_items.push(new_item);
-            }
-
-            if !any_modified {
-                return Ok((false, data.clone().unbind()));
-            }
-
-            let new_tuple = PyTuple::new(py, new_items.iter().map(|item| item.bind(py)))?;
-            return Ok((true, new_tuple.into_any().unbind()));
-        }
-
-        Ok((false, data.clone().unbind()))
+        let mut seen = HashSet::new();
+        Ok(match process_nested_impl(self, py, data, 0, &mut seen)? {
+            TraversalResult::Unchanged(value) => (false, value),
+            TraversalResult::Modified(value) => (true, value),
+        })
     }
 }
 

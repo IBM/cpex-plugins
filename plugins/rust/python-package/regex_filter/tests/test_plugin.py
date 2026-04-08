@@ -83,6 +83,48 @@ class TestRustEngine:
         assert modified is True
         assert new_result == ["This is good", "Another good thing"]
 
+    def test_tuple_result(self):
+        plugin = SearchReplacePluginRust({"words": [{"search": "bad", "replace": "good"}]})
+        modified, new_result = plugin.process_nested(("bad", {"nested": "bad"}))
+        assert modified is True
+        assert new_result == ("good", {"nested": "good"})
+
+    def test_cyclic_list_does_not_recurse_forever(self):
+        plugin = SearchReplacePluginRust({"words": [{"search": "bad", "replace": "good"}]})
+        data = []
+        data.append(data)
+        with pytest.raises(ValueError, match="Cyclic containers are not supported"):
+            plugin.process_nested(data)
+
+    def test_cyclic_list_with_modified_sibling_raises(self):
+        plugin = SearchReplacePluginRust({"words": [{"search": "bad", "replace": "good"}]})
+        data = ["bad"]
+        data.append(data)
+        with pytest.raises(ValueError, match="Cyclic containers are not supported"):
+            plugin.process_nested(data)
+
+    def test_mixed_dict_list_cycle_raises(self):
+        plugin = SearchReplacePluginRust({"words": [{"search": "bad", "replace": "good"}]})
+        data = {"items": ["bad"]}
+        data["items"].append(data)
+        with pytest.raises(ValueError, match="Cyclic containers are not supported"):
+            plugin.process_nested(data)
+
+    def test_deeply_nested_values_stop_at_depth_limit(self):
+        plugin = SearchReplacePluginRust({"words": [{"search": "bad", "replace": "good"}]})
+        data = "bad"
+        for _ in range(70):
+            data = [data]
+        with pytest.raises(ValueError, match="Maximum nested depth"):
+            plugin.process_nested(data)
+
+    def test_large_text_still_filters(self):
+        plugin = SearchReplacePluginRust({"words": [{"search": "bad", "replace": "good"}]})
+        text = "bad" * ((10 * 1024 * 1024) // 3 + 1)
+        modified, new_result = plugin.process_nested(text)
+        assert modified is True
+        assert new_result.startswith("good")
+
     def test_chained_replacements(self):
         plugin = SearchReplacePluginRust(
             {
@@ -206,6 +248,36 @@ class TestPluginHooks:
         result = await plugin.prompt_post_fetch(payload, _make_context())
         assert result.modified_payload is not None
         assert result.modified_payload.result.messages[0].content.text == "This is good"
+
+    async def test_prompt_post_fetch_no_change_returns_default_result(self, plugin):
+        payload = PromptPosthookPayload(
+            result=PromptResult(
+                messages=[Message(role="assistant", content=TextContent(text="This is fine"))]
+            )
+        )
+        result = await plugin.prompt_post_fetch(payload, _make_context())
+        assert result.modified_payload is None
+        assert result.continue_processing is True
+
+    async def test_prompt_post_fetch_ignores_messages_without_text(self, plugin):
+        class BadContent:
+            pass
+
+        class BadMessage:
+            role = "assistant"
+            content = BadContent()
+
+        payload = PromptPosthookPayload(result=PromptResult(messages=[BadMessage()]))
+        result = await plugin.prompt_post_fetch(payload, _make_context())
+        assert result.modified_payload is None
+
+    async def test_prompt_post_fetch_non_list_messages_returns_default_result(self, plugin):
+        class BadResult:
+            messages = "not-a-list"
+
+        payload = PromptPosthookPayload(result=BadResult())
+        result = await plugin.prompt_post_fetch(payload, _make_context())
+        assert result.modified_payload is None
 
     async def test_tool_pre_invoke_nested_dict(self, plugin):
         payload = ToolPreInvokePayload(name="search", args={"outer": {"inner": "bad"}})
