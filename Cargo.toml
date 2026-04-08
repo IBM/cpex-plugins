@@ -2,6 +2,7 @@
 members = [
     "plugins/rust/python-package/pii_filter",
     "plugins/rust/python-package/rate_limiter",
+    "plugins/rust/python-package/secrets_detection",
 ]
 resolver = "3"
 
