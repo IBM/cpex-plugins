@@ -2,6 +2,7 @@
 members = [
     "plugins/rust/python-package/pii_filter",
     "plugins/rust/python-package/rate_limiter",
+    "plugins/rust/python-package/retry_with_backoff",
 ]
 resolver = "3"
 
@@ -19,6 +20,7 @@ pyo3-log = "0.13"
 pyo3-stub-gen = "0.20.0"
 thiserror = "2.0"
 tokio = { version = "1", features = ["full"] }
+rand = "0.8"
 
 [profile.release]
 opt-level = 3

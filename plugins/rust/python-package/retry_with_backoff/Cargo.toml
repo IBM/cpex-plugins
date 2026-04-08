@@ -1,0 +1,23 @@
+[package]
+name = "retry_with_backoff"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Rust-backed retry and backoff policy plugin for MCP Gateway"
+
+[lib]
+name = "retry_with_backoff_rust"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "stub_gen"
+path = "src/bin/stub_gen.rs"
+
+[dependencies]
+log.workspace = true
+pyo3.workspace = true
+pyo3-log.workspace = true
+pyo3-stub-gen.workspace = true
+rand.workspace = true
