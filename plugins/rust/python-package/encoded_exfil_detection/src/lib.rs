@@ -563,7 +563,7 @@ fn scan_text(
         ("escaped_hex", &ESCAPED_HEX_RE),
     ];
 
-    for (encoding, regex) in detectors {
+    'detectors: for (encoding, regex) in detectors {
         if !cfg.enabled.get(encoding).copied().unwrap_or(true) {
             continue;
         }
@@ -625,7 +625,7 @@ fn scan_text(
                 }
 
                 if findings_by_span.len() >= cfg.max_findings_per_value {
-                    break;
+                    break 'detectors;
                 }
             }
         }

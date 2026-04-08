@@ -284,6 +284,25 @@ def _apply_redactions(text: str, findings: Iterable[dict[str, Any]], replacement
     return redacted
 
 
+def _prefix_finding_paths(findings: Iterable[dict[str, Any]], root_path: str) -> list[dict[str, Any]]:
+    """Prefix Rust finding paths with the caller's root container path."""
+    if not root_path:
+        return [dict(finding) for finding in findings]
+
+    prefixed: list[dict[str, Any]] = []
+    for finding in findings:
+        updated = dict(finding)
+        finding_path = str(updated.get("path") or "$")
+        if finding_path == "$":
+            updated["path"] = root_path
+        elif finding_path.startswith("["):
+            updated["path"] = f"{root_path}{finding_path}"
+        else:
+            updated["path"] = f"{root_path}.{finding_path}"
+        prefixed.append(updated)
+    return prefixed
+
+
 def _evaluate_candidate(
     text: str,
     path: str,
@@ -362,6 +381,7 @@ def _scan_text(
         return text, []
 
     findings_by_span: Dict[Tuple[int, int], dict[str, Any]] = {}
+    limit_reached = False
 
     for encoding, pattern in _PATTERNS.items():
         if not cfg.enabled.get(encoding, True):
@@ -412,7 +432,11 @@ def _scan_text(
                 findings_by_span[key] = finding
 
             if len(findings_by_span) >= cfg.max_findings_per_value:
+                limit_reached = True
                 break
+
+        if limit_reached:
+            break
 
     findings = sorted(findings_by_span.values(), key=lambda item: (item["start"], item["end"]))
     if not findings or not cfg.redact:
@@ -435,12 +459,10 @@ def _scan_container(
     if use_rust and _RUST_AVAILABLE and encoded_exfil_detection is not None:  # pragma: no cover - Rust path
         try:
             count, redacted, findings = encoded_exfil_detection(container, cfg)
-            normalized_findings = []
-            for finding in findings:
-                if isinstance(finding, dict):
-                    if "path" not in finding:
-                        finding["path"] = path or "$"
-                    normalized_findings.append(finding)
+            normalized_findings = _prefix_finding_paths(
+                [finding for finding in findings if isinstance(finding, dict)],
+                path,
+            )
             return int(count), redacted, normalized_findings
         except Exception as e:  # pragma: no cover - fallback path safety
             logger.warning(f"Rust encoded exfil scan failed, falling back to Python: {e}")
@@ -530,12 +552,10 @@ class EncodedExfilDetectorPlugin(Plugin):
         if self._rust_engine is not None:  # pragma: no cover - Rust path
             try:
                 count, redacted, findings = self._rust_engine.scan(container)
-                normalized = []
-                for f in findings:
-                    if isinstance(f, dict):
-                        if "path" not in f:
-                            f["path"] = path or "$"
-                        normalized.append(f)
+                normalized = _prefix_finding_paths(
+                    [f for f in findings if isinstance(f, dict)],
+                    path,
+                )
                 return int(count), redacted, normalized
             except Exception as e:  # pragma: no cover - fallback path safety
                 logger.warning(f"Rust engine scan failed, falling back to Python: {e}")

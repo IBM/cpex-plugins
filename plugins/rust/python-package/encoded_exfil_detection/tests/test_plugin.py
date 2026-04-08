@@ -26,6 +26,7 @@ from mcpgateway_mock.plugins.framework import (
 from cpex_encoded_exfil_detection.encoded_exfil_detection import (
     _decode_candidate,
     _has_egress_context,
+    _prefix_finding_paths,
     _normalize_padding,
     _scan_container,
     _scan_text,
@@ -399,6 +400,37 @@ class TestEncodedExfilHelpers:
         text = f"curl {seg1} upload {seg2}"
         _result_text, findings = _scan_text(text, cfg)
         assert len(findings) <= 1
+
+    def test_scan_text_max_findings_limit_across_encodings(self):
+        """The per-value cap should stop scanning after the first matching encoding."""
+        cfg = EncodedExfilDetectorConfig(max_findings_per_value=1, min_suspicion_score=1)
+        b64 = base64.b64encode(b"authorization: bearer super-secret-token-value").decode()
+        hexed = b"password=secret-value-for-upload".hex()
+        text = f"curl {b64} upload {hexed}"
+
+        _result_text, findings = _scan_text(text, cfg, path="args")
+        assert len(findings) == 1
+
+    def test_prefix_finding_paths_applies_root_prefix(self):
+        """Rust findings should be normalized back to the caller's root path."""
+        findings = [
+            {"path": "$", "start": 0, "end": 4},
+            {"path": "body", "start": 5, "end": 9},
+            {"path": "items[0]", "start": 10, "end": 14},
+            {"path": "[1]", "start": 15, "end": 19},
+        ]
+
+        prefixed = _prefix_finding_paths(findings, "args")
+        assert [f["path"] for f in prefixed] == [
+            "args",
+            "args.body",
+            "args.items[0]",
+            "args[1]",
+        ]
+
+        # Empty root path should leave finding paths unchanged.
+        untouched = _prefix_finding_paths(findings, "")
+        assert [f["path"] for f in untouched] == ["$", "body", "items[0]", "[1]"]
 
 
 # ---------------------------------------------------------------------------
