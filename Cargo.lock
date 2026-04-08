@@ -1417,6 +1417,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "regex_filter"
+version = "0.1.0"
+dependencies = [
+ "cpex_framework_bridge",
+ "criterion",
+ "log",
+ "pyo3",
+ "pyo3-log",
+ "pyo3-stub-gen",
+ "regex",
+]
+
+[[package]]
 name = "rustc-hash"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

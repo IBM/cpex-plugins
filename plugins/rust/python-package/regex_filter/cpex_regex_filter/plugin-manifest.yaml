@@ -1,0 +1,10 @@
+description: "Rust-backed regex search and replace for prompt arguments, prompt messages, tool inputs, and tool outputs"
+author: "ContextForge Contributors"
+version: "0.1.0"
+available_hooks:
+  - "prompt_pre_fetch"
+  - "prompt_post_fetch"
+  - "tool_pre_invoke"
+  - "tool_post_invoke"
+default_configs:
+  words: []

@@ -1,0 +1,36 @@
+[build-system]
+requires = ["maturin>=1.4,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "cpex-regex-filter"
+dynamic = ["version"]
+description = "Rust-backed regex search and replace plugin for MCP Gateway"
+authors = [{ name = "ContextForge Contributors" }]
+license = { text = "Apache-2.0" }
+readme = "README.md"
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+[tool.maturin]
+module-name = "cpex_regex_filter.regex_filter_rust"
+python-source = "."
+features = ["pyo3/extension-module"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+asyncio_mode = "auto"
+
+[dependency-groups]
+dev = [
+    "maturin>=1.12.6",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
