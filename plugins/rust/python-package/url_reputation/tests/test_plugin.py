@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import importlib
+import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -35,6 +38,25 @@ def _make_plugin_config(**overrides) -> PluginConfig:
 
 
 class TestRustEngine:
+    def test_import_does_not_require_test_mocks(self, monkeypatch) -> None:
+        tests_dir = Path(__file__).resolve().parent
+        monkeypatch.setattr(
+            sys,
+            "path",
+            [entry for entry in sys.path if Path(entry).resolve() != tests_dir],
+        )
+        for module_name in (
+            "mcpgateway_mock",
+            "mcpgateway_mock.plugins",
+            "mcpgateway_mock.plugins.framework",
+            "cpex_url_reputation.url_reputation_rust",
+        ):
+            sys.modules.pop(module_name, None)
+
+        module = importlib.import_module("cpex_url_reputation.url_reputation_rust")
+
+        assert hasattr(module, "URLReputationEngine")
+
     def test_whitelisted_subdomain_allowed(self) -> None:
         engine = URLReputationEngine({"whitelist_domains": ["example.com"]})
         result = engine.validate_url("https://sub.example.com/login")
@@ -92,6 +114,10 @@ class TestRustEngine:
         assert result.continue_processing is False
         assert result.violation is not None
         assert result.violation.reason == "Blocked pattern"
+
+    def test_invalid_blocked_pattern_raises(self) -> None:
+        with pytest.raises(ValueError, match="Pattern compilation failed"):
+            URLReputationEngine({"blocked_patterns": ["["]})
 
     def test_internationalized_domain_allowed(self) -> None:
         engine = URLReputationEngine({"use_heuristic_check": True})

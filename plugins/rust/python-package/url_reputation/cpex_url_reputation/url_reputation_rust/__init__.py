@@ -12,7 +12,35 @@ from urllib.parse import urlparse
 try:
     from mcpgateway.plugins.framework import PluginViolation, ResourcePreFetchResult
 except ModuleNotFoundError:
-    from mcpgateway_mock.plugins.framework import PluginViolation, ResourcePreFetchResult  # type: ignore
+    class PluginViolation:  # type: ignore[no-redef]
+        def __init__(
+            self,
+            reason: str = "",
+            description: str = "",
+            code: str = "",
+            details: dict[str, Any] | None = None,
+            http_status_code: int = 400,
+            http_headers: dict[str, str] | None = None,
+        ) -> None:
+            self.reason = reason
+            self.description = description
+            self.code = code
+            self.details = details
+            self.http_status_code = http_status_code
+            self.http_headers = http_headers
+
+    class ResourcePreFetchResult:  # type: ignore[no-redef]
+        def __init__(
+            self,
+            continue_processing: bool = True,
+            violation: PluginViolation | None = None,
+            metadata: dict[str, Any] | None = None,
+            http_headers: dict[str, str] | None = None,
+        ) -> None:
+            self.continue_processing = continue_processing
+            self.violation = violation
+            self.metadata = metadata
+            self.http_headers = http_headers
 
 _SAFE_TLDS = {"com", "org", "net", "edu", "gov", "io", "dev", "co"}
 
@@ -32,8 +60,8 @@ def _compile_patterns(values: Any) -> list[re.Pattern[str]]:
     for value in values or []:
         try:
             compiled.append(re.compile(str(value)))
-        except re.error:
-            continue
+        except re.error as exc:
+            raise ValueError(f"Pattern compilation failed for {value!r}") from exc
     return compiled
 
 
