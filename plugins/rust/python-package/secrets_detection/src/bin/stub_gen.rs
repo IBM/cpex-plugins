@@ -10,16 +10,8 @@ use secrets_detection_rust::stub_info;
 
 fn curate_extension_stub() {
     let stub_path = Path::new("cpex_secrets_detection/secrets_detection_rust/__init__.pyi");
-    let mut content = fs::read_to_string(stub_path).expect("Failed to read generated stub file");
-    content = content.replace(
-        "\"py_scan_container\",\n]",
-        "\"SecretsDetectionPluginCore\",\n    \"py_scan_container\",\n]",
-    );
-    if !content.contains("class SecretsDetectionPluginCore:") {
-        content.push_str(
-            "\n\n@typing.final\nclass SecretsDetectionPluginCore:\n    def __new__(cls, config: dict) -> SecretsDetectionPluginCore: ...\n    def prompt_pre_fetch(self, payload: typing.Any, context: typing.Any) -> typing.Any: ...\n    def tool_post_invoke(self, payload: typing.Any, context: typing.Any) -> typing.Any: ...\n    def resource_post_fetch(self, payload: typing.Any, context: typing.Any) -> typing.Any: ...\n",
-        );
-    }
+    let content = fs::read_to_string(stub_path).expect("Failed to read generated stub file");
+    let content = content.trim_end().to_string() + "\n";
     fs::write(stub_path, content).expect("Failed to write curated stub file");
 }
 

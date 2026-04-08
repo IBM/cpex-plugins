@@ -5,7 +5,6 @@ import builtins
 import typing
 __all__ = [
     "SecretsDetectionPluginCore",
-    "SecretsDetectionPluginCore",
     "py_scan_container",
 ]
 

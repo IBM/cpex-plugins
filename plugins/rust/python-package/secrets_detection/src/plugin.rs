@@ -48,7 +48,7 @@ impl SecretsDetectionPluginCore {
             );
         }
 
-        if self.config.redact && !redacted.is(&source) {
+        if self.config.redact && count > 0 {
             payload.setattr("args", &redacted)?;
             return build_framework_object(
                 py,
@@ -97,7 +97,7 @@ impl SecretsDetectionPluginCore {
             );
         }
 
-        if self.config.redact && !redacted.is(&value) {
+        if self.config.redact && count > 0 {
             payload.setattr("result", &redacted)?;
             return build_framework_object(
                 py,
@@ -149,7 +149,7 @@ impl SecretsDetectionPluginCore {
             );
         }
 
-        if self.config.redact && !redacted.is(&text) {
+        if self.config.redact && count > 0 {
             content.setattr("text", &redacted)?;
             return build_framework_object(
                 py,

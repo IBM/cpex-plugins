@@ -92,6 +92,19 @@ class TestPluginHooks:
         assert result.modified_payload.args["input"] == "AWS_ACCESS_KEY_ID=[REDACTED]"
         assert result.metadata == {"secrets_redacted": True, "count": 1}
 
+    async def test_prompt_pre_fetch_leaves_clean_payload_unmodified(self, plugin):
+        payload = PromptPrehookPayload(
+            prompt_id="prompt-1",
+            args={"input": "hello world"},
+        )
+
+        result = await plugin.prompt_pre_fetch(payload, _make_context())
+
+        assert result.continue_processing is True
+        assert result.violation is None
+        assert result.modified_payload is None
+        assert result.metadata == {}
+
     async def test_prompt_pre_fetch_blocks_without_redaction(self):
         plugin = SecretsDetectionPlugin(_make_config(block_on_detection=True, redact=False))
         payload = PromptPrehookPayload(
@@ -131,6 +144,22 @@ class TestPluginHooks:
         assert result.modified_payload.result["isError"] is False
         assert result.metadata == {"secrets_redacted": True, "count": 1}
 
+    async def test_tool_post_invoke_leaves_clean_payload_unmodified(self, plugin):
+        payload = ToolPostInvokePayload(
+            name="writer",
+            result={
+                "content": [{"type": "text", "text": "plain text"}],
+                "isError": False,
+            },
+        )
+
+        result = await plugin.tool_post_invoke(payload, _make_context())
+
+        assert result.continue_processing is True
+        assert result.violation is None
+        assert result.modified_payload is None
+        assert result.metadata == {}
+
     async def test_resource_post_fetch_redacts_text_content(self, plugin):
         payload = ResourcePostFetchPayload(
             uri="file:///tmp/secret.txt",
@@ -143,6 +172,19 @@ class TestPluginHooks:
         assert result.modified_payload is not None
         assert result.modified_payload.content.text == "SLACK_TOKEN=[REDACTED]"
         assert result.metadata == {"secrets_redacted": True, "count": 1}
+
+    async def test_resource_post_fetch_leaves_clean_payload_unmodified(self, plugin):
+        payload = ResourcePostFetchPayload(
+            uri="file:///tmp/secret.txt",
+            content=ResourceContent(text="plain text"),
+        )
+
+        result = await plugin.resource_post_fetch(payload, _make_context())
+
+        assert result.continue_processing is True
+        assert result.violation is None
+        assert result.modified_payload is None
+        assert result.metadata == {}
 
     async def test_resource_post_fetch_blocks_when_threshold_met(self):
         plugin = SecretsDetectionPlugin(
