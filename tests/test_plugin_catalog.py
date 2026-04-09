@@ -1599,10 +1599,7 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertEqual(workflow.count("cargo run --bin stub_gen"), 1)
         self.assertIn('git show-ref --verify --quiet "refs/tags/${tag}"', workflow)
         self.assertIn("python3 tools/plugin_catalog.py release-info .", workflow)
-        self.assertIn(
-            'if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" || "${GITHUB_EVENT_NAME}" == "workflow_call" ]]; then',
-            workflow,
-        )
+        self.assertIn('if [[ -n "${TAG_INPUT}" ]]; then', workflow)
         self.assertIn("workflow_call:", workflow)
         self.assertIn("publish_enabled:", workflow)
         self.assertIn('default: false', workflow)
