@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "cpex-secrets-detection"
 dynamic = ["version"]
-description = "High-performance secrets detection and redaction for MCP Gateway"
+description = "Rust-backed secrets detection plugin for MCP Gateway"
 authors = [{ name = "ContextForge Contributors" }]
 license = { text = "Apache-2.0" }
 readme = "README.md"
@@ -17,9 +17,6 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
-
-[project.entry-points."cpex.plugins"]
-secrets_detection = "cpex_secrets_detection.secrets_detection:SecretsDetectionPlugin"
 
 [tool.maturin]
 module-name = "cpex_secrets_detection.secrets_detection_rust"
