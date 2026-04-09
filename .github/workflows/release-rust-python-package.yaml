@@ -63,7 +63,7 @@ jobs:
           REPOSITORY_INPUT: ${{ inputs.repository }}
         run: |
           set -euo pipefail
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" || "${GITHUB_EVENT_NAME}" == "workflow_call" ]]; then
+          if [[ -n "${TAG_INPUT}" ]]; then
             tag="${TAG_INPUT}"
             repository="${REPOSITORY_INPUT}"
             git fetch --force origin "refs/tags/${tag}:refs/tags/${tag}"
@@ -78,7 +78,7 @@ jobs:
           release_info="$(python3 tools/plugin_catalog.py release-info . "${tag}")"
           plugin="$(printf '%s' "${release_info}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["slug"])')"
           plugin_path="$(printf '%s' "${release_info}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["path"])')"
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" || "${GITHUB_EVENT_NAME}" == "workflow_call" ]]; then
+          if [[ -n "${TAG_INPUT}" ]]; then
             wheel_matrix="$(python3 -c 'import json; print(json.dumps([{"runner":"ubuntu-latest","platform":"linux-x86_64"},{"runner":"ubuntu-24.04-arm","platform":"linux-aarch64"},{"runner":"ubuntu-24.04-s390x","platform":"linux-s390x"},{"runner":"ubuntu-24.04-ppc64le","platform":"linux-ppc64le"},{"runner":"macos-latest","platform":"macos-arm64"},{"runner":"windows-latest","platform":"windows-x86_64"}]))')"
           else
             wheel_matrix="$(printf '%s' "${release_info}" | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["release_wheel_matrix"]))')"

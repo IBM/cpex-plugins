@@ -13,7 +13,8 @@ fn curate_top_level_stub() {
 }
 
 fn curate_extension_stub() {
-    let stub_path = Path::new("cpex_encoded_exfil_detection/encoded_exfil_detection_rust/__init__.pyi");
+    let stub_path =
+        Path::new("cpex_encoded_exfil_detection/encoded_exfil_detection_rust/__init__.pyi");
     let content = fs::read_to_string(stub_path).expect("Failed to read generated stub file");
     let content = content.trim_end().to_string() + "\n";
     fs::write(stub_path, content).expect("Failed to write curated extension stub file");
