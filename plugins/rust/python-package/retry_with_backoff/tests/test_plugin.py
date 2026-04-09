@@ -233,13 +233,19 @@ class TestGetState:
         from cpex_retry_with_backoff.retry_with_backoff import _ToolRetryState
 
         key = "evict_tool:evict_req"
-        _STATE[key] = _ToolRetryState(
-            consecutive_failures=3,
-            last_failure_at=time.monotonic() - _STATE_TTL_SECONDS - 1,
-        )
-        _get_state("other_tool", "other_req")
-        assert key not in _STATE
-        _del_state("other_tool", "other_req")
+        baseline = _STATE.copy()
+        try:
+            with patch("cpex_retry_with_backoff.retry_with_backoff.time.monotonic", return_value=_STATE_TTL_SECONDS + 10):
+                _STATE[key] = _ToolRetryState(
+                    consecutive_failures=3,
+                    last_failure_at=9.0,
+                )
+                _get_state("other_tool", "other_req")
+                assert key not in _STATE
+                _del_state("other_tool", "other_req")
+        finally:
+            _STATE.clear()
+            _STATE.update(baseline)
 
 
 class TestRustFallback:
