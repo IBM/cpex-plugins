@@ -25,7 +25,8 @@ Each plugin lives in its own top-level directory (e.g., `rate_limiter/`). New pl
 - A `pyproject.toml` with maturin as the build backend (for Rust+Python plugins) or setuptools (for pure Python plugins).
 - A `Makefile` with standard targets: `build`, `install`, `test`, `test-python`, `test-all`, `fmt`, `clippy`, `check-all`, `clean`.
 - A `README.md` documenting configuration, usage, and limitations.
-- A `plugin-manifest.yaml` inside the Python package directory.
+- A `plugin-manifest.yaml` inside the Python package directory with an explicit `kind` in `module.object` form.
+- A matching plugin entry point in `pyproject.toml` under `[project.entry-points."cpex.plugins"]` in `module:object` form.
 - A `tests/` directory with pytest tests.
 
 ### Merge Approval
