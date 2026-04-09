@@ -23,6 +23,9 @@ wheels = [
 [[package]]
 name = "cpex-url-reputation"
 source = { editable = "." }
+dependencies = [
+    { name = "pydantic" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -33,6 +36,7 @@ dev = [
 ]
 
 [package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2,<3" }]
 
 [package.metadata.requires-dev]
 dev = [
