@@ -1603,6 +1603,9 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("workflow_call:", workflow)
         self.assertIn("publish_enabled:", workflow)
         self.assertIn('default: false', workflow)
+        self.assertIn('git fetch --force origin "refs/heads/main:refs/remotes/origin/main"', workflow)
+        self.assertIn('if git merge-base --is-ancestor "${tag_ref}" "refs/remotes/origin/main"; then', workflow)
+        self.assertIn("tag_on_main: ${{ steps.resolve.outputs.tag_on_main }}", workflow)
         self.assertIn(
             'wheel_matrix="$(python3 -c \'import json; print(json.dumps([{',
             workflow,
@@ -1624,7 +1627,7 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("runs-on: ${{ matrix.runner }}", workflow)
         self.assertIn("name: wheel-${{ matrix.platform }}", workflow)
         self.assertIn(
-            "if: ${{ github.event_name != 'workflow_call' || inputs.publish_enabled }}",
+            "if: ${{ (github.event_name != 'workflow_call' || inputs.publish_enabled) && (needs.resolve.outputs.publish_env != 'pypi' || needs.resolve.outputs.tag_on_main == 'true') }}",
             workflow,
         )
         self.assertNotIn("matrix.", preflight_section)

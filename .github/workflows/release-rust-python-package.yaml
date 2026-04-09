@@ -46,6 +46,7 @@ jobs:
       wheel_matrix: ${{ steps.resolve.outputs.wheel_matrix }}
       publish_env: ${{ steps.resolve.outputs.publish_env }}
       checkout_ref: ${{ steps.resolve.outputs.checkout_ref }}
+      tag_on_main: ${{ steps.resolve.outputs.tag_on_main }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
@@ -63,16 +64,25 @@ jobs:
           REPOSITORY_INPUT: ${{ inputs.repository }}
         run: |
           set -euo pipefail
+          git fetch --force origin "refs/heads/main:refs/remotes/origin/main"
           if [[ -n "${TAG_INPUT}" ]]; then
             tag="${TAG_INPUT}"
             repository="${REPOSITORY_INPUT}"
             git fetch --force origin "refs/tags/${tag}:refs/tags/${tag}"
             git show-ref --verify --quiet "refs/tags/${tag}"
             checkout_ref="refs/tags/${tag}"
+            tag_ref="refs/tags/${tag}"
           else
             tag="${GITHUB_REF_NAME}"
             repository="pypi"
             checkout_ref="${GITHUB_REF}"
+            tag_ref="${GITHUB_REF}"
+          fi
+
+          if git merge-base --is-ancestor "${tag_ref}" "refs/remotes/origin/main"; then
+            tag_on_main=true
+          else
+            tag_on_main=false
           fi
 
           release_info="$(python3 tools/plugin_catalog.py release-info . "${tag}")"
@@ -89,6 +99,7 @@ jobs:
             echo "plugin_path=${plugin_path}"
             echo "wheel_matrix=${wheel_matrix}"
             echo "checkout_ref=${checkout_ref}"
+            echo "tag_on_main=${tag_on_main}"
             if [[ "${repository}" == "testpypi" ]]; then
               echo "publish_env=testpypi"
             else
@@ -240,7 +251,7 @@ jobs:
             "${tmpdir}/tests" -v
 
   publish:
-    if: ${{ github.event_name != 'workflow_call' || inputs.publish_enabled }}
+    if: ${{ (github.event_name != 'workflow_call' || inputs.publish_enabled) && (needs.resolve.outputs.publish_env != 'pypi' || needs.resolve.outputs.tag_on_main == 'true') }}
     needs: [resolve, build-wheel, build-sdist]
     runs-on: ubuntu-latest
     environment: ${{ needs.resolve.outputs.publish_env }}
