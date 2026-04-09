@@ -18,6 +18,9 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 
+[project.entry-points."cpex.plugins"]
+secrets_detection = "cpex_secrets_detection.secrets_detection:SecretsDetectionPlugin"
+
 [tool.maturin]
 module-name = "cpex_secrets_detection.secrets_detection_rust"
 python-source = "."

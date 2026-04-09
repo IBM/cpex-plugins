@@ -1,6 +1,7 @@
 description: "Rust-backed retry and backoff policy plugin for tool results"
 author: "ContextForge Contributors"
 version: "0.1.0"
+kind: "cpex_retry_with_backoff.retry_with_backoff.RetryWithBackoffPlugin"
 available_hooks:
   - "tool_post_invoke"
   - "resource_post_fetch"

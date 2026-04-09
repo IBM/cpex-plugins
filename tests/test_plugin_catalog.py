@@ -173,28 +173,43 @@ class PluginCatalogTests(unittest.TestCase):
         result = run_catalog("validate", str(REPO_ROOT))
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_repo_lists_rate_limiter_and_pii_filter(self) -> None:
+    def test_repo_lists_all_managed_plugins(self) -> None:
         result = run_catalog("list", str(REPO_ROOT))
         self.assertEqual(result.returncode, 0, result.stderr)
 
         payload = json.loads(result.stdout)
         self.assertEqual(
             {entry["slug"] for entry in payload["plugins"]},
-            {"rate_limiter", "pii_filter"},
+            {
+                "encoded_exfil_detection",
+                "pii_filter",
+                "rate_limiter",
+                "retry_with_backoff",
+                "secrets_detection",
+                "url_reputation",
+            },
         )
         by_slug = {entry["slug"]: entry for entry in payload["plugins"]}
         self.assertEqual(
             {slug: entry["module_name"] for slug, entry in by_slug.items()},
             {
-                "rate_limiter": "cpex_rate_limiter",
+                "encoded_exfil_detection": "cpex_encoded_exfil_detection",
                 "pii_filter": "cpex_pii_filter",
+                "rate_limiter": "cpex_rate_limiter",
+                "retry_with_backoff": "cpex_retry_with_backoff",
+                "secrets_detection": "cpex_secrets_detection",
+                "url_reputation": "cpex_url_reputation",
             },
         )
         self.assertEqual(
             {slug: entry["kind"] for slug, entry in by_slug.items()},
             {
-                "rate_limiter": "cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
+                "encoded_exfil_detection": "cpex_encoded_exfil_detection.encoded_exfil_detection.EncodedExfilDetectorPlugin",
                 "pii_filter": "cpex_pii_filter.pii_filter.PIIFilterPlugin",
+                "rate_limiter": "cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
+                "retry_with_backoff": "cpex_retry_with_backoff.retry_with_backoff.RetryWithBackoffPlugin",
+                "secrets_detection": "cpex_secrets_detection.secrets_detection.SecretsDetectionPlugin",
+                "url_reputation": "cpex_url_reputation.url_reputation.URLReputationPlugin",
             },
         )
 
@@ -1347,7 +1362,17 @@ class PluginCatalogTests(unittest.TestCase):
     def test_ci_selection_field_prints_json_and_bool_scalars(self) -> None:
         result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "plugins")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout), ["pii_filter", "rate_limiter"])
+        self.assertEqual(
+            json.loads(result.stdout),
+            [
+                "encoded_exfil_detection",
+                "pii_filter",
+                "rate_limiter",
+                "retry_with_backoff",
+                "secrets_detection",
+                "url_reputation",
+            ],
+        )
 
         result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "has_plugins")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -1470,7 +1495,32 @@ class PluginCatalogTests(unittest.TestCase):
             self.assertIn("python-source", result.stderr)
 
     def test_plugin_makefiles_expose_ci_targets(self) -> None:
-        for slug in ("rate_limiter", "pii_filter"):
+        for slug in (
+            "encoded_exfil_detection",
+            "pii_filter",
+            "rate_limiter",
+            "retry_with_backoff",
+            "secrets_detection",
+            "url_reputation",
+        ):
+            makefile = (
+                REPO_ROOT
+                / "plugins"
+                / "rust"
+                / "python-package"
+                / slug
+                / "Makefile"
+            )
+            text = makefile.read_text()
+            self.assertRegex(text, r"(?m)^\.PHONY:.*\binstall-wheel\b")
+            self.assertRegex(text, r"(?m)^install-wheel:")
+            self.assertRegex(text, r"(?m)^\.PHONY:.*\bci\b")
+            self.assertRegex(text, r"(?m)^ci:")
+            self.assertNotRegex(text, r"(?m)^ci:.*(?:^|\s)install(?:\s|$)")
+            self.assertRegex(text, r"(?m)^ci:.*\binstall-wheel\b")
+
+    def test_existing_benchmark_plugins_keep_bench_targets(self) -> None:
+        for slug in ("pii_filter", "rate_limiter"):
             makefile = (
                 REPO_ROOT
                 / "plugins"
@@ -1482,12 +1532,6 @@ class PluginCatalogTests(unittest.TestCase):
             text = makefile.read_text()
             self.assertRegex(text, r"(?m)^\.PHONY:.*\bbench-no-run\b")
             self.assertRegex(text, r"(?m)^bench-no-run:")
-            self.assertRegex(text, r"(?m)^\.PHONY:.*\binstall-wheel\b")
-            self.assertRegex(text, r"(?m)^install-wheel:")
-            self.assertRegex(text, r"(?m)^\.PHONY:.*\bci\b")
-            self.assertRegex(text, r"(?m)^ci:")
-            self.assertNotRegex(text, r"(?m)^ci:.*(?:^|\s)install(?:\s|$)")
-            self.assertRegex(text, r"(?m)^ci:.*\binstall-wheel\b")
 
     def test_ci_workflow_uses_make_targets_for_plugin_checks(self) -> None:
         workflow = (

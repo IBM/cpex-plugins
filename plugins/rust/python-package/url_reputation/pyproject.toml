@@ -18,6 +18,9 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 
+[project.entry-points."cpex.plugins"]
+url_reputation = "cpex_url_reputation.url_reputation:URLReputationPlugin"
+
 [tool.maturin]
 module-name = "cpex_url_reputation.url_reputation_rust"
 python-source = "."

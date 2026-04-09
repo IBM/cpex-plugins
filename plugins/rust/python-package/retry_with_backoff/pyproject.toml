@@ -21,6 +21,9 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 
+[project.entry-points."cpex.plugins"]
+retry_with_backoff = "cpex_retry_with_backoff.retry_with_backoff:RetryWithBackoffPlugin"
+
 [tool.maturin]
 module-name = "cpex_retry_with_backoff.retry_with_backoff_rust"
 python-source = "."

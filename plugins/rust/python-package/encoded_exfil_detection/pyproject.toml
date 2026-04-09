@@ -18,6 +18,9 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 
+[project.entry-points."cpex.plugins"]
+encoded_exfil_detection = "cpex_encoded_exfil_detection.encoded_exfil_detection:EncodedExfilDetectorPlugin"
+
 [tool.maturin]
 module-name = "cpex_encoded_exfil_detection.encoded_exfil_detection_rust"
 python-source = "."
