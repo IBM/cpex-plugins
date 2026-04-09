@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "cpex-url-reputation"
 dynamic = ["version"]
-description = "High-performance URL reputation validation for MCP Gateway"
+description = "High-performance URL reputation and phishing detection for MCP Gateway"
 authors = [{ name = "ContextForge Contributors" }]
 license = { text = "Apache-2.0" }
 readme = "README.md"

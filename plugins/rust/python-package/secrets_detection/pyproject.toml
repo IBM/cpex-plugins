@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "cpex-secrets-detection"
 dynamic = ["version"]
-description = "Rust-backed secrets detection plugin for MCP Gateway"
+description = "High-performance secrets detection and redaction for MCP Gateway"
 authors = [{ name = "ContextForge Contributors" }]
 license = { text = "Apache-2.0" }
 readme = "README.md"

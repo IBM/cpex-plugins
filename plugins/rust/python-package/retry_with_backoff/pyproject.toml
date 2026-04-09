@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "cpex-retry-with-backoff"
 dynamic = ["version"]
-description = "Rust-backed retry and backoff policy plugin for MCP Gateway"
+description = "High-performance retry and backoff policy engine for MCP Gateway"
 authors = [{ name = "ContextForge Contributors" }]
 license = { text = "Apache-2.0" }
 readme = "README.md"

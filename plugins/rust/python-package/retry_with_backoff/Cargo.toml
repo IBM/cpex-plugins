@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Rust-backed retry and backoff policy plugin for MCP Gateway"
+description = "High-performance retry and backoff policy engine for MCP Gateway"
 
 [lib]
 name = "retry_with_backoff_rust"

@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Rust-backed secrets detection plugin for MCP Gateway"
+description = "High-performance secrets detection and redaction for MCP Gateway"
 
 [lib]
 name = "secrets_detection_rust"

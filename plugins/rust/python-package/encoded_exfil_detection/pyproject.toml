@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "cpex-encoded-exfil-detection"
 dynamic = ["version"]
-description = "Rust-backed encoded exfiltration detection plugin for MCP Gateway"
+description = "High-performance encoded exfiltration detection for MCP Gateway"
 authors = [{ name = "ContextForge Contributors" }]
 license = { text = "Apache-2.0" }
 readme = "README.md"

@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Rust-backed encoded exfiltration detection plugin for MCP Gateway"
+description = "High-performance encoded exfiltration detection for MCP Gateway"
 
 [lib]
 name = "encoded_exfil_detection_rust"
