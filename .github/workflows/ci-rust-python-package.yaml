@@ -117,6 +117,10 @@ jobs:
   release-validation:
     if: github.event_name == 'pull_request'
     needs: validate-and-detect
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
     uses: ./.github/workflows/release-rust-python-package.yaml
     with:
       tag: rate-limiter-v0.0.3
