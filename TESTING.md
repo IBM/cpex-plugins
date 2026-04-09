@@ -18,6 +18,7 @@ They verify:
 - required files and package/module naming
 - workspace membership in the top-level `Cargo.toml`
 - version consistency between `Cargo.toml` and `plugin-manifest.yaml`
+- manifest `kind` consistency (`module.object`) with `[project.entry-points."cpex.plugins"]` targets (`module:object`)
 - repository metadata consistency
 - changed-plugin detection for CI
 - canonical release tag resolution

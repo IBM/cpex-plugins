@@ -1,6 +1,7 @@
 description: "Rate limiting by user/tenant/tool — memory (single-process) or Redis (shared across instances)"
 author: "ContextForge Contributors"
 version: "0.0.3"
+kind: "cpex_rate_limiter.rate_limiter.RateLimiterPlugin"
 available_hooks:
   - "prompt_pre_fetch"
   - "tool_pre_invoke"

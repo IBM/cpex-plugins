@@ -16,6 +16,8 @@ Every managed plugin must satisfy the catalog contract enforced by `tools/plugin
 - Python module: `cpex_<slug>`
 - `Cargo.toml` is the version source of truth
 - `cpex_<slug>/plugin-manifest.yaml` version matches `Cargo.toml`
+- `cpex_<slug>/plugin-manifest.yaml` defines top-level `kind` in `module.object` form
+- `pyproject.toml` publishes the matching plugin class reference under `[project.entry-points."cpex.plugins"]` in `module:object` form
 - plugin `Cargo.toml` repository metadata points to `https://github.com/IBM/cpex-plugins`
 - plugin crate is listed in the top-level workspace `Cargo.toml`
 

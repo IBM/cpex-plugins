@@ -1,0 +1,31 @@
+[package]
+name = "secrets_detection"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Rust-backed secrets detection plugin for MCP Gateway"
+
+[lib]
+name = "secrets_detection_rust"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "stub_gen"
+path = "src/bin/stub_gen.rs"
+
+[dependencies]
+cpex_framework_bridge = { path = "../../../../crates/framework_bridge" }
+log = { workspace = true }
+pyo3 = { workspace = true }
+pyo3-log = { workspace = true }
+pyo3-stub-gen = { workspace = true }
+regex = "1.12"
+
+[dev-dependencies]
+criterion = { version = "0.8", features = ["html_reports"] }
+
+[[bench]]
+name = "secrets_detection"
+harness = false

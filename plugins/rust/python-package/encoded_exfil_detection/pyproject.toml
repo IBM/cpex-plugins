@@ -3,9 +3,9 @@ requires = ["maturin>=1.4,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "cpex-pii-filter"
+name = "cpex-encoded-exfil-detection"
 dynamic = ["version"]
-description = "Rust-backed PII detection and masking plugin for MCP Gateway"
+description = "Rust-backed encoded exfiltration detection plugin for MCP Gateway"
 authors = [{ name = "ContextForge Contributors" }]
 license = { text = "Apache-2.0" }
 readme = "README.md"
@@ -18,11 +18,8 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 
-[project.entry-points."cpex.plugins"]
-pii_filter = "cpex_pii_filter.pii_filter:PIIFilterPlugin"
-
 [tool.maturin]
-module-name = "cpex_pii_filter.pii_filter_rust"
+module-name = "cpex_encoded_exfil_detection.encoded_exfil_detection_rust"
 python-source = "."
 features = ["pyo3/extension-module"]
 
@@ -34,6 +31,7 @@ asyncio_mode = "auto"
 [dependency-groups]
 dev = [
     "maturin>=1.12.6",
+    "pydantic>=2.0",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
 ]
