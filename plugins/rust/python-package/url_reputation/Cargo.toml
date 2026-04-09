@@ -1,0 +1,16 @@
+[package]
+name = "url_reputation"
+version = "0.1.1"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "High-performance URL reputation validation for MCP Gateway"
+
+[lib]
+name = "url_reputation_rust"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3 = { workspace = true }
+pyo3-log = { workspace = true }

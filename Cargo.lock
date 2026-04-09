@@ -1904,6 +1904,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "url_reputation"
+version = "0.1.1"
+dependencies = [
+ "pyo3",
+ "pyo3-log",
+]
+
+[[package]]
 name = "utf8_iter"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

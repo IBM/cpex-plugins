@@ -1,0 +1,13 @@
+description: "Static URL reputation checks using blocked domains and URL patterns"
+author: "ContextForge Contributors"
+version: "0.1.1"
+available_hooks:
+  - "resource_pre_fetch"
+default_configs:
+  whitelist_domains: []
+  allowed_patterns: []
+  blocked_domains: []
+  blocked_patterns: []
+  use_heuristic_check: false
+  entropy_threshold: 3.65
+  block_non_secure_http: true
