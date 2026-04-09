@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "plugins/rust/python-package/encoded_exfil_detection",
     "plugins/rust/python-package/pii_filter",
     "plugins/rust/python-package/rate_limiter",
 ]
