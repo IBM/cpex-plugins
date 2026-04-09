@@ -1,11 +1,11 @@
 [package]
 name = "retry_with_backoff"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "High-performance retry and backoff policy engine for MCP Gateway"
+description = "High-performance retry policy engine for MCP Gateway with exponential backoff, jitter, per-tool overrides, and retry metadata"
 
 [lib]
 name = "retry_with_backoff_rust"
