@@ -1884,6 +1884,46 @@ class PluginCatalogTests(unittest.TestCase):
             workflow,
         )
 
+    def test_ci_workflow_includes_parity_jobs_for_rust_plugin_checks(self) -> None:
+        workflow = (
+            REPO_ROOT / ".github" / "workflows" / "ci-rust-python-package.yaml"
+        ).read_text()
+        security_section = self._extract_workflow_job_section(workflow, "security-audit")
+        benchmark_section = self._extract_workflow_job_section(
+            workflow, "benchmark-build-verification"
+        )
+        coverage_section = self._extract_workflow_job_section(workflow, "coverage")
+        documentation_section = self._extract_workflow_job_section(
+            workflow, "documentation"
+        )
+
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("security-audit:", workflow)
+        self.assertIn("benchmark-build-verification:", workflow)
+        self.assertIn("coverage:", workflow)
+        self.assertIn("documentation:", workflow)
+        self.assertIn("cargo install cargo-audit cargo-deny", security_section)
+        self.assertIn("cargo audit", security_section)
+        self.assertIn("cargo deny check", security_section)
+        self.assertIn("--config deny.toml", security_section)
+        self.assertNotIn("/deny.toml", security_section.replace("--config deny.toml", ""))
+        self.assertIn("make bench-no-run", benchmark_section)
+        self.assertIn("cargo llvm-cov", coverage_section)
+        self.assertIn("cobertura.xml", coverage_section)
+        self.assertIn("codecov/codecov-action@", coverage_section)
+        self.assertIn("cargo doc --no-deps --document-private-items", documentation_section)
+        self.assertIn("name: rust-docs-${{ matrix.plugin }}", documentation_section)
+
+    def test_workspace_has_single_cargo_deny_config(self) -> None:
+        root_deny = REPO_ROOT / "deny.toml"
+        self.assertTrue(root_deny.exists())
+        for plugin_dir in (REPO_ROOT / "plugins" / "rust" / "python-package").iterdir():
+            if plugin_dir.is_dir():
+                self.assertFalse(
+                    (plugin_dir / "deny.toml").exists(),
+                    f"expected workspace-level deny.toml only, found {plugin_dir / 'deny.toml'}",
+                )
+
     def test_release_workflow_tests_artifacts_outside_source_tree(self) -> None:
         workflow = (
             REPO_ROOT / ".github" / "workflows" / "release-rust-python-package.yaml"
