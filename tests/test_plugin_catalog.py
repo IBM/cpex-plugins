@@ -1422,7 +1422,15 @@ class PluginCatalogTests(unittest.TestCase):
             result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = json.loads(result.stdout)
-            self.assertEqual(payload, {"plugins": ["pii_filter", "rate_limiter"], "has_plugins": True})
+            self.assertEqual(
+                payload,
+                {
+                    "plugins": ["pii_filter", "rate_limiter"],
+                    "has_plugins": True,
+                    "plugin_count": 2,
+                    "single_cargo_package": "",
+                },
+            )
 
     def test_ci_selection_treats_catalog_test_change_as_not_shared(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1455,7 +1463,15 @@ class PluginCatalogTests(unittest.TestCase):
             result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = json.loads(result.stdout)
-            self.assertEqual(payload, {"plugins": [], "has_plugins": False})
+            self.assertEqual(
+                payload,
+                {
+                    "plugins": [],
+                    "has_plugins": False,
+                    "plugin_count": 0,
+                    "single_cargo_package": "",
+                },
+            )
 
     def test_ci_selection_treats_shared_tool_changes_as_all_plugins(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1488,7 +1504,15 @@ class PluginCatalogTests(unittest.TestCase):
             result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = json.loads(result.stdout)
-            self.assertEqual(payload, {"plugins": ["pii_filter", "rate_limiter"], "has_plugins": True})
+            self.assertEqual(
+                payload,
+                {
+                    "plugins": ["pii_filter", "rate_limiter"],
+                    "has_plugins": True,
+                    "plugin_count": 2,
+                    "single_cargo_package": "",
+                },
+            )
 
     def test_ci_selection_treats_cargo_lock_change_as_not_shared(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1520,7 +1544,15 @@ class PluginCatalogTests(unittest.TestCase):
             result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = json.loads(result.stdout)
-            self.assertEqual(payload, {"plugins": [], "has_plugins": False})
+            self.assertEqual(
+                payload,
+                {
+                    "plugins": [],
+                    "has_plugins": False,
+                    "plugin_count": 0,
+                    "single_cargo_package": "",
+                },
+            )
 
     def test_changed_returns_plugin_for_plugin_integration_test_change(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1554,7 +1586,15 @@ class PluginCatalogTests(unittest.TestCase):
             result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = json.loads(result.stdout)
-            self.assertEqual(payload, {"plugins": ["pii_filter"], "has_plugins": True})
+            self.assertEqual(
+                payload,
+                {
+                    "plugins": ["pii_filter"],
+                    "has_plugins": True,
+                    "plugin_count": 1,
+                    "single_cargo_package": "pii_filter",
+                },
+            )
 
     def test_ci_selection_treats_shared_crate_changes_as_all_plugins(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1588,7 +1628,56 @@ class PluginCatalogTests(unittest.TestCase):
             result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = json.loads(result.stdout)
-            self.assertEqual(payload, {"plugins": ["pii_filter", "rate_limiter"], "has_plugins": True})
+            self.assertEqual(
+                payload,
+                {
+                    "plugins": ["pii_filter", "rate_limiter"],
+                    "has_plugins": True,
+                    "plugin_count": 2,
+                    "single_cargo_package": "",
+                },
+            )
+
+    def test_ci_selection_reports_single_cargo_package_for_single_plugin_diff(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            git = lambda *args: subprocess.run(  # noqa: E731
+                ["git", *args],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            git("init")
+            git("config", "user.name", "Test User")
+            git("config", "user.email", "test@example.com")
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/rate_limiter", "plugins/rust/python-package/pii_filter"]\n'
+                '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n'
+            )
+            self._create_plugin(root, "rate_limiter")
+            self._create_plugin(root, "pii_filter")
+            git("add", ".")
+            git("commit", "--no-verify", "-m", "seed layout")
+            base_sha = git("rev-parse", "HEAD").stdout.strip()
+
+            readme = root / "plugins" / "rust" / "python-package" / "rate_limiter" / "README.md"
+            readme.write_text("# changed\n")
+            git("add", ".")
+            git("commit", "--no-verify", "-m", "single plugin change")
+
+            result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(
+                payload,
+                {
+                    "plugins": ["rate_limiter"],
+                    "has_plugins": True,
+                    "plugin_count": 1,
+                    "single_cargo_package": "rate_limiter",
+                },
+            )
 
     def test_ci_selection_field_prints_json_and_bool_scalars(self) -> None:
         result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "plugins")
@@ -1608,6 +1697,16 @@ class PluginCatalogTests(unittest.TestCase):
         result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "has_plugins")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "true")
+
+        result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "plugin_count")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "6")
+
+        result = run_catalog(
+            "ci-selection-field", str(REPO_ROOT), "all", "", "", "single_cargo_package"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "")
 
     def test_ci_selection_field_supports_diff_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1648,6 +1747,17 @@ class PluginCatalogTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(result.stdout), ["pii_filter", "rate_limiter"])
 
+            result = run_catalog(
+                "ci-selection-field",
+                str(root),
+                "diff",
+                base_sha,
+                "HEAD",
+                "plugin_count",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "2")
+
     def test_ci_workflow_shared_paths_match_catalog_contract(self) -> None:
         workflow = (
             REPO_ROOT / ".github" / "workflows" / "ci-rust-python-package.yaml"
@@ -1655,6 +1765,7 @@ class PluginCatalogTests(unittest.TestCase):
         expected_paths = {
             "Makefile",
             "Cargo.toml",
+            "deny.toml",
             "crates/**",
             "README.md",
             "DEVELOPING.md",
@@ -1889,9 +2000,6 @@ class PluginCatalogTests(unittest.TestCase):
             REPO_ROOT / ".github" / "workflows" / "ci-rust-python-package.yaml"
         ).read_text()
         security_section = self._extract_workflow_job_section(workflow, "security-audit")
-        benchmark_section = self._extract_workflow_job_section(
-            workflow, "benchmark-build-verification"
-        )
         coverage_section = self._extract_workflow_job_section(workflow, "coverage")
         documentation_section = self._extract_workflow_job_section(
             workflow, "documentation"
@@ -1899,31 +2007,36 @@ class PluginCatalogTests(unittest.TestCase):
 
         self.assertIn("workflow_dispatch:", workflow)
         self.assertIn("plugin_count: ${{ steps.detect.outputs.plugin_count }}", workflow)
-        self.assertIn("single_package_name: ${{ steps.detect.outputs.single_package_name }}", workflow)
+        self.assertIn("single_cargo_package: ${{ steps.detect.outputs.single_cargo_package }}", workflow)
         self.assertIn("security-audit:", workflow)
-        self.assertIn("benchmark-build-verification:", workflow)
         self.assertIn("coverage:", workflow)
         self.assertIn("documentation:", workflow)
-        self.assertIn("cargo install cargo-audit cargo-deny", security_section)
+        self.assertNotIn("benchmark-build-verification:", workflow)
+        self.assertIn("if: needs.validate-and-detect.outputs.has_plugins == 'true'", security_section)
+        self.assertIn("if: needs.validate-and-detect.outputs.has_plugins == 'true'", coverage_section)
+        self.assertIn("if: needs.validate-and-detect.outputs.has_plugins == 'true'", documentation_section)
+        self.assertIn("cargo install cargo-audit", security_section)
+        self.assertIn("cargo-deny --version 0.19.0", security_section)
+        self.assertIn("--version 0.22.1", security_section)
         self.assertIn("cargo audit --file Cargo.lock", security_section)
+        self.assertIn("cargo deny check licenses --config deny.toml", security_section)
+        self.assertNotIn("--workspace", security_section)
         self.assertNotIn("--manifest-path", security_section)
-        self.assertIn("cargo deny check", security_section)
         self.assertIn("--config deny.toml", security_section)
         self.assertNotIn("/deny.toml", security_section.replace("--config deny.toml", ""))
         self.assertNotIn("matrix:", security_section)
-        self.assertIn("needs.validate-and-detect.outputs.plugin_count", benchmark_section)
-        self.assertIn("cargo bench -p ${{ needs.validate-and-detect.outputs.single_package_name }} --no-run", benchmark_section)
-        self.assertIn("cargo bench --workspace --no-run", benchmark_section)
-        self.assertNotIn("matrix:", benchmark_section)
-        self.assertIn("cargo llvm-cov -p ${{ needs.validate-and-detect.outputs.single_package_name }} --cobertura --output-path coverage/cobertura.xml", coverage_section)
+        self.assertIn("cargo install cargo-llvm-cov --version 0.8.4 --locked", coverage_section)
+        self.assertIn("package='${{ needs.validate-and-detect.outputs.single_cargo_package }}'", coverage_section)
+        self.assertIn('cargo llvm-cov -p "${package}" --cobertura --output-path coverage/cobertura.xml', coverage_section)
         self.assertIn("cargo llvm-cov --workspace --cobertura --output-path coverage/cobertura.xml", coverage_section)
         self.assertIn("cobertura.xml", coverage_section)
         self.assertIn("codecov/codecov-action@", coverage_section)
         self.assertNotIn("matrix:", coverage_section)
-        self.assertIn("cargo doc -p ${{ needs.validate-and-detect.outputs.single_package_name }} --no-deps --document-private-items", documentation_section)
+        self.assertIn("package='${{ needs.validate-and-detect.outputs.single_cargo_package }}'", documentation_section)
+        self.assertIn('cargo doc -p "${package}" --no-deps --document-private-items', documentation_section)
         self.assertIn("cargo doc --workspace --no-deps --document-private-items", documentation_section)
         self.assertNotIn("matrix:", documentation_section)
-        self.assertIn("name: rust-docs", documentation_section)
+        self.assertNotIn("upload-artifact", documentation_section)
 
     def test_workspace_has_single_cargo_deny_config(self) -> None:
         root_deny = REPO_ROOT / "deny.toml"

@@ -20,6 +20,7 @@ SHARED_PATH_PREFIXES = (
     "Makefile",
     ".github/workflows/",
     "Cargo.toml",
+    "deny.toml",
     "crates/",
     "README.md",
     "DEVELOPING.md",
@@ -107,6 +108,7 @@ REQUIRED_PLUGIN_WORKSPACE_DEPENDENCIES = {
         "dev-dependencies": ("criterion",),
     },
 }
+SLUG_PATTERN = re.compile(r"^[a-z0-9_]+$")
 
 
 class CatalogError(Exception):
@@ -118,6 +120,7 @@ class PluginRecord:
     slug: str
     path: str
     package_name: str
+    cargo_package_name: str
     module_name: str
     kind: str
     version: str
@@ -350,6 +353,10 @@ def validate_plugin_dir(
     workspace_package: dict,
 ) -> PluginRecord:
     slug = plugin_dir.name
+    if SLUG_PATTERN.fullmatch(slug) is None:
+        raise CatalogError(
+            f"{plugin_dir}: plugin slug must match {SLUG_PATTERN.pattern}, got {slug}"
+        )
     expected_package_name = _expected_package_name(slug)
     expected_module_name = _expected_module_name(slug)
     module_dir = plugin_dir / expected_module_name
@@ -428,6 +435,12 @@ def validate_plugin_dir(
     if not isinstance(version, str) or not version:
         raise CatalogError(f"{plugin_dir}: Cargo.toml must define a non-empty package.version")
 
+    cargo_package_name = package.get("name")
+    if cargo_package_name != slug:
+        raise CatalogError(
+            f"{plugin_dir}: Cargo.toml [package].name must be {slug}, got {cargo_package_name}"
+        )
+
     manifest_version = _manifest_version(manifest_path)
     if manifest_version != version:
         raise CatalogError(
@@ -449,6 +462,7 @@ def validate_plugin_dir(
         slug=slug,
         path=relative_plugin_path,
         package_name=expected_package_name,
+        cargo_package_name=cargo_package_name,
         module_name=expected_module_name,
         kind=manifest_kind,
         version=version,
@@ -505,13 +519,22 @@ def _changed_plugins_for_records(
 
 def ci_selection(root: Path, mode: str, base: str | None = None, head: str | None = None) -> dict:
     plugins = discover_plugins(root)
+    plugin_lookup = {plugin.slug: plugin for plugin in plugins}
     if mode == "all":
         selected = sorted(plugin.slug for plugin in plugins)
     else:
         if base is None or head is None:
             raise CatalogError("ci-selection diff mode requires base and head revisions")
         selected = _changed_plugins_for_records(root, plugins, base, head)
-    return {"plugins": selected, "has_plugins": bool(selected)}
+    single_cargo_package = (
+        plugin_lookup[selected[0]].cargo_package_name if len(selected) == 1 else ""
+    )
+    return {
+        "plugins": selected,
+        "has_plugins": bool(selected),
+        "plugin_count": len(selected),
+        "single_cargo_package": single_cargo_package,
+    }
 
 
 def release_info(root: Path, tag: str) -> PluginRecord:
@@ -615,6 +638,7 @@ def build_parser() -> argparse.ArgumentParser:
             "slug",
             "path",
             "package_name",
+            "cargo_package_name",
             "module_name",
             "kind",
             "version",
@@ -633,7 +657,10 @@ def build_parser() -> argparse.ArgumentParser:
     ci_field_parser.add_argument("mode", choices=("all", "diff"))
     ci_field_parser.add_argument("base", nargs="?")
     ci_field_parser.add_argument("head", nargs="?")
-    ci_field_parser.add_argument("field", choices=("plugins", "has_plugins"))
+    ci_field_parser.add_argument(
+        "field",
+        choices=("plugins", "has_plugins", "plugin_count", "single_cargo_package"),
+    )
 
     return parser
 

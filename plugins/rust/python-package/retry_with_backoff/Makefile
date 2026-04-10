@@ -83,6 +83,13 @@ uninstall:
 	@echo "$(YELLOW)Uninstalling $(PACKAGE_NAME)...$(NC)"
 	@uv pip uninstall -y $(PACKAGE_NAME) 2>/dev/null || true
 
+# help: bench-no-run          - Compile benchmarks without running them
+.PHONY: bench-no-run
+
+bench-no-run:
+	@echo "$(GREEN)Compiling benchmarks without running them...$(NC)"
+	$(CARGO) bench --no-run
+
 .PHONY: clean clean-all
 
 clean:
@@ -103,7 +110,7 @@ verify:
 check-all: fmt-check clippy test
 	@echo "$(GREEN)All checks passed$(NC)"
 
-ci: check-all verify-stubs build install-wheel test-python
+ci: check-all verify-stubs build bench-no-run install-wheel test-python
 	@echo "$(GREEN)CI verification passed$(NC)"
 
 pre-commit: check-all

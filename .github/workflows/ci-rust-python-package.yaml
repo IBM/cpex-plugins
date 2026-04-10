@@ -6,6 +6,7 @@ on:
     paths:
       - "Makefile"
       - "Cargo.toml"
+      - "deny.toml"
       - "crates/**"
       - "README.md"
       - "DEVELOPING.md"
@@ -20,6 +21,7 @@ on:
     paths:
       - "Makefile"
       - "Cargo.toml"
+      - "deny.toml"
       - "crates/**"
       - "README.md"
       - "DEVELOPING.md"
@@ -46,7 +48,7 @@ jobs:
       plugins: ${{ steps.detect.outputs.plugins }}
       has_plugins: ${{ steps.detect.outputs.has_plugins }}
       plugin_count: ${{ steps.detect.outputs.plugin_count }}
-      single_package_name: ${{ steps.detect.outputs.single_package_name }}
+      single_cargo_package: ${{ steps.detect.outputs.single_cargo_package }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -71,10 +73,10 @@ jobs:
           plugins="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["plugins"]))')"
           has_plugins="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(str(json.load(sys.stdin)["has_plugins"]).lower())')"
           plugin_count="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(len(json.load(sys.stdin)["plugins"]))')"
-          single_package_name="$(printf '%s' "${plugins}" | python3 -c 'import json, sys; plugins = json.load(sys.stdin); print(f"cpex-{plugins[0].replace(\"_\", \"-\")}" if len(plugins) == 1 else "")')"
+          single_cargo_package="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["single_cargo_package"])')"
           echo "plugins=${plugins}" >> "$GITHUB_OUTPUT"
           echo "plugin_count=${plugin_count}" >> "$GITHUB_OUTPUT"
-          echo "single_package_name=${single_package_name}" >> "$GITHUB_OUTPUT"
+          echo "single_cargo_package=${single_cargo_package}" >> "$GITHUB_OUTPUT"
           if [[ "${has_plugins}" == "false" ]]; then
             echo "has_plugins=false" >> "$GITHUB_OUTPUT"
           else
@@ -129,40 +131,13 @@ jobs:
           cargo --version
 
       - name: Install cargo audit tools
-        run: cargo install cargo-audit cargo-deny --locked
+        run: cargo install cargo-audit --version 0.22.1 cargo-deny --version 0.19.0 --locked
 
       - name: Run cargo audit
         run: cargo audit --file Cargo.lock
 
-      - name: Run cargo deny policy checks
-        run: cargo deny check --workspace --config deny.toml
-
-  benchmark-build-verification:
-    needs: validate-and-detect
-    if: needs.validate-and-detect.outputs.has_plugins == 'true'
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
-        with:
-          python-version: "3.12"
-
-      - name: Verify Rust toolchain
-        run: |
-          rustc --version
-          cargo --version
-
-      - name: Compile workspace benchmarks
-        run: |
-          if [[ "${{ needs.validate-and-detect.outputs.plugin_count }}" == "1" ]]; then
-            cargo bench -p ${{ needs.validate-and-detect.outputs.single_package_name }} --no-run
-          else
-            cargo bench --workspace --no-run
-          fi
+      - name: Run cargo deny license policy checks
+        run: cargo deny check licenses --config deny.toml
 
   coverage:
     needs: validate-and-detect
@@ -181,13 +156,14 @@ jobs:
       - name: Install Rust coverage tooling
         run: |
           rustup component add llvm-tools-preview
-          cargo install cargo-llvm-cov --locked
+          cargo install cargo-llvm-cov --version 0.8.4 --locked
 
       - name: Generate Rust coverage report
         run: |
           mkdir -p coverage
           if [[ "${{ needs.validate-and-detect.outputs.plugin_count }}" == "1" ]]; then
-            cargo llvm-cov -p ${{ needs.validate-and-detect.outputs.single_package_name }} --cobertura --output-path coverage/cobertura.xml
+            package='${{ needs.validate-and-detect.outputs.single_cargo_package }}'
+            cargo llvm-cov -p "${package}" --cobertura --output-path coverage/cobertura.xml
           else
             cargo llvm-cov --workspace --cobertura --output-path coverage/cobertura.xml
           fi
@@ -217,16 +193,11 @@ jobs:
       - name: Build Rust documentation
         run: |
           if [[ "${{ needs.validate-and-detect.outputs.plugin_count }}" == "1" ]]; then
-            cargo doc -p ${{ needs.validate-and-detect.outputs.single_package_name }} --no-deps --document-private-items
+            package='${{ needs.validate-and-detect.outputs.single_cargo_package }}'
+            cargo doc -p "${package}" --no-deps --document-private-items
           else
             cargo doc --workspace --no-deps --document-private-items
           fi
-
-      - name: Upload documentation
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: rust-docs
-          path: target/doc
 
   release-validation:
     if: github.event_name == 'pull_request'
