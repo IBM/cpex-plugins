@@ -42,12 +42,8 @@ fn normalize_trailing_whitespace(content: &str) -> String {
         .map(str::trim_end)
         .collect::<Vec<_>>()
         .join("\n");
-
-    if content.ends_with('\n') {
-        format!("{normalized}\n")
-    } else {
-        normalized
-    }
+    let normalized = normalized.trim_end_matches('\n');
+    format!("{normalized}\n")
 }
 
 fn curate_extension_stub() {
