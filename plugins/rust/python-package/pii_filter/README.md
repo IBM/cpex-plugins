@@ -28,6 +28,8 @@ The Python plugin requires the compiled Rust extension and uses it for all detec
 
 Version `0.2.0` intentionally changes the built-in default masking policy from partial masking to `redact`. Set `default_mask_strategy: "partial"` explicitly if you need the previous behavior.
 
+Version `0.2.0` also changes custom-pattern inheritance: when `custom_patterns[].mask_strategy` is omitted or set to `null`/`None`, the pattern inherits `default_mask_strategy` instead of forcing `redact`.
+
 Version `0.2.0` also tightens the default privacy posture for observability: detection logging and detection-detail metadata are now disabled unless you opt in with `log_detections: true` or `include_detection_details: true`.
 
 ## Detection Coverage

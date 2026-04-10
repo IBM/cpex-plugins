@@ -167,7 +167,7 @@ impl PIIDetectorRust {
     /// * `max_nested_depth` (int): Maximum nested container depth to inspect
     /// * `max_collection_items` (int): Maximum items to inspect per collection
     /// * `custom_patterns` (list[dict]): Additional regex-based PII patterns.
-    ///   `mask_strategy` is optional and inherits `default_mask_strategy` when omitted.
+    ///   `mask_strategy` is optional and inherits `default_mask_strategy` when omitted or `None`.
     /// * `whitelist_patterns` (list[str]): Regex patterns to exclude from detection
     #[new]
     pub fn new(config: &Bound<'_, PyAny>) -> PyResult<Self> {
@@ -1303,6 +1303,43 @@ class ConfigModel:
                 ),
                 pyo3::ffi::c_str!("test_detector_model.py"),
                 pyo3::ffi::c_str!("test_detector_model"),
+            )
+            .unwrap();
+            let config_model = module.getattr("ConfigModel").unwrap().call0().unwrap();
+
+            let detector = PIIDetectorRust::new(&config_model).unwrap();
+            let detections = detector.detect_internal("Employee ID EMP123456");
+
+            assert_eq!(
+                detections[&PIIType::Custom][0].mask_strategy,
+                MaskingStrategy::Partial
+            );
+        });
+    }
+
+    #[test]
+    fn test_model_dump_config_with_omitted_mask_strategy_follows_global_default() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    r#"
+class ConfigModel:
+    def model_dump(self):
+        return {
+            "default_mask_strategy": "partial",
+            "custom_patterns": [
+                {
+                    "pattern": r"\bEMP\d{6}\b",
+                    "description": "Employee ID",
+                }
+            ],
+        }
+"#
+                ),
+                pyo3::ffi::c_str!("test_detector_model_omitted.py"),
+                pyo3::ffi::c_str!("test_detector_model_omitted"),
             )
             .unwrap();
             let config_model = module.getattr("ConfigModel").unwrap().call0().unwrap();

@@ -278,6 +278,57 @@ async def test_tool_post_invoke_hash_masking_is_salted_per_plugin_instance():
 
 
 @pytest.mark.asyncio
+async def test_tool_post_invoke_custom_pattern_without_mask_strategy_uses_default():
+    plugin = PIIFilterPlugin(
+        _make_config(
+            detect_email=False,
+            default_mask_strategy="partial",
+            custom_patterns=[
+                {
+                    "pattern": r"Customer [A-Z]{3}\d{3}",
+                    "description": "Customer code",
+                }
+            ],
+        )
+    )
+    payload = ToolPostInvokePayload(
+        name="search",
+        result={"contact": "Customer ABC123"},
+    )
+
+    result = await plugin.tool_post_invoke(payload, _make_context())
+
+    assert result.modified_payload is not None
+    assert result.modified_payload.result["contact"] == "C*************3"
+
+
+@pytest.mark.asyncio
+async def test_tool_post_invoke_custom_pattern_none_mask_strategy_uses_default():
+    plugin = PIIFilterPlugin(
+        _make_config(
+            detect_email=False,
+            default_mask_strategy="partial",
+            custom_patterns=[
+                {
+                    "pattern": r"Customer [A-Z]{3}\d{3}",
+                    "description": "Customer code",
+                    "mask_strategy": None,
+                }
+            ],
+        )
+    )
+    payload = ToolPostInvokePayload(
+        name="search",
+        result={"contact": "Customer ABC123"},
+    )
+
+    result = await plugin.tool_post_invoke(payload, _make_context())
+
+    assert result.modified_payload is not None
+    assert result.modified_payload.result["contact"] == "C*************3"
+
+
+@pytest.mark.asyncio
 async def test_tool_post_invoke_stats_reset_per_request():
     plugin = PIIFilterPlugin(_make_config())
 
