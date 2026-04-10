@@ -964,10 +964,9 @@ mod tests {
         let patterns = compile_patterns(&config).unwrap();
         let detector = PIIDetectorRust { patterns, config };
         let detections = detector.detect_internal("SSN: 123-45-6789 Email: john@example.com");
-        let masked = detector.mask_rust(
-            "SSN: 123-45-6789 Email: john@example.com",
-            &detections,
-        ).unwrap();
+        let masked = detector
+            .mask_rust("SSN: 123-45-6789 Email: john@example.com", &detections)
+            .unwrap();
 
         assert!(masked.contains("***-**-6789"));
         assert!(masked.contains("j***n@example.com"));

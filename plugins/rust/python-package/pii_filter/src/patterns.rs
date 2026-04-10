@@ -35,11 +35,7 @@ const VALID_SSN_CONTEXTUAL_PATTERN: &str = r"\b(?:SSN|Social\s+Security(?:\s+Num
 // SSN patterns
 static SSN_PATTERNS: Lazy<Vec<PatternDef>> = Lazy::new(|| {
     vec![
-        (
-            VALID_SSN_DASHED_PATTERN,
-            "US Social Security Number",
-            None,
-        ),
+        (VALID_SSN_DASHED_PATTERN, "US Social Security Number", None),
         (
             VALID_SSN_CONTEXTUAL_PATTERN,
             "US Social Security Number with explicit context",
@@ -66,13 +62,8 @@ static BSN_PATTERNS: Lazy<Vec<PatternDef>> = Lazy::new(|| {
 });
 
 // Credit card patterns
-static CREDIT_CARD_PATTERNS: Lazy<Vec<PatternDef>> = Lazy::new(|| {
-    vec![(
-        r"\b(?:\d[-\s]?){12,18}\d\b",
-        "Credit card number",
-        None,
-    )]
-});
+static CREDIT_CARD_PATTERNS: Lazy<Vec<PatternDef>> =
+    Lazy::new(|| vec![(r"\b(?:\d[-\s]?){12,18}\d\b", "Credit card number", None)]);
 
 // Email patterns
 static EMAIL_PATTERNS: Lazy<Vec<PatternDef>> = Lazy::new(|| {
@@ -91,11 +82,7 @@ static PHONE_PATTERNS: Lazy<Vec<PatternDef>> = Lazy::new(|| {
             "US phone number",
             None,
         ),
-        (
-            r"\+[1-9]\d{9,14}\b",
-            "International phone number",
-            None,
-        ),
+        (r"\+[1-9]\d{9,14}\b", "International phone number", None),
     ]
 });
 
@@ -157,11 +144,7 @@ static BANK_ACCOUNT_PATTERNS: Lazy<Vec<PatternDef>> = Lazy::new(|| {
             "Bank account number with explicit context",
             None,
         ),
-        (
-            r"\b[A-Z]{2}\d{2}[A-Z0-9]{4}\d{7}(?:\d{3})?\b",
-            "IBAN",
-            None,
-        ),
+        (r"\b[A-Z]{2}\d{2}[A-Z0-9]{4}\d{7}(?:\d{3})?\b", "IBAN", None),
     ]
 });
 
