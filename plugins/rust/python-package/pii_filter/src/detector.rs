@@ -166,9 +166,9 @@ impl PIIDetectorRust {
     /// * `max_text_bytes` (int): Maximum text payload size to inspect
     /// * `max_nested_depth` (int): Maximum nested container depth to inspect
     /// * `max_collection_items` (int): Maximum items to inspect per collection
-    /// * `custom_patterns` (list[dict]): Additional regex-based PII patterns.
+    /// * `custom_patterns` (`list[dict]`): Additional regex-based PII patterns.
     ///   `mask_strategy` is optional and inherits `default_mask_strategy` when omitted or `None`.
-    /// * `whitelist_patterns` (list[str]): Regex patterns to exclude from detection
+    /// * `whitelist_patterns` (`list[str]`): Regex patterns to exclude from detection
     #[new]
     pub fn new(config: &Bound<'_, PyAny>) -> PyResult<Self> {
         // Extract configuration from Python object (dict or Pydantic model)
