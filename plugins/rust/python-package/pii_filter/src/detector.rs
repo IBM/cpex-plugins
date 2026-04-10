@@ -880,7 +880,7 @@ mod tests {
     }
 
     #[test]
-    fn test_built_in_patterns_keep_explicit_mask_strategy() {
+    fn test_built_in_patterns_follow_global_default_mask_strategy() {
         let config = PIIConfig {
             detect_ssn: true,
             detect_email: true,
@@ -906,7 +906,7 @@ mod tests {
     }
 
     #[test]
-    fn test_built_in_mask_strategy_matrix_survives_global_override() {
+    fn test_built_in_mask_strategy_matrix_follows_global_override() {
         let config = PIIConfig {
             detect_ssn: true,
             detect_credit_card: true,
@@ -924,24 +924,54 @@ mod tests {
 
         assert_eq!(
             detections[&PIIType::Ssn][0].mask_strategy,
-            MaskingStrategy::Redact
+            MaskingStrategy::Hash
         );
         assert_eq!(
             detections[&PIIType::CreditCard][0].mask_strategy,
-            MaskingStrategy::Redact
+            MaskingStrategy::Hash
         );
         assert_eq!(
             detections[&PIIType::Email][0].mask_strategy,
-            MaskingStrategy::Redact
+            MaskingStrategy::Hash
         );
         assert_eq!(
             detections[&PIIType::Phone][0].mask_strategy,
-            MaskingStrategy::Redact
+            MaskingStrategy::Hash
         );
         assert_eq!(
             detections[&PIIType::IpAddress][0].mask_strategy,
-            MaskingStrategy::Redact
+            MaskingStrategy::Hash
         );
+    }
+
+    #[test]
+    fn test_built_in_mask_uses_global_partial_default() {
+        let config = PIIConfig {
+            detect_ssn: true,
+            detect_email: true,
+            detect_phone: false,
+            detect_ip_address: false,
+            detect_bsn: false,
+            detect_credit_card: false,
+            detect_bank_account: false,
+            detect_date_of_birth: false,
+            detect_passport: false,
+            detect_driver_license: false,
+            detect_medical_record: false,
+            default_mask_strategy: MaskingStrategy::Partial,
+            ..Default::default()
+        };
+        let patterns = compile_patterns(&config).unwrap();
+        let detector = PIIDetectorRust { patterns, config };
+        let detections = detector.detect_internal("SSN: 123-45-6789 Email: john@example.com");
+        let masked = detector.mask_rust(
+            "SSN: 123-45-6789 Email: john@example.com",
+            &detections,
+        ).unwrap();
+
+        assert!(masked.contains("***-**-6789"));
+        assert!(masked.contains("j***n@example.com"));
+        assert!(!masked.contains("[REDACTED]"));
     }
 
     #[test]
