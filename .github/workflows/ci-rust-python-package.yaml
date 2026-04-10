@@ -45,6 +45,8 @@ jobs:
     outputs:
       plugins: ${{ steps.detect.outputs.plugins }}
       has_plugins: ${{ steps.detect.outputs.has_plugins }}
+      plugin_count: ${{ steps.detect.outputs.plugin_count }}
+      single_package_name: ${{ steps.detect.outputs.single_package_name }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -68,7 +70,11 @@ jobs:
 
           plugins="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["plugins"]))')"
           has_plugins="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(str(json.load(sys.stdin)["has_plugins"]).lower())')"
+          plugin_count="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(len(json.load(sys.stdin)["plugins"]))')"
+          single_package_name="$(printf '%s' "${plugins}" | python3 -c 'import json, sys; plugins = json.load(sys.stdin); print(f"cpex-{plugins[0].replace(\"_\", \"-\")}" if len(plugins) == 1 else "")')"
           echo "plugins=${plugins}" >> "$GITHUB_OUTPUT"
+          echo "plugin_count=${plugin_count}" >> "$GITHUB_OUTPUT"
+          echo "single_package_name=${single_package_name}" >> "$GITHUB_OUTPUT"
           if [[ "${has_plugins}" == "false" ]]; then
             echo "has_plugins=false" >> "$GITHUB_OUTPUT"
           else
@@ -151,7 +157,12 @@ jobs:
           cargo --version
 
       - name: Compile workspace benchmarks
-        run: cargo bench --workspace --no-run
+        run: |
+          if [[ "${{ needs.validate-and-detect.outputs.plugin_count }}" == "1" ]]; then
+            cargo bench -p ${{ needs.validate-and-detect.outputs.single_package_name }} --no-run
+          else
+            cargo bench --workspace --no-run
+          fi
 
   coverage:
     needs: validate-and-detect
@@ -175,7 +186,11 @@ jobs:
       - name: Generate Rust coverage report
         run: |
           mkdir -p coverage
-          cargo llvm-cov --workspace --cobertura --output-path coverage/cobertura.xml
+          if [[ "${{ needs.validate-and-detect.outputs.plugin_count }}" == "1" ]]; then
+            cargo llvm-cov -p ${{ needs.validate-and-detect.outputs.single_package_name }} --cobertura --output-path coverage/cobertura.xml
+          else
+            cargo llvm-cov --workspace --cobertura --output-path coverage/cobertura.xml
+          fi
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238
@@ -200,12 +215,17 @@ jobs:
           cargo --version
 
       - name: Build Rust documentation
-        run: cargo doc --workspace --no-deps --document-private-items
+        run: |
+          if [[ "${{ needs.validate-and-detect.outputs.plugin_count }}" == "1" ]]; then
+            cargo doc -p ${{ needs.validate-and-detect.outputs.single_package_name }} --no-deps --document-private-items
+          else
+            cargo doc --workspace --no-deps --document-private-items
+          fi
 
       - name: Upload documentation
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: rust-docs-workspace
+          name: rust-docs
           path: target/doc
 
   release-validation:

@@ -1898,6 +1898,8 @@ class PluginCatalogTests(unittest.TestCase):
         )
 
         self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("plugin_count: ${{ steps.detect.outputs.plugin_count }}", workflow)
+        self.assertIn("single_package_name: ${{ steps.detect.outputs.single_package_name }}", workflow)
         self.assertIn("security-audit:", workflow)
         self.assertIn("benchmark-build-verification:", workflow)
         self.assertIn("coverage:", workflow)
@@ -1909,15 +1911,19 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("--config deny.toml", security_section)
         self.assertNotIn("/deny.toml", security_section.replace("--config deny.toml", ""))
         self.assertNotIn("matrix:", security_section)
+        self.assertIn("needs.validate-and-detect.outputs.plugin_count", benchmark_section)
+        self.assertIn("cargo bench -p ${{ needs.validate-and-detect.outputs.single_package_name }} --no-run", benchmark_section)
         self.assertIn("cargo bench --workspace --no-run", benchmark_section)
         self.assertNotIn("matrix:", benchmark_section)
+        self.assertIn("cargo llvm-cov -p ${{ needs.validate-and-detect.outputs.single_package_name }} --cobertura --output-path coverage/cobertura.xml", coverage_section)
         self.assertIn("cargo llvm-cov --workspace --cobertura --output-path coverage/cobertura.xml", coverage_section)
         self.assertIn("cobertura.xml", coverage_section)
         self.assertIn("codecov/codecov-action@", coverage_section)
         self.assertNotIn("matrix:", coverage_section)
+        self.assertIn("cargo doc -p ${{ needs.validate-and-detect.outputs.single_package_name }} --no-deps --document-private-items", documentation_section)
         self.assertIn("cargo doc --workspace --no-deps --document-private-items", documentation_section)
         self.assertNotIn("matrix:", documentation_section)
-        self.assertIn("name: rust-docs-workspace", documentation_section)
+        self.assertIn("name: rust-docs", documentation_section)
 
     def test_workspace_has_single_cargo_deny_config(self) -> None:
         root_deny = REPO_ROOT / "deny.toml"
