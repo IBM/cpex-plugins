@@ -194,9 +194,9 @@ jobs:
         run: |
           if [[ "${{ needs.validate-and-detect.outputs.plugin_count }}" == "1" ]]; then
             package='${{ needs.validate-and-detect.outputs.single_cargo_package }}'
-            cargo doc -p "${package}" --no-deps --document-private-items
+            cargo doc -p "${package}" --lib --no-deps --document-private-items
           else
-            cargo doc --workspace --no-deps --document-private-items
+            cargo doc --workspace --lib --no-deps --document-private-items
           fi
 
   release-validation:

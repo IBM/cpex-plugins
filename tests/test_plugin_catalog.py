@@ -2031,8 +2031,8 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("codecov/codecov-action@", coverage_section)
         self.assertNotIn("matrix:", coverage_section)
         self.assertIn("package='${{ needs.validate-and-detect.outputs.single_cargo_package }}'", documentation_section)
-        self.assertIn('cargo doc -p "${package}" --no-deps --document-private-items', documentation_section)
-        self.assertIn("cargo doc --workspace --no-deps --document-private-items", documentation_section)
+        self.assertIn('cargo doc -p "${package}" --lib --no-deps --document-private-items', documentation_section)
+        self.assertIn("cargo doc --workspace --lib --no-deps --document-private-items", documentation_section)
         self.assertNotIn("matrix:", documentation_section)
         self.assertNotIn("upload-artifact", documentation_section)
 
