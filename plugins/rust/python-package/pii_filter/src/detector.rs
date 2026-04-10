@@ -166,7 +166,8 @@ impl PIIDetectorRust {
     /// * `max_text_bytes` (int): Maximum text payload size to inspect
     /// * `max_nested_depth` (int): Maximum nested container depth to inspect
     /// * `max_collection_items` (int): Maximum items to inspect per collection
-    /// * `custom_patterns` (list[dict]): Additional regex-based PII patterns
+    /// * `custom_patterns` (list[dict]): Additional regex-based PII patterns.
+    ///   `mask_strategy` is optional and inherits `default_mask_strategy` when omitted.
     /// * `whitelist_patterns` (list[str]): Regex patterns to exclude from detection
     #[new]
     pub fn new(config: &Bound<'_, PyAny>) -> PyResult<Self> {
@@ -1237,7 +1238,7 @@ mod tests {
             .push(super::super::config::CustomPattern {
                 pattern: r"\bEMP\d{6}\b".to_string(),
                 description: "Employee ID".to_string(),
-                mask_strategy: MaskingStrategy::Partial,
+                mask_strategy: Some(MaskingStrategy::Partial),
                 enabled: true,
             });
 
@@ -1249,6 +1250,33 @@ mod tests {
             detections[&PIIType::Custom][0].mask_strategy,
             MaskingStrategy::Partial
         );
+    }
+
+    #[test]
+    fn test_custom_patterns_without_explicit_mask_strategy_follow_global_default() {
+        Python::initialize();
+        Python::attach(|py| {
+            let config = PyDict::new(py);
+            config.set_item("default_mask_strategy", "partial").unwrap();
+
+            let custom_pattern = PyDict::new(py);
+            custom_pattern.set_item("pattern", r"\bEMP\d{6}\b").unwrap();
+            custom_pattern
+                .set_item("description", "Employee ID")
+                .unwrap();
+
+            let custom_patterns = PyList::empty(py);
+            custom_patterns.append(custom_pattern).unwrap();
+            config.set_item("custom_patterns", custom_patterns).unwrap();
+
+            let detector = PIIDetectorRust::new(&config.into_any()).unwrap();
+            let detections = detector.detect_internal("Employee ID EMP123456");
+
+            assert_eq!(
+                detections[&PIIType::Custom][0].mask_strategy,
+                MaskingStrategy::Partial
+            );
+        });
     }
 
     #[test]
@@ -1297,7 +1325,7 @@ mod tests {
                 .push(super::super::config::CustomPattern {
                     pattern: r"\bEMP\d{6}\b".to_string(),
                     description: "Employee ID".to_string(),
-                    mask_strategy: MaskingStrategy::Redact,
+                    mask_strategy: Some(MaskingStrategy::Redact),
                     enabled: true,
                 });
 
@@ -1492,7 +1520,7 @@ mod tests {
             .push(super::super::config::CustomPattern {
                 pattern: r"\bBSN\b".to_string(),
                 description: "Short custom token".to_string(),
-                mask_strategy: MaskingStrategy::Redact,
+                mask_strategy: Some(MaskingStrategy::Redact),
                 enabled: true,
             });
 

@@ -70,7 +70,7 @@ pub enum MaskingStrategy {
 pub struct CustomPattern {
     pub pattern: String,
     pub description: String,
-    pub mask_strategy: MaskingStrategy,
+    pub mask_strategy: Option<MaskingStrategy>,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 }
@@ -283,22 +283,23 @@ impl PIIConfig {
                             pyo3::exceptions::PyValueError::new_err("Missing 'description' field")
                         })?
                         .extract()?;
-                    let mask_strategy_str: String = match py_dict.get_item("mask_strategy")? {
-                        Some(val) => val.extract()?,
-                        None => "redact".to_string(),
+                    let mask_strategy = match py_dict.get_item("mask_strategy")? {
+                        Some(val) => {
+                            let mask_strategy_str: String = val.extract()?;
+                            Some(match mask_strategy_str.as_str() {
+                                "redact" => MaskingStrategy::Redact,
+                                "partial" => MaskingStrategy::Partial,
+                                "hash" => MaskingStrategy::Hash,
+                                "tokenize" => MaskingStrategy::Tokenize,
+                                "remove" => MaskingStrategy::Remove,
+                                _ => MaskingStrategy::Redact,
+                            })
+                        }
+                        None => None,
                     };
                     let enabled: bool = match py_dict.get_item("enabled")? {
                         Some(val) => val.extract()?,
                         None => true,
-                    };
-
-                    let mask_strategy = match mask_strategy_str.as_str() {
-                        "redact" => MaskingStrategy::Redact,
-                        "partial" => MaskingStrategy::Partial,
-                        "hash" => MaskingStrategy::Hash,
-                        "tokenize" => MaskingStrategy::Tokenize,
-                        "remove" => MaskingStrategy::Remove,
-                        _ => MaskingStrategy::Redact,
                     };
 
                     config.custom_patterns.push(CustomPattern {
@@ -380,6 +381,31 @@ mod tests {
 
             let err = PIIConfig::from_py_dict(&dict).unwrap_err();
             assert!(err.to_string().contains("max_collection_items"));
+        });
+    }
+
+    #[test]
+    fn test_from_py_dict_custom_pattern_without_mask_strategy_keeps_none() {
+        Python::initialize();
+        Python::attach(|py| {
+            let dict = PyDict::new(py);
+            dict.set_item("default_mask_strategy", "partial").unwrap();
+
+            let custom_pattern = PyDict::new(py);
+            custom_pattern.set_item("pattern", r"\bEMP\d{6}\b").unwrap();
+            custom_pattern
+                .set_item("description", "Employee ID")
+                .unwrap();
+
+            let custom_patterns = pyo3::types::PyList::empty(py);
+            custom_patterns.append(custom_pattern).unwrap();
+            dict.set_item("custom_patterns", custom_patterns).unwrap();
+
+            let config = PIIConfig::from_py_dict(&dict).unwrap();
+
+            assert_eq!(config.default_mask_strategy, MaskingStrategy::Partial);
+            assert_eq!(config.custom_patterns.len(), 1);
+            assert_eq!(config.custom_patterns[0].mask_strategy, None);
         });
     }
 }

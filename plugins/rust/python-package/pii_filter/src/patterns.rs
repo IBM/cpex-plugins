@@ -244,7 +244,7 @@ pub fn compile_patterns(config: &PIIConfig) -> Result<CompiledPatterns, String> 
             patterns.push(CompiledPattern {
                 pii_type: PIIType::Custom,
                 regex,
-                mask_strategy: Some(custom.mask_strategy),
+                mask_strategy: custom.mask_strategy,
                 description: custom.description.clone(),
             });
         }
@@ -422,7 +422,7 @@ mod tests {
         config.custom_patterns.push(super::super::config::CustomPattern {
             pattern: "(foo|bar|baz|qux|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen)".to_string(),
             description: "Too many branches".to_string(),
-            mask_strategy: MaskingStrategy::Redact,
+            mask_strategy: Some(MaskingStrategy::Redact),
             enabled: true,
         });
 
@@ -438,7 +438,7 @@ mod tests {
             .push(super::super::config::CustomPattern {
                 pattern: r"foo\|bar\+\?\{baz\}".to_string(),
                 description: "Escaped regex metacharacters".to_string(),
-                mask_strategy: MaskingStrategy::Redact,
+                mask_strategy: Some(MaskingStrategy::Redact),
                 enabled: true,
             });
 
