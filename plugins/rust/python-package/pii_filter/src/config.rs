@@ -284,6 +284,7 @@ impl PIIConfig {
                         })?
                         .extract()?;
                     let mask_strategy = match py_dict.get_item("mask_strategy")? {
+                        Some(val) if val.is_none() => None,
                         Some(val) => {
                             let mask_strategy_str: String = val.extract()?;
                             Some(match mask_strategy_str.as_str() {
@@ -324,7 +325,7 @@ impl PIIConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyo3::types::PyDict;
+    use pyo3::types::{PyDict, PyList, PyModule};
 
     #[test]
     fn test_pii_type_as_str() {
@@ -402,6 +403,68 @@ mod tests {
             dict.set_item("custom_patterns", custom_patterns).unwrap();
 
             let config = PIIConfig::from_py_dict(&dict).unwrap();
+
+            assert_eq!(config.default_mask_strategy, MaskingStrategy::Partial);
+            assert_eq!(config.custom_patterns.len(), 1);
+            assert_eq!(config.custom_patterns[0].mask_strategy, None);
+        });
+    }
+
+    #[test]
+    fn test_from_py_dict_custom_pattern_with_mask_strategy_none_keeps_none() {
+        Python::initialize();
+        Python::attach(|py| {
+            let dict = PyDict::new(py);
+            dict.set_item("default_mask_strategy", "partial").unwrap();
+
+            let custom_pattern = PyDict::new(py);
+            custom_pattern.set_item("pattern", r"\bEMP\d{6}\b").unwrap();
+            custom_pattern
+                .set_item("description", "Employee ID")
+                .unwrap();
+            custom_pattern.set_item("mask_strategy", py.None()).unwrap();
+
+            let custom_patterns = PyList::empty(py);
+            custom_patterns.append(custom_pattern).unwrap();
+            dict.set_item("custom_patterns", custom_patterns).unwrap();
+
+            let config = PIIConfig::from_py_dict(&dict).unwrap();
+
+            assert_eq!(config.default_mask_strategy, MaskingStrategy::Partial);
+            assert_eq!(config.custom_patterns.len(), 1);
+            assert_eq!(config.custom_patterns[0].mask_strategy, None);
+        });
+    }
+
+    #[test]
+    fn test_from_py_object_model_dump_none_mask_strategy_keeps_none() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    r#"
+class ConfigModel:
+    def model_dump(self):
+        return {
+            "default_mask_strategy": "partial",
+            "custom_patterns": [
+                {
+                    "pattern": r"\bEMP\d{6}\b",
+                    "description": "Employee ID",
+                    "mask_strategy": None,
+                }
+            ],
+        }
+"#
+                ),
+                pyo3::ffi::c_str!("test_config_model.py"),
+                pyo3::ffi::c_str!("test_config_model"),
+            )
+            .unwrap();
+            let config_model = module.getattr("ConfigModel").unwrap().call0().unwrap();
+
+            let config = PIIConfig::from_py_object(&config_model).unwrap();
 
             assert_eq!(config.default_mask_strategy, MaskingStrategy::Partial);
             assert_eq!(config.custom_patterns.len(), 1);

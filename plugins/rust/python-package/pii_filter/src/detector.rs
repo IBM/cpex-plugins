@@ -1280,6 +1280,44 @@ mod tests {
     }
 
     #[test]
+    fn test_model_dump_config_with_none_mask_strategy_follows_global_default() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    r#"
+class ConfigModel:
+    def model_dump(self):
+        return {
+            "default_mask_strategy": "partial",
+            "custom_patterns": [
+                {
+                    "pattern": r"\bEMP\d{6}\b",
+                    "description": "Employee ID",
+                    "mask_strategy": None,
+                }
+            ],
+        }
+"#
+                ),
+                pyo3::ffi::c_str!("test_detector_model.py"),
+                pyo3::ffi::c_str!("test_detector_model"),
+            )
+            .unwrap();
+            let config_model = module.getattr("ConfigModel").unwrap().call0().unwrap();
+
+            let detector = PIIDetectorRust::new(&config_model).unwrap();
+            let detections = detector.detect_internal("Employee ID EMP123456");
+
+            assert_eq!(
+                detections[&PIIType::Custom][0].mask_strategy,
+                MaskingStrategy::Partial
+            );
+        });
+    }
+
+    #[test]
     fn test_bsn_context_is_not_downgraded_to_ssn() {
         let config = PIIConfig {
             detect_ssn: true,
