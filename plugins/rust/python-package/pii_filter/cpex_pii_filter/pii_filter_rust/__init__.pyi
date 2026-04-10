@@ -55,7 +55,8 @@ class PIIDetectorRust:
         * `max_text_bytes` (int): Maximum text payload size to inspect
         * `max_nested_depth` (int): Maximum nested container depth to inspect
         * `max_collection_items` (int): Maximum items to inspect per collection
-        * `custom_patterns` (list[dict]): Additional regex-based PII patterns. `mask_strategy` is optional and inherits `default_mask_strategy` when omitted.
+        * `custom_patterns` (list[dict]): Additional regex-based PII patterns.
+          `mask_strategy` is optional and inherits `default_mask_strategy` when omitted.
         * `whitelist_patterns` (list[str]): Regex patterns to exclude from detection
         """
     def detect(self, text: builtins.str) -> typing.Any:

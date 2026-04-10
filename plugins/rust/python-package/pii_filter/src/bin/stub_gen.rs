@@ -33,7 +33,21 @@ fn curate_extension_stub_content(content: &str) -> String {
         "curated extension stub is missing PIIFilterPluginCore class definition",
     );
 
-    curated
+    normalize_trailing_whitespace(&curated)
+}
+
+fn normalize_trailing_whitespace(content: &str) -> String {
+    let normalized = content
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if content.ends_with('\n') {
+        format!("{normalized}\n")
+    } else {
+        normalized
+    }
 }
 
 fn curate_extension_stub() {
