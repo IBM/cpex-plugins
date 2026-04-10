@@ -1231,7 +1231,7 @@ class PluginCatalogTests(unittest.TestCase):
         )
 
     def test_release_info_gives_pii_filter_the_same_target_matrix(self) -> None:
-        result = run_catalog("release-info", str(REPO_ROOT), "pii-filter-v0.2.0")
+        result = run_catalog("release-info", str(REPO_ROOT), "pii-filter-v0.2.1")
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["slug"], "pii_filter")
