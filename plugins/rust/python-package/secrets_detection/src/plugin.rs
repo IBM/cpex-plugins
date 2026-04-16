@@ -5,9 +5,10 @@ use cpex_framework_bridge::{build_framework_object, default_result};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyModule};
 use pyo3_stub_gen::derive::*;
+use serde_json::Value;
 
 use crate::config::SecretsDetectionConfig;
-use crate::scan_container;
+use crate::scanner::{findings_to_pylist, py_to_value, scan_value, value_to_py};
 
 #[gen_stub_pyclass]
 #[pyclass]
@@ -33,28 +34,32 @@ impl SecretsDetectionPluginCore {
     ) -> PyResult<Py<PyAny>> {
         let args = payload.getattr("args")?;
         let source = if args.is_none() {
-            PyDict::new(py).into_any()
+            Value::Object(serde_json::Map::new())
         } else {
-            args
+            py_to_value(&args)?
         };
-        let (count, redacted, findings) = scan_container(py, &source, &self.config)?;
+        let (count, redacted, findings) = scan_value(&source, &self.config);
+        let py_findings = findings_to_pylist(py, &findings)?;
         if self.should_block(count) {
             return blocked_result(
                 py,
                 "PromptPrehookResult",
                 "Potential secrets detected in prompt arguments",
                 count,
-                findings.as_any(),
+                py_findings.as_any(),
+                payload.clone().unbind(),
             );
         }
 
         if self.config.redact && count > 0 {
-            payload.setattr("args", &redacted)?;
+            let redacted_args = value_to_py(py, &redacted)?;
+            let modified_payload =
+                copy_with_update(py, payload, [("args", redacted_args.unbind())])?;
             return build_framework_object(
                 py,
                 "PromptPrehookResult",
                 [
-                    ("modified_payload", payload.clone().unbind()),
+                    ("modified_payload", modified_payload),
                     (
                         "metadata",
                         redaction_metadata(py, count)?.into_any().unbind(),
@@ -69,7 +74,7 @@ impl SecretsDetectionPluginCore {
                 "PromptPrehookResult",
                 [(
                     "metadata",
-                    findings_metadata(py, count, findings.as_any())?
+                    findings_metadata(py, count, py_findings.as_any())?
                         .into_any()
                         .unbind(),
                 )],
@@ -86,24 +91,29 @@ impl SecretsDetectionPluginCore {
         _context: &Bound<'_, PyAny>,
     ) -> PyResult<Py<PyAny>> {
         let value = payload.getattr("result")?;
-        let (count, redacted, findings) = scan_container(py, &value, &self.config)?;
+        let source = py_to_value(&value)?;
+        let (count, redacted, findings) = scan_value(&source, &self.config);
+        let py_findings = findings_to_pylist(py, &findings)?;
         if self.should_block(count) {
             return blocked_result(
                 py,
                 "ToolPostInvokeResult",
                 "Potential secrets detected in tool result",
                 count,
-                findings.as_any(),
+                py_findings.as_any(),
+                payload.clone().unbind(),
             );
         }
 
         if self.config.redact && count > 0 {
-            payload.setattr("result", &redacted)?;
+            let redacted_result = value_to_py(py, &redacted)?;
+            let modified_payload =
+                copy_with_update(py, payload, [("result", redacted_result.unbind())])?;
             return build_framework_object(
                 py,
                 "ToolPostInvokeResult",
                 [
-                    ("modified_payload", payload.clone().unbind()),
+                    ("modified_payload", modified_payload),
                     (
                         "metadata",
                         redaction_metadata(py, count)?.into_any().unbind(),
@@ -118,7 +128,7 @@ impl SecretsDetectionPluginCore {
                 "ToolPostInvokeResult",
                 [(
                     "metadata",
-                    findings_metadata(py, count, findings.as_any())?
+                    findings_metadata(py, count, py_findings.as_any())?
                         .into_any()
                         .unbind(),
                 )],
@@ -138,24 +148,30 @@ impl SecretsDetectionPluginCore {
         let Ok(text) = content.getattr("text") else {
             return default_result(py, "ResourcePostFetchResult");
         };
-        let (count, redacted, findings) = scan_container(py, &text, &self.config)?;
+        let source = py_to_value(&text)?;
+        let (count, redacted, findings) = scan_value(&source, &self.config);
+        let py_findings = findings_to_pylist(py, &findings)?;
         if self.should_block(count) {
             return blocked_result(
                 py,
                 "ResourcePostFetchResult",
                 "Potential secrets detected in resource content",
                 count,
-                findings.as_any(),
+                py_findings.as_any(),
+                payload.clone().unbind(),
             );
         }
 
         if self.config.redact && count > 0 {
-            content.setattr("text", &redacted)?;
+            let redacted_text = value_to_py(py, &redacted)?;
+            let modified_content =
+                copy_with_update(py, &content, [("text", redacted_text.unbind())])?;
+            let modified_payload = copy_with_update(py, payload, [("content", modified_content)])?;
             return build_framework_object(
                 py,
                 "ResourcePostFetchResult",
                 [
-                    ("modified_payload", payload.clone().unbind()),
+                    ("modified_payload", modified_payload),
                     (
                         "metadata",
                         redaction_metadata(py, count)?.into_any().unbind(),
@@ -170,7 +186,7 @@ impl SecretsDetectionPluginCore {
                 "ResourcePostFetchResult",
                 [(
                     "metadata",
-                    findings_metadata(py, count, findings.as_any())?
+                    findings_metadata(py, count, py_findings.as_any())?
                         .into_any()
                         .unbind(),
                 )],
@@ -211,6 +227,7 @@ fn blocked_result(
     description: &str,
     count: usize,
     findings: &Bound<'_, PyAny>,
+    payload: Py<PyAny>,
 ) -> PyResult<Py<PyAny>> {
     let details = PyDict::new(py);
     details.set_item("count", count)?;
@@ -245,8 +262,55 @@ fn blocked_result(
                     ],
                 )?,
             ),
+            ("modified_payload", payload),
         ],
     )
+}
+
+fn copy_with_update<const N: usize>(
+    py: Python<'_>,
+    obj: &Bound<'_, PyAny>,
+    updates: [(&str, Py<PyAny>); N],
+) -> PyResult<Py<PyAny>> {
+    let update_dict = PyDict::new(py);
+    for (key, value) in updates {
+        update_dict.set_item(key, value.bind(py))?;
+    }
+
+    if obj.hasattr("model_copy")? {
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("update", &update_dict)?;
+        return obj
+            .call_method("model_copy", (), Some(&kwargs))
+            .map(|value| value.unbind());
+    }
+
+    let merged = if let Ok(model_dump) = obj.call_method0("model_dump") {
+        model_dump.cast_into::<PyDict>()?
+    } else if let Ok(state) = obj.getattr("__dict__") {
+        state.cast_into::<PyDict>()?
+    } else {
+        let kwargs = PyDict::new(py);
+        for (key, value) in update_dict.iter() {
+            kwargs.set_item(key, value)?;
+        }
+        return obj
+            .get_type()
+            .call((), Some(&kwargs))
+            .map(|value| value.unbind());
+    };
+
+    let kwargs = PyDict::new(py);
+    for (key, value) in merged.iter() {
+        kwargs.set_item(key, value)?;
+    }
+    for (key, value) in update_dict.iter() {
+        kwargs.set_item(key, value)?;
+    }
+
+    obj.get_type()
+        .call((), Some(&kwargs))
+        .map(|value| value.unbind())
 }
 
 #[allow(dead_code)]

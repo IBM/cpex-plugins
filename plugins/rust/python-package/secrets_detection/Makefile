@@ -30,8 +30,9 @@ clippy:
 # help: test                  - Run Rust unit tests
 # help: test-verbose          - Run Rust tests with verbose output
 # help: test-python           - Run Python plugin tests
+# help: test-integration      - Run repo-level integration tests for secrets_detection
 # help: test-all              - Run both Rust and Python tests
-.PHONY: sync test test-verbose test-python test-all verify-stubs
+.PHONY: sync test test-verbose test-python test-integration test-all verify-stubs
 
 sync:
 	uv sync --dev
@@ -48,7 +49,11 @@ test-python:
 	@echo "$(GREEN)Running Python tests...$(NC)"
 	uv run pytest tests/ -v
 
-test-all: test test-python
+test-integration:
+	@echo "$(GREEN)Running integration tests...$(NC)"
+	uv run pytest ../../../tests/secrets_detection -v
+
+test-all: test test-python test-integration
 
 verify-stubs: stub-gen
 	@git diff --exit-code -- $(STUB_FILES)
@@ -115,7 +120,7 @@ verify:
 check-all: fmt-check clippy test
 	@echo "$(GREEN)All checks passed$(NC)"
 
-ci: check-all verify-stubs build bench-no-run install-wheel test-python
+ci: check-all verify-stubs build bench-no-run install-wheel test-python test-integration
 	@echo "$(GREEN)CI verification passed$(NC)"
 
 pre-commit: check-all

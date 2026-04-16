@@ -28,51 +28,6 @@ def _make_context() -> PluginContext:
     return PluginContext(global_context=GlobalContext(user="user-1"))
 
 
-class TestRustEngine:
-    def test_scan_string_detects_and_redacts_aws_key(self):
-        count, redacted, findings = py_scan_container(
-            "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE",
-            {"redact": True, "redaction_text": "[REDACTED]"},
-        )
-
-        assert count == 1
-        assert redacted == "AWS_ACCESS_KEY_ID=[REDACTED]"
-        assert findings == [{"type": "aws_access_key_id", "match": "AKIAFAKE…"}]
-
-    def test_scan_nested_container_redacts_tool_payload(self):
-        count, redacted, findings = py_scan_container(
-            {"content": [{"type": "text", "text": "xoxr-fake-000000000-fake000000000-fakefakefakefake"}]},
-            {"redact": True},
-        )
-
-        assert count >= 1
-        assert redacted["content"][0]["text"] == "***REDACTED***"
-        assert any(item["type"] == "slack_token" for item in findings)
-
-    def test_broad_patterns_are_opt_in(self):
-        count, redacted, findings = py_scan_container(
-            "access_token = 'abcdefghijklmnopqrstuvwx'",
-            {"redact": True},
-        )
-
-        assert count == 0
-        assert redacted == "access_token = 'abcdefghijklmnopqrstuvwx'"
-        assert findings == []
-
-    def test_explicitly_enabled_broad_pattern_detects(self):
-        count, redacted, findings = py_scan_container(
-            "access_token = 'abcdefghijklmnopqrstuvwx'",
-            {
-                "redact": True,
-                "enabled": {"generic_api_key_assignment": True},
-            },
-        )
-
-        assert count == 1
-        assert redacted == "***REDACTED***"
-        assert findings == [{"type": "generic_api_key_assignment", "match": "access_t…"}]
-
-
 class TestPluginHooks:
     @pytest.fixture
     def plugin(self):
@@ -117,7 +72,40 @@ class TestPluginHooks:
         assert result.continue_processing is False
         assert result.violation is not None
         assert result.violation.code == "SECRETS_DETECTED"
-        assert result.modified_payload is None
+        assert result.modified_payload == payload
+
+
+class TestPublicRustApi:
+    def test_scan_container_preserves_tuple_shape_when_clean(self):
+        payload = ("safe", 1, {"nested": "value"})
+
+        count, redacted, findings = py_scan_container(payload, {"redact": True})
+
+        assert count == 0
+        assert findings == []
+        assert redacted == payload
+        assert isinstance(redacted, tuple)
+
+    def test_scan_container_preserves_opaque_object_when_clean(self):
+        class SlotOnlyPayload:
+            __slots__ = ("value",)
+
+            def __init__(self, value):
+                self.value = value
+
+        payload = SlotOnlyPayload("safe")
+
+        count, redacted, findings = py_scan_container(payload, {"redact": True})
+
+        assert count == 0
+        assert findings == []
+        assert redacted is payload
+
+
+class TestPluginHookResults:
+    @pytest.fixture
+    def plugin(self):
+        return SecretsDetectionPlugin(_make_config())
 
     async def test_tool_post_invoke_redacts_mcp_content_payload(self, plugin):
         payload = ToolPostInvokePayload(
@@ -200,3 +188,4 @@ class TestPluginHooks:
         assert result.continue_processing is False
         assert result.violation is not None
         assert result.violation.code == "SECRETS_DETECTED"
+        assert result.modified_payload == payload
