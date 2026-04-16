@@ -7,6 +7,7 @@ use pyo3::types::{PyAny, PyDict, PyModule};
 use pyo3_stub_gen::derive::*;
 
 use crate::config::SecretsDetectionConfig;
+use crate::object_model::copy_object_with_updates;
 use crate::scanner::scan_container;
 
 #[gen_stub_pyclass]
@@ -279,41 +280,7 @@ fn copy_with_update<const N: usize>(
     for (key, value) in updates {
         update_dict.set_item(key, value.bind(py))?;
     }
-
-    if obj.hasattr("model_copy")? {
-        let kwargs = PyDict::new(py);
-        kwargs.set_item("update", &update_dict)?;
-        return obj
-            .call_method("model_copy", (), Some(&kwargs))
-            .map(|value| value.unbind());
-    }
-
-    let merged = if let Ok(model_dump) = obj.call_method0("model_dump") {
-        model_dump.cast_into::<PyDict>()?
-    } else if let Ok(state) = obj.getattr("__dict__") {
-        state.cast_into::<PyDict>()?
-    } else {
-        let kwargs = PyDict::new(py);
-        for (key, value) in update_dict.iter() {
-            kwargs.set_item(key, value)?;
-        }
-        return obj
-            .get_type()
-            .call((), Some(&kwargs))
-            .map(|value| value.unbind());
-    };
-
-    let kwargs = PyDict::new(py);
-    for (key, value) in merged.iter() {
-        kwargs.set_item(key, value)?;
-    }
-    for (key, value) in update_dict.iter() {
-        kwargs.set_item(key, value)?;
-    }
-
-    obj.get_type()
-        .call((), Some(&kwargs))
-        .map(|value| value.unbind())
+    copy_object_with_updates(py, obj, &update_dict)
 }
 
 #[allow(dead_code)]

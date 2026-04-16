@@ -6,6 +6,7 @@ use pyo3::types::{PyAny, PyDict, PyList, PyString, PyTuple};
 use serde_json::{Map, Number, Value};
 
 use crate::config::SecretsDetectionConfig;
+use crate::object_model::{inspect_object_state, rebuild_object_from_state};
 use crate::patterns::PATTERNS;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,149 +80,43 @@ pub fn scan_container<'py>(
         return Ok((total, new_tuple.into_any(), findings));
     }
 
-    if let Some(state) = extract_object_state(py, container)? {
-        let (count, redacted_state, findings) = scan_container(py, &state.into_any(), config)?;
-        if count == 0 {
-            return Ok((0, container.clone(), findings));
+    let object_state = inspect_object_state(py, container)?;
+    if object_state.rebuild_state.is_some() || object_state.serialized_state.is_some() {
+        let mut total = 0usize;
+        let mut rebuilt = None;
+
+        if let Some(state) = object_state.rebuild_state {
+            let (count, redacted_state, child_findings) =
+                scan_container(py, &state.into_any(), config)?;
+            total += count;
+            for finding in child_findings.iter() {
+                findings.append(finding)?;
+            }
+            if count > 0 {
+                rebuilt = Some(rebuild_object_from_state(py, container, &redacted_state)?);
+            }
         }
+
+        if let Some(serialized_state) = object_state.serialized_state {
+            let (count, redacted_state, child_findings) =
+                scan_container(py, &serialized_state, config)?;
+            total += count;
+            for finding in child_findings.iter() {
+                findings.append(finding)?;
+            }
+            if rebuilt.is_none() && count > 0 {
+                rebuilt = Some(rebuild_object_from_state(py, container, &redacted_state)?);
+            }
+        }
+
         return Ok((
-            count,
-            rebuild_object(py, container, &redacted_state)?,
+            total,
+            rebuilt.unwrap_or_else(|| container.clone()),
             findings,
         ));
     }
 
     Ok((0, container.clone(), findings))
-}
-
-fn rebuild_object<'py>(
-    py: Python<'py>,
-    container: &Bound<'py, PyAny>,
-    redacted_state: &Bound<'py, PyAny>,
-) -> PyResult<Bound<'py, PyAny>> {
-    if container.hasattr("model_copy")? {
-        let kwargs = PyDict::new(py);
-        kwargs.set_item("update", redacted_state)?;
-        return container.call_method("model_copy", (), Some(&kwargs));
-    }
-
-    let state = redacted_state.cast::<PyDict>()?;
-    let cloned = blank_instance(py, container)?;
-    for (key, value) in state.iter() {
-        set_attr_without_hooks(py, &cloned, &key.extract::<String>()?, &value)?;
-    }
-    Ok(cloned)
-}
-
-fn blank_instance<'py>(
-    py: Python<'py>,
-    container: &Bound<'py, PyAny>,
-) -> PyResult<Bound<'py, PyAny>> {
-    let builtins = py.import("builtins")?;
-    let object_type = builtins.getattr("object")?;
-    object_type.call_method1("__new__", (container.get_type(),))
-}
-
-fn set_attr_without_hooks(
-    py: Python<'_>,
-    target: &Bound<'_, PyAny>,
-    name: &str,
-    value: &Bound<'_, PyAny>,
-) -> PyResult<()> {
-    let builtins = py.import("builtins")?;
-    let object_type = builtins.getattr("object")?;
-    object_type.call_method1("__setattr__", (target, name, value))?;
-    Ok(())
-}
-
-fn extract_object_state<'py>(
-    py: Python<'py>,
-    container: &Bound<'py, PyAny>,
-) -> PyResult<Option<Bound<'py, PyDict>>> {
-    let state = PyDict::new(py);
-    let mut saw_state = false;
-
-    if let Ok(model_dump) = container.call_method0("model_dump")
-        && let Ok(model_state) = model_dump.cast::<PyDict>()
-    {
-        merge_state_into(&state, model_state)?;
-        saw_state = true;
-    }
-
-    if let Ok(dict_state) = container.getattr("__dict__")
-        && let Ok(dict_state) = dict_state.cast::<PyDict>()
-    {
-        merge_state_into(&state, dict_state)?;
-        saw_state = true;
-    }
-
-    if let Some(slot_state) = extract_slot_state(py, container)? {
-        merge_state_into(&state, &slot_state)?;
-        saw_state = true;
-    }
-
-    if saw_state { Ok(Some(state)) } else { Ok(None) }
-}
-
-fn merge_state_into(target: &Bound<'_, PyDict>, source: &Bound<'_, PyDict>) -> PyResult<()> {
-    for (key, value) in source.iter() {
-        target.set_item(key, value)?;
-    }
-    Ok(())
-}
-
-fn extract_slot_state<'py>(
-    py: Python<'py>,
-    container: &Bound<'py, PyAny>,
-) -> PyResult<Option<Bound<'py, PyDict>>> {
-    let slot_names = PyList::empty(py);
-    let mut saw_slots = false;
-
-    if let Ok(mro) = container.get_type().getattr("__mro__")?.cast::<PyTuple>() {
-        for class_obj in mro.iter() {
-            let Ok(slots) = class_obj.getattr("__slots__") else {
-                continue;
-            };
-            saw_slots = true;
-            append_slot_names(&slot_names, &slots)?;
-        }
-    }
-
-    if !saw_slots {
-        return Ok(None);
-    }
-
-    let slot_state = PyDict::new(py);
-    for slot_name in slot_names.iter() {
-        let slot_name = slot_name.extract::<String>()?;
-        if slot_name == "__dict__" || slot_name == "__weakref__" {
-            continue;
-        }
-        if let Ok(value) = container.getattr(&slot_name) {
-            slot_state.set_item(slot_name, value)?;
-        }
-    }
-
-    if slot_state.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(slot_state))
-    }
-}
-
-fn append_slot_names(slot_names: &Bound<'_, PyList>, slots: &Bound<'_, PyAny>) -> PyResult<()> {
-    if let Ok(name) = slots.extract::<String>() {
-        slot_names.append(name)?;
-        return Ok(());
-    }
-
-    if let Ok(iter) = slots.try_iter() {
-        for name in iter {
-            slot_names.append(name?)?;
-        }
-    }
-
-    Ok(())
 }
 
 pub fn scan_value(value: &Value, config: &SecretsDetectionConfig) -> (usize, Value, Vec<Finding>) {

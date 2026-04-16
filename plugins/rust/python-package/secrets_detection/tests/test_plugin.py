@@ -1,4 +1,5 @@
 import pytest
+from pydantic import BaseModel, model_serializer
 
 from mcpgateway_mock.plugins.framework import (
     GlobalContext,
@@ -255,6 +256,25 @@ class TestPublicRustApi:
         assert redacted.secret == "AWS_ACCESS_KEY_ID=[REDACTED]"
         assert payload.secret == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
 
+    def test_scan_container_detects_secret_exposed_only_by_model_dump(self):
+        class SplitSecretModel(BaseModel):
+            prefix: str
+            suffix: str
+
+            @model_serializer(mode="plain")
+            def serialize_model(self):
+                return f"{self.prefix}{self.suffix}"
+
+        payload = SplitSecretModel(prefix="AKIA", suffix="FAKE12345EXAMPLE")
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 1
+        assert len(findings) == 1
+        assert redacted == payload
+
 
 class TestPluginHookResults:
     @pytest.fixture
@@ -361,6 +381,75 @@ class TestPluginHookResults:
         assert result.modified_payload.result.slot_secret == "AWS_ACCESS_KEY_ID=[REDACTED]"
         assert result.modified_payload.result.label == "safe"
         assert payload.result.slot_secret == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+
+    async def test_tool_post_invoke_redacts_guarded_object(self, plugin):
+        class GuardedSecretBox:
+            __slots__ = ("secret", "label", "_locked")
+
+            def __init__(self, secret, label):
+                object.__setattr__(self, "secret", secret)
+                object.__setattr__(self, "label", label)
+                object.__setattr__(self, "_locked", True)
+
+            def __setattr__(self, name, value):
+                raise AssertionError(f"unexpected setattr for {name}")
+                object.__setattr__(self, name, value)
+
+        payload = ToolPostInvokePayload(
+            name="writer",
+            result=GuardedSecretBox(
+                "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE",
+                "safe",
+            ),
+        )
+
+        result = await plugin.tool_post_invoke(payload, _make_context())
+
+        assert result.continue_processing is True
+        assert result.modified_payload is not None
+        assert result.modified_payload.result is not payload.result
+        assert result.modified_payload.result.secret == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        assert result.modified_payload.result.label == "safe"
+
+    async def test_tool_post_invoke_redacts_mapping_slot_object(self, plugin):
+        class MappingSlotSecretBox:
+            __slots__ = {"secret": "slot doc"}
+
+            def __init__(self, secret):
+                self.secret = secret
+
+        payload = ToolPostInvokePayload(
+            name="writer",
+            result=MappingSlotSecretBox("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"),
+        )
+
+        result = await plugin.tool_post_invoke(payload, _make_context())
+
+        assert result.continue_processing is True
+        assert result.modified_payload is not None
+        assert result.modified_payload.result is not payload.result
+        assert result.modified_payload.result.secret == "AWS_ACCESS_KEY_ID=[REDACTED]"
+
+    async def test_tool_post_invoke_blocks_secret_exposed_only_by_model_dump(self):
+        class SplitSecretModel(BaseModel):
+            prefix: str
+            suffix: str
+
+            @model_serializer(mode="plain")
+            def serialize_model(self):
+                return f"{self.prefix}{self.suffix}"
+
+        plugin = SecretsDetectionPlugin(_make_config(block_on_detection=True, redact=False))
+        payload = ToolPostInvokePayload(
+            name="writer",
+            result=SplitSecretModel(prefix="AKIA", suffix="FAKE12345EXAMPLE"),
+        )
+
+        result = await plugin.tool_post_invoke(payload, _make_context())
+
+        assert result.continue_processing is False
+        assert result.violation is not None
+        assert result.violation.code == "SECRETS_DETECTED"
 
     async def test_tool_post_invoke_leaves_clean_payload_unmodified(self, plugin):
         payload = ToolPostInvokePayload(
