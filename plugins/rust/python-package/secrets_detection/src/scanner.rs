@@ -103,6 +103,18 @@ pub fn scan_container<'py>(
         ));
     }
 
+    if let Some(slot_state) = extract_slot_state(py, container)? {
+        let (count, redacted_state, findings) = scan_container(py, &slot_state.into_any(), config)?;
+        if count == 0 {
+            return Ok((0, container.clone(), findings));
+        }
+        return Ok((
+            count,
+            rebuild_object(py, container, &redacted_state)?,
+            findings,
+        ));
+    }
+
     Ok((0, container.clone(), findings))
 }
 
@@ -117,8 +129,74 @@ fn rebuild_object<'py>(
         return container.call_method("model_copy", (), Some(&kwargs));
     }
 
-    let kwargs = redacted_state.cast::<PyDict>()?;
-    container.get_type().call((), Some(kwargs))
+    let state = redacted_state.cast::<PyDict>()?;
+    let cloned = blank_instance(py, container)?;
+    for (key, value) in state.iter() {
+        cloned.setattr(key.extract::<String>()?, value)?;
+    }
+    Ok(cloned)
+}
+
+fn blank_instance<'py>(
+    py: Python<'py>,
+    container: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let builtins = py.import("builtins")?;
+    let object_type = builtins.getattr("object")?;
+    object_type.call_method1("__new__", (container.get_type(),))
+}
+
+fn extract_slot_state<'py>(
+    py: Python<'py>,
+    container: &Bound<'py, PyAny>,
+) -> PyResult<Option<Bound<'py, PyDict>>> {
+    let slot_names = PyList::empty(py);
+    let mut saw_slots = false;
+
+    if let Ok(mro) = container.get_type().getattr("__mro__")?.cast::<PyTuple>() {
+        for class_obj in mro.iter() {
+            let Ok(slots) = class_obj.getattr("__slots__") else {
+                continue;
+            };
+            saw_slots = true;
+            if let Ok(name) = slots.extract::<String>() {
+                slot_names.append(name)?;
+                continue;
+            }
+            if let Ok(tuple) = slots.cast::<PyTuple>() {
+                for name in tuple.iter() {
+                    slot_names.append(name)?;
+                }
+                continue;
+            }
+            if let Ok(list) = slots.cast::<PyList>() {
+                for name in list.iter() {
+                    slot_names.append(name)?;
+                }
+            }
+        }
+    }
+
+    if !saw_slots {
+        return Ok(None);
+    }
+
+    let slot_state = PyDict::new(py);
+    for slot_name in slot_names.iter() {
+        let slot_name = slot_name.extract::<String>()?;
+        if slot_name == "__dict__" || slot_name == "__weakref__" {
+            continue;
+        }
+        if let Ok(value) = container.getattr(&slot_name) {
+            slot_state.set_item(slot_name, value)?;
+        }
+    }
+
+    if slot_state.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(slot_state))
+    }
 }
 
 pub fn scan_value(value: &Value, config: &SecretsDetectionConfig) -> (usize, Value, Vec<Finding>) {

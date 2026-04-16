@@ -165,6 +165,52 @@ async def test_tool_post_invoke_redacts_custom_object_result():
 
 
 @pytest.mark.asyncio
+async def test_tool_post_invoke_redacts_non_replayable_custom_object_result():
+    class NonReplayableBox:
+        def __init__(self, secret):
+            self.secret = secret
+            self.derived = "derived"
+
+    plugin = SecretsDetectionPlugin(make_config())
+    payload = ToolPostInvokePayload(
+        name="writer",
+        result=NonReplayableBox("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"),
+    )
+
+    result = await plugin.tool_post_invoke(payload, make_context())
+
+    assert result.continue_processing is True
+    assert result.modified_payload is not None
+    assert result.modified_payload.result is not payload.result
+    assert result.modified_payload.result.secret == "AWS_ACCESS_KEY_ID=[REDACTED]"
+    assert result.modified_payload.result.derived == "derived"
+    assert payload.result.secret == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+
+
+@pytest.mark.asyncio
+async def test_tool_post_invoke_redacts_slot_backed_custom_object_result():
+    class SlotSecretBox:
+        __slots__ = ("value",)
+
+        def __init__(self, value):
+            self.value = value
+
+    plugin = SecretsDetectionPlugin(make_config())
+    payload = ToolPostInvokePayload(
+        name="writer",
+        result=SlotSecretBox("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"),
+    )
+
+    result = await plugin.tool_post_invoke(payload, make_context())
+
+    assert result.continue_processing is True
+    assert result.modified_payload is not None
+    assert result.modified_payload.result is not payload.result
+    assert result.modified_payload.result.value == "AWS_ACCESS_KEY_ID=[REDACTED]"
+    assert payload.result.value == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+
+
+@pytest.mark.asyncio
 async def test_resource_post_fetch_rebuilds_frozen_payload_on_redaction():
     plugin = SecretsDetectionPlugin(make_config())
     payload = ResourcePostFetchPayload(

@@ -140,6 +140,46 @@ class TestPublicRustApi:
         assert redacted.value == "AWS_ACCESS_KEY_ID=[REDACTED]"
         assert payload.value == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
 
+    def test_scan_container_redacts_non_replayable_custom_object(self):
+        class NonReplayableBox:
+            def __init__(self, secret):
+                self.secret = secret
+                self.derived = "derived"
+
+        payload = NonReplayableBox("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 1
+        assert len(findings) == 1
+        assert redacted is not payload
+        assert isinstance(redacted, NonReplayableBox)
+        assert redacted.secret == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        assert redacted.derived == "derived"
+        assert payload.secret == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+
+    def test_scan_container_redacts_slot_backed_custom_object(self):
+        class SlotSecretBox:
+            __slots__ = ("value",)
+
+            def __init__(self, value):
+                self.value = value
+
+        payload = SlotSecretBox("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 1
+        assert len(findings) == 1
+        assert redacted is not payload
+        assert isinstance(redacted, SlotSecretBox)
+        assert redacted.value == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        assert payload.value == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+
 
 class TestPluginHookResults:
     @pytest.fixture
@@ -201,6 +241,26 @@ class TestPluginHookResults:
         assert result.modified_payload.args["payload"] is not payload.args["payload"]
         assert result.modified_payload.args["payload"].value == "AWS_ACCESS_KEY_ID=[REDACTED]"
         assert payload.args["payload"].value == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+
+    async def test_tool_post_invoke_redacts_non_replayable_custom_object(self, plugin):
+        class NonReplayableBox:
+            def __init__(self, secret):
+                self.secret = secret
+                self.derived = "derived"
+
+        payload = ToolPostInvokePayload(
+            name="writer",
+            result=NonReplayableBox("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"),
+        )
+
+        result = await plugin.tool_post_invoke(payload, _make_context())
+
+        assert result.continue_processing is True
+        assert result.modified_payload is not None
+        assert result.modified_payload.result is not payload.result
+        assert result.modified_payload.result.secret == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        assert result.modified_payload.result.derived == "derived"
+        assert payload.result.secret == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
 
     async def test_tool_post_invoke_leaves_clean_payload_unmodified(self, plugin):
         payload = ToolPostInvokePayload(
