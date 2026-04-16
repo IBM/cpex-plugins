@@ -79,32 +79,8 @@ pub fn scan_container<'py>(
         return Ok((total, new_tuple.into_any(), findings));
     }
 
-    if let Ok(model_dump) = container.call_method0("model_dump") {
-        let (count, redacted_state, findings) = scan_container(py, &model_dump, config)?;
-        if count == 0 {
-            return Ok((0, container.clone(), findings));
-        }
-        return Ok((
-            count,
-            rebuild_object(py, container, &redacted_state)?,
-            findings,
-        ));
-    }
-
-    if let Ok(state) = container.getattr("__dict__") {
-        let (count, redacted_state, findings) = scan_container(py, &state, config)?;
-        if count == 0 {
-            return Ok((0, container.clone(), findings));
-        }
-        return Ok((
-            count,
-            rebuild_object(py, container, &redacted_state)?,
-            findings,
-        ));
-    }
-
-    if let Some(slot_state) = extract_slot_state(py, container)? {
-        let (count, redacted_state, findings) = scan_container(py, &slot_state.into_any(), config)?;
+    if let Some(state) = extract_object_state(py, container)? {
+        let (count, redacted_state, findings) = scan_container(py, &state.into_any(), config)?;
         if count == 0 {
             return Ok((0, container.clone(), findings));
         }
@@ -132,7 +108,7 @@ fn rebuild_object<'py>(
     let state = redacted_state.cast::<PyDict>()?;
     let cloned = blank_instance(py, container)?;
     for (key, value) in state.iter() {
-        cloned.setattr(key.extract::<String>()?, value)?;
+        set_attr_without_hooks(py, &cloned, &key.extract::<String>()?, &value)?;
     }
     Ok(cloned)
 }
@@ -144,6 +120,54 @@ fn blank_instance<'py>(
     let builtins = py.import("builtins")?;
     let object_type = builtins.getattr("object")?;
     object_type.call_method1("__new__", (container.get_type(),))
+}
+
+fn set_attr_without_hooks(
+    py: Python<'_>,
+    target: &Bound<'_, PyAny>,
+    name: &str,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<()> {
+    let builtins = py.import("builtins")?;
+    let object_type = builtins.getattr("object")?;
+    object_type.call_method1("__setattr__", (target, name, value))?;
+    Ok(())
+}
+
+fn extract_object_state<'py>(
+    py: Python<'py>,
+    container: &Bound<'py, PyAny>,
+) -> PyResult<Option<Bound<'py, PyDict>>> {
+    let state = PyDict::new(py);
+    let mut saw_state = false;
+
+    if let Ok(model_dump) = container.call_method0("model_dump")
+        && let Ok(model_state) = model_dump.cast::<PyDict>()
+    {
+        merge_state_into(&state, model_state)?;
+        saw_state = true;
+    }
+
+    if let Ok(dict_state) = container.getattr("__dict__")
+        && let Ok(dict_state) = dict_state.cast::<PyDict>()
+    {
+        merge_state_into(&state, dict_state)?;
+        saw_state = true;
+    }
+
+    if let Some(slot_state) = extract_slot_state(py, container)? {
+        merge_state_into(&state, &slot_state)?;
+        saw_state = true;
+    }
+
+    if saw_state { Ok(Some(state)) } else { Ok(None) }
+}
+
+fn merge_state_into(target: &Bound<'_, PyDict>, source: &Bound<'_, PyDict>) -> PyResult<()> {
+    for (key, value) in source.iter() {
+        target.set_item(key, value)?;
+    }
+    Ok(())
 }
 
 fn extract_slot_state<'py>(
@@ -159,21 +183,7 @@ fn extract_slot_state<'py>(
                 continue;
             };
             saw_slots = true;
-            if let Ok(name) = slots.extract::<String>() {
-                slot_names.append(name)?;
-                continue;
-            }
-            if let Ok(tuple) = slots.cast::<PyTuple>() {
-                for name in tuple.iter() {
-                    slot_names.append(name)?;
-                }
-                continue;
-            }
-            if let Ok(list) = slots.cast::<PyList>() {
-                for name in list.iter() {
-                    slot_names.append(name)?;
-                }
-            }
+            append_slot_names(&slot_names, &slots)?;
         }
     }
 
@@ -197,6 +207,21 @@ fn extract_slot_state<'py>(
     } else {
         Ok(Some(slot_state))
     }
+}
+
+fn append_slot_names(slot_names: &Bound<'_, PyList>, slots: &Bound<'_, PyAny>) -> PyResult<()> {
+    if let Ok(name) = slots.extract::<String>() {
+        slot_names.append(name)?;
+        return Ok(());
+    }
+
+    if let Ok(iter) = slots.try_iter() {
+        for name in iter {
+            slot_names.append(name?)?;
+        }
+    }
+
+    Ok(())
 }
 
 pub fn scan_value(value: &Value, config: &SecretsDetectionConfig) -> (usize, Value, Vec<Finding>) {

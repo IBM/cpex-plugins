@@ -180,6 +180,81 @@ class TestPublicRustApi:
         assert redacted.value == "AWS_ACCESS_KEY_ID=[REDACTED]"
         assert payload.value == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
 
+    def test_scan_container_redacts_hybrid_dict_and_slots_object(self):
+        class HybridSecretBox:
+            __slots__ = {"slot_secret": "slot", "__dict__": "dict"}
+
+            def __init__(self, slot_secret, label):
+                self.slot_secret = slot_secret
+                self.label = label
+
+        payload = HybridSecretBox(
+            "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE",
+            "safe",
+        )
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 1
+        assert len(findings) == 1
+        assert redacted is not payload
+        assert isinstance(redacted, HybridSecretBox)
+        assert redacted.slot_secret == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        assert redacted.label == "safe"
+        assert payload.slot_secret == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+
+    def test_scan_container_redacts_guarded_object_without_running_setattr(self):
+        class GuardedSecretBox:
+            __slots__ = ("secret", "label", "_locked")
+
+            def __init__(self, secret, label):
+                object.__setattr__(self, "secret", secret)
+                object.__setattr__(self, "label", label)
+                object.__setattr__(self, "_locked", True)
+
+            def __setattr__(self, name, value):
+                raise AssertionError(f"unexpected setattr for {name}")
+                object.__setattr__(self, name, value)
+
+        payload = GuardedSecretBox(
+            "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE",
+            "safe",
+        )
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 1
+        assert len(findings) == 1
+        assert redacted is not payload
+        assert isinstance(redacted, GuardedSecretBox)
+        assert redacted.secret == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        assert redacted.label == "safe"
+        assert payload.secret == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+
+    def test_scan_container_redacts_slots_declared_as_mapping(self):
+        class MappingSlotSecretBox:
+            __slots__ = {"secret": "slot doc"}
+
+            def __init__(self, secret):
+                self.secret = secret
+
+        payload = MappingSlotSecretBox("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 1
+        assert len(findings) == 1
+        assert redacted is not payload
+        assert isinstance(redacted, MappingSlotSecretBox)
+        assert redacted.secret == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        assert payload.secret == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+
 
 class TestPluginHookResults:
     @pytest.fixture
@@ -261,6 +336,31 @@ class TestPluginHookResults:
         assert result.modified_payload.result.secret == "AWS_ACCESS_KEY_ID=[REDACTED]"
         assert result.modified_payload.result.derived == "derived"
         assert payload.result.secret == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+
+    async def test_tool_post_invoke_redacts_hybrid_dict_and_slots_object(self, plugin):
+        class HybridSecretBox:
+            __slots__ = {"slot_secret": "slot", "__dict__": "dict"}
+
+            def __init__(self, slot_secret, label):
+                self.slot_secret = slot_secret
+                self.label = label
+
+        payload = ToolPostInvokePayload(
+            name="writer",
+            result=HybridSecretBox(
+                "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE",
+                "safe",
+            ),
+        )
+
+        result = await plugin.tool_post_invoke(payload, _make_context())
+
+        assert result.continue_processing is True
+        assert result.modified_payload is not None
+        assert result.modified_payload.result is not payload.result
+        assert result.modified_payload.result.slot_secret == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        assert result.modified_payload.result.label == "safe"
+        assert payload.result.slot_secret == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
 
     async def test_tool_post_invoke_leaves_clean_payload_unmodified(self, plugin):
         payload = ToolPostInvokePayload(
