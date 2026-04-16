@@ -96,7 +96,9 @@ class TestPublicRustApi:
     def test_scan_container_preserves_tuple_shape_when_clean(self):
         payload = ("safe", 1, {"nested": "value"})
 
-        count, redacted, findings = py_scan_container(payload, {"redact": True})
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
 
         assert count == 0
         assert findings == []
@@ -112,11 +114,31 @@ class TestPublicRustApi:
 
         payload = SlotOnlyPayload("safe")
 
-        count, redacted, findings = py_scan_container(payload, {"redact": True})
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
 
         assert count == 0
         assert findings == []
         assert redacted is payload
+
+    def test_scan_container_redacts_custom_object_with_dict_state(self):
+        class SecretBox:
+            def __init__(self, value):
+                self.value = value
+
+        payload = SecretBox("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 1
+        assert len(findings) == 1
+        assert redacted is not payload
+        assert isinstance(redacted, SecretBox)
+        assert redacted.value == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        assert payload.value == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
 
 
 class TestPluginHookResults:
@@ -161,6 +183,24 @@ class TestPluginHookResults:
         assert result.modified_payload is not None
         assert isinstance(result.modified_payload.result, tuple)
         assert result.modified_payload.result == ("safe", "AWS_ACCESS_KEY_ID=[REDACTED]")
+
+    async def test_prompt_pre_fetch_redacts_nested_custom_object(self, plugin):
+        class SecretBox:
+            def __init__(self, value):
+                self.value = value
+
+        payload = PromptPrehookPayload(
+            prompt_id="prompt-1",
+            args={"payload": SecretBox("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")},
+        )
+
+        result = await plugin.prompt_pre_fetch(payload, _make_context())
+
+        assert result.continue_processing is True
+        assert result.modified_payload is not None
+        assert result.modified_payload.args["payload"] is not payload.args["payload"]
+        assert result.modified_payload.args["payload"].value == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        assert payload.args["payload"].value == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
 
     async def test_tool_post_invoke_leaves_clean_payload_unmodified(self, plugin):
         payload = ToolPostInvokePayload(

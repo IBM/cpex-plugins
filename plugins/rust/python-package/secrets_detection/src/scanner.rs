@@ -79,7 +79,46 @@ pub fn scan_container<'py>(
         return Ok((total, new_tuple.into_any(), findings));
     }
 
+    if let Ok(model_dump) = container.call_method0("model_dump") {
+        let (count, redacted_state, findings) = scan_container(py, &model_dump, config)?;
+        if count == 0 {
+            return Ok((0, container.clone(), findings));
+        }
+        return Ok((
+            count,
+            rebuild_object(py, container, &redacted_state)?,
+            findings,
+        ));
+    }
+
+    if let Ok(state) = container.getattr("__dict__") {
+        let (count, redacted_state, findings) = scan_container(py, &state, config)?;
+        if count == 0 {
+            return Ok((0, container.clone(), findings));
+        }
+        return Ok((
+            count,
+            rebuild_object(py, container, &redacted_state)?,
+            findings,
+        ));
+    }
+
     Ok((0, container.clone(), findings))
+}
+
+fn rebuild_object<'py>(
+    py: Python<'py>,
+    container: &Bound<'py, PyAny>,
+    redacted_state: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    if container.hasattr("model_copy")? {
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("update", redacted_state)?;
+        return container.call_method("model_copy", (), Some(&kwargs));
+    }
+
+    let kwargs = redacted_state.cast::<PyDict>()?;
+    container.get_type().call((), Some(kwargs))
 }
 
 pub fn scan_value(value: &Value, config: &SecretsDetectionConfig) -> (usize, Value, Vec<Finding>) {

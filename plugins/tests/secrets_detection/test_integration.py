@@ -144,6 +144,27 @@ async def test_tool_post_invoke_preserves_tuple_shape_when_redacted():
 
 
 @pytest.mark.asyncio
+async def test_tool_post_invoke_redacts_custom_object_result():
+    class SecretBox:
+        def __init__(self, value):
+            self.value = value
+
+    plugin = SecretsDetectionPlugin(make_config())
+    payload = ToolPostInvokePayload(
+        name="writer",
+        result=SecretBox("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"),
+    )
+
+    result = await plugin.tool_post_invoke(payload, make_context())
+
+    assert result.continue_processing is True
+    assert result.modified_payload is not None
+    assert result.modified_payload.result is not payload.result
+    assert result.modified_payload.result.value == "AWS_ACCESS_KEY_ID=[REDACTED]"
+    assert payload.result.value == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+
+
+@pytest.mark.asyncio
 async def test_resource_post_fetch_rebuilds_frozen_payload_on_redaction():
     plugin = SecretsDetectionPlugin(make_config())
     payload = ResourcePostFetchPayload(
