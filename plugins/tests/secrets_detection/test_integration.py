@@ -76,6 +76,27 @@ async def test_prompt_pre_fetch_blocks_without_redaction_and_keeps_original_payl
 
 
 @pytest.mark.asyncio
+async def test_prompt_pre_fetch_blocks_with_redaction_without_leaking_secret():
+    plugin = SecretsDetectionPlugin(
+        make_config(block_on_detection=True, redact=True, min_findings_to_block=1)
+    )
+    payload = PromptPrehookPayload(
+        prompt_id="prompt-1",
+        args={"input": "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"},
+    )
+
+    result = await plugin.prompt_pre_fetch(payload, make_context())
+
+    assert result.continue_processing is False
+    assert result.violation is not None
+    assert result.violation.code == "SECRETS_DETECTED"
+    assert result.modified_payload is not None
+    assert result.modified_payload is not payload
+    assert result.modified_payload.args["input"] == "AWS_ACCESS_KEY_ID=[REDACTED]"
+    assert payload.args["input"] == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+
+
+@pytest.mark.asyncio
 async def test_tool_post_invoke_rebuilds_frozen_payload_on_redaction():
     plugin = SecretsDetectionPlugin(make_config())
     payload = ToolPostInvokePayload(
@@ -101,6 +122,25 @@ async def test_tool_post_invoke_rebuilds_frozen_payload_on_redaction():
         == "AWS_ACCESS_KEY_ID=[REDACTED]"
     )
     assert payload.result["content"][0]["text"] == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+
+
+@pytest.mark.asyncio
+async def test_tool_post_invoke_preserves_tuple_shape_when_redacted():
+    plugin = SecretsDetectionPlugin(make_config())
+    payload = ToolPostInvokePayload(
+        name="writer",
+        result=("safe", "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"),
+    )
+
+    result = await plugin.tool_post_invoke(payload, make_context())
+
+    assert result.continue_processing is True
+    assert result.modified_payload is not None
+    assert isinstance(result.modified_payload.result, tuple)
+    assert result.modified_payload.result == (
+        "safe",
+        "AWS_ACCESS_KEY_ID=[REDACTED]",
+    )
 
 
 @pytest.mark.asyncio

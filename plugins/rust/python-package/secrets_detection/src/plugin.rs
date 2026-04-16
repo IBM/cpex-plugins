@@ -5,10 +5,9 @@ use cpex_framework_bridge::{build_framework_object, default_result};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyModule};
 use pyo3_stub_gen::derive::*;
-use serde_json::Value;
 
 use crate::config::SecretsDetectionConfig;
-use crate::scanner::{findings_to_pylist, py_to_value, scan_value, value_to_py};
+use crate::scanner::scan_container;
 
 #[gen_stub_pyclass]
 #[pyclass]
@@ -33,26 +32,24 @@ impl SecretsDetectionPluginCore {
         _context: &Bound<'_, PyAny>,
     ) -> PyResult<Py<PyAny>> {
         let args = payload.getattr("args")?;
-        let source = if args.is_none() {
-            Value::Object(serde_json::Map::new())
-        } else {
-            py_to_value(&args)?
-        };
-        let (count, redacted, findings) = scan_value(&source, &self.config);
-        let py_findings = findings_to_pylist(py, &findings)?;
+        let (count, redacted_args, findings) = scan_container(py, &args, &self.config)?;
         if self.should_block(count) {
+            let modified_payload = if self.config.redact && count > 0 {
+                copy_with_update(py, payload, [("args", redacted_args.clone().unbind())])?
+            } else {
+                payload.clone().unbind()
+            };
             return blocked_result(
                 py,
                 "PromptPrehookResult",
                 "Potential secrets detected in prompt arguments",
                 count,
-                py_findings.as_any(),
-                payload.clone().unbind(),
+                findings.as_any(),
+                modified_payload,
             );
         }
 
         if self.config.redact && count > 0 {
-            let redacted_args = value_to_py(py, &redacted)?;
             let modified_payload =
                 copy_with_update(py, payload, [("args", redacted_args.unbind())])?;
             return build_framework_object(
@@ -74,7 +71,7 @@ impl SecretsDetectionPluginCore {
                 "PromptPrehookResult",
                 [(
                     "metadata",
-                    findings_metadata(py, count, py_findings.as_any())?
+                    findings_metadata(py, count, findings.as_any())?
                         .into_any()
                         .unbind(),
                 )],
@@ -91,22 +88,24 @@ impl SecretsDetectionPluginCore {
         _context: &Bound<'_, PyAny>,
     ) -> PyResult<Py<PyAny>> {
         let value = payload.getattr("result")?;
-        let source = py_to_value(&value)?;
-        let (count, redacted, findings) = scan_value(&source, &self.config);
-        let py_findings = findings_to_pylist(py, &findings)?;
+        let (count, redacted_result, findings) = scan_container(py, &value, &self.config)?;
         if self.should_block(count) {
+            let modified_payload = if self.config.redact && count > 0 {
+                copy_with_update(py, payload, [("result", redacted_result.clone().unbind())])?
+            } else {
+                payload.clone().unbind()
+            };
             return blocked_result(
                 py,
                 "ToolPostInvokeResult",
                 "Potential secrets detected in tool result",
                 count,
-                py_findings.as_any(),
-                payload.clone().unbind(),
+                findings.as_any(),
+                modified_payload,
             );
         }
 
         if self.config.redact && count > 0 {
-            let redacted_result = value_to_py(py, &redacted)?;
             let modified_payload =
                 copy_with_update(py, payload, [("result", redacted_result.unbind())])?;
             return build_framework_object(
@@ -128,7 +127,7 @@ impl SecretsDetectionPluginCore {
                 "ToolPostInvokeResult",
                 [(
                     "metadata",
-                    findings_metadata(py, count, py_findings.as_any())?
+                    findings_metadata(py, count, findings.as_any())?
                         .into_any()
                         .unbind(),
                 )],
@@ -148,22 +147,26 @@ impl SecretsDetectionPluginCore {
         let Ok(text) = content.getattr("text") else {
             return default_result(py, "ResourcePostFetchResult");
         };
-        let source = py_to_value(&text)?;
-        let (count, redacted, findings) = scan_value(&source, &self.config);
-        let py_findings = findings_to_pylist(py, &findings)?;
+        let (count, redacted_text, findings) = scan_container(py, &text, &self.config)?;
         if self.should_block(count) {
+            let modified_payload = if self.config.redact && count > 0 {
+                let modified_content =
+                    copy_with_update(py, &content, [("text", redacted_text.clone().unbind())])?;
+                copy_with_update(py, payload, [("content", modified_content)])?
+            } else {
+                payload.clone().unbind()
+            };
             return blocked_result(
                 py,
                 "ResourcePostFetchResult",
                 "Potential secrets detected in resource content",
                 count,
-                py_findings.as_any(),
-                payload.clone().unbind(),
+                findings.as_any(),
+                modified_payload,
             );
         }
 
         if self.config.redact && count > 0 {
-            let redacted_text = value_to_py(py, &redacted)?;
             let modified_content =
                 copy_with_update(py, &content, [("text", redacted_text.unbind())])?;
             let modified_payload = copy_with_update(py, payload, [("content", modified_content)])?;
@@ -186,7 +189,7 @@ impl SecretsDetectionPluginCore {
                 "ResourcePostFetchResult",
                 [(
                     "metadata",
-                    findings_metadata(py, count, py_findings.as_any())?
+                    findings_metadata(py, count, findings.as_any())?
                         .into_any()
                         .unbind(),
                 )],

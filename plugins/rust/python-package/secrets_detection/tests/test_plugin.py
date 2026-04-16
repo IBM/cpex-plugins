@@ -74,6 +74,23 @@ class TestPluginHooks:
         assert result.violation.code == "SECRETS_DETECTED"
         assert result.modified_payload == payload
 
+    async def test_prompt_pre_fetch_blocks_with_redaction_without_leaking_secret(self):
+        plugin = SecretsDetectionPlugin(_make_config(block_on_detection=True, redact=True))
+        payload = PromptPrehookPayload(
+            prompt_id="prompt-1",
+            args={"input": "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"},
+        )
+
+        result = await plugin.prompt_pre_fetch(payload, _make_context())
+
+        assert result.continue_processing is False
+        assert result.violation is not None
+        assert result.violation.code == "SECRETS_DETECTED"
+        assert result.modified_payload is not None
+        assert result.modified_payload is not payload
+        assert result.modified_payload.args["input"] == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        assert payload.args["input"] == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+
 
 class TestPublicRustApi:
     def test_scan_container_preserves_tuple_shape_when_clean(self):
@@ -131,6 +148,19 @@ class TestPluginHookResults:
         )
         assert result.modified_payload.result["isError"] is False
         assert result.metadata == {"secrets_redacted": True, "count": 1}
+
+    async def test_tool_post_invoke_preserves_tuple_shape_when_redacted(self, plugin):
+        payload = ToolPostInvokePayload(
+            name="writer",
+            result=("safe", "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"),
+        )
+
+        result = await plugin.tool_post_invoke(payload, _make_context())
+
+        assert result.continue_processing is True
+        assert result.modified_payload is not None
+        assert isinstance(result.modified_payload.result, tuple)
+        assert result.modified_payload.result == ("safe", "AWS_ACCESS_KEY_ID=[REDACTED]")
 
     async def test_tool_post_invoke_leaves_clean_payload_unmodified(self, plugin):
         payload = ToolPostInvokePayload(

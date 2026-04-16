@@ -355,8 +355,14 @@ mod tests {
             )]))
         );
         assert_eq!(findings.len(), 2);
-        assert_eq!(findings[0].pii_type, "aws_access_key_id");
-        assert_eq!(findings[1].pii_type, "slack_token");
+        let finding_types: std::collections::HashSet<_> = findings
+            .iter()
+            .map(|finding| finding.pii_type.as_str())
+            .collect();
+        assert_eq!(
+            finding_types,
+            std::collections::HashSet::from(["aws_access_key_id", "slack_token"])
+        );
     }
 
     #[test]
