@@ -44,7 +44,6 @@ fn scan_container_inner<'py>(
         for finding in &matches {
             let finding_dict = PyDict::new(py);
             finding_dict.set_item("type", &finding.pii_type)?;
-            finding_dict.set_item("match", &finding.preview)?;
             findings.append(finding_dict)?;
         }
         return Ok((
@@ -164,12 +163,8 @@ fn scan_container_inner<'py>(
             for finding in child_findings.iter() {
                 findings.append(finding)?;
             }
-            if rebuilt.is_none() && count > 0 {
-                if redacted_state.get_type().is(container.get_type()) {
-                    rebuilt = Some(redacted_state.clone());
-                } else {
-                    rebuilt = Some(rebuild_object_from_state(py, container, &redacted_state)?);
-                }
+            if count > 0 {
+                rebuilt = Some(serialized_result(py, container, &redacted_state)?);
             }
         }
 
@@ -404,10 +399,25 @@ pub fn findings_to_pylist<'py>(
     for finding in findings {
         let finding_dict = PyDict::new(py);
         finding_dict.set_item("type", &finding.pii_type)?;
-        finding_dict.set_item("match", &finding.preview)?;
         py_findings.append(finding_dict)?;
     }
     Ok(py_findings)
+}
+
+fn serialized_result<'py>(
+    py: Python<'py>,
+    container: &Bound<'py, PyAny>,
+    redacted_state: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    if redacted_state.get_type().is(container.get_type()) {
+        return Ok(redacted_state.clone());
+    }
+
+    if redacted_state.cast::<PyDict>().is_ok() {
+        return rebuild_object_from_state(py, container, redacted_state);
+    }
+
+    Ok(redacted_state.clone())
 }
 
 pub fn detect_and_redact(text: &str, config: &SecretsDetectionConfig) -> (Vec<Finding>, String) {
@@ -419,7 +429,8 @@ pub fn detect_and_redact(text: &str, config: &SecretsDetectionConfig) -> (Vec<Fi
             continue;
         }
 
-        for matched in pattern.find_iter(text) {
+        let matches = pattern.find_iter(text).collect::<Vec<_>>();
+        for matched in &matches {
             let text = matched.as_str();
             let preview = if text.chars().count() > 8 {
                 format!("{}…", text.chars().take(8).collect::<String>())
@@ -432,7 +443,7 @@ pub fn detect_and_redact(text: &str, config: &SecretsDetectionConfig) -> (Vec<Fi
             });
         }
 
-        if config.redact {
+        if config.redact && !matches.is_empty() {
             redacted = pattern
                 .replace_all(&redacted, config.redaction_text.as_str())
                 .into_owned();

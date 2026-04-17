@@ -220,7 +220,7 @@ fn findings_metadata<'py>(
     findings: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let metadata = PyDict::new(py);
-    metadata.set_item("secrets_findings", findings)?;
+    metadata.set_item("secrets_findings", sanitized_findings(py, findings)?)?;
     metadata.set_item("count", count)?;
     Ok(metadata)
 }
@@ -235,7 +235,7 @@ fn blocked_result(
 ) -> PyResult<Py<PyAny>> {
     let details = PyDict::new(py);
     details.set_item("count", count)?;
-    details.set_item("examples", findings)?;
+    details.set_item("examples", sanitized_findings(py, findings)?)?;
     build_framework_object(
         py,
         result_class,
@@ -281,6 +281,24 @@ fn copy_with_update<const N: usize>(
         update_dict.set_item(key, value.bind(py))?;
     }
     copy_object_with_updates(py, obj, &update_dict)
+}
+
+fn sanitized_findings<'py>(
+    py: Python<'py>,
+    findings: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let out = pyo3::types::PyList::empty(py);
+    for item in findings.try_iter()? {
+        let item = item?;
+        if let Ok(dict) = item.cast::<PyDict>()
+            && let Some(kind) = dict.get_item("type")?
+        {
+            let sanitized = PyDict::new(py);
+            sanitized.set_item("type", kind)?;
+            out.append(sanitized)?;
+        }
+    }
+    Ok(out.into_any())
 }
 
 #[allow(dead_code)]

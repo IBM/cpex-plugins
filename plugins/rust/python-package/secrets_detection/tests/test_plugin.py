@@ -95,6 +95,34 @@ class TestPluginHooks:
         assert result.modified_payload.args["input"] == "AWS_ACCESS_KEY_ID=[REDACTED]"
         assert payload.args["input"] == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
 
+    async def test_prompt_pre_fetch_metadata_omits_match_previews(self):
+        plugin = SecretsDetectionPlugin(_make_config(redact=False))
+        payload = PromptPrehookPayload(
+            prompt_id="prompt-1",
+            args={"input": "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"},
+        )
+
+        result = await plugin.prompt_pre_fetch(payload, _make_context())
+
+        assert result.metadata is not None
+        assert result.metadata["count"] == 1
+        assert result.metadata["secrets_findings"] == [{"type": "aws_access_key_id"}]
+
+    async def test_prompt_pre_fetch_blocking_details_omit_match_previews(self):
+        plugin = SecretsDetectionPlugin(_make_config(block_on_detection=True, redact=False))
+        payload = PromptPrehookPayload(
+            prompt_id="prompt-1",
+            args={"input": "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"},
+        )
+
+        result = await plugin.prompt_pre_fetch(payload, _make_context())
+
+        assert result.violation is not None
+        assert result.violation.details == {
+            "count": 1,
+            "examples": [{"type": "aws_access_key_id"}],
+        }
+
 
 class TestPublicRustApi:
     def test_scan_container_preserves_tuple_shape_when_clean(self):
@@ -138,11 +166,41 @@ class TestPublicRustApi:
         )
 
         assert count == 1
-        assert len(findings) == 1
+        assert findings == [{"type": "aws_access_key_id"}]
         assert redacted is not payload
         assert isinstance(redacted, SecretBox)
         assert redacted.value == "AWS_ACCESS_KEY_ID=[REDACTED]"
         assert payload.value == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+
+    def test_scan_container_omits_match_previews_from_public_findings(self):
+        count, _, findings = py_scan_container(
+            "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE",
+            {"redact": True, "redaction_text": "[REDACTED]"},
+        )
+
+        assert count == 1
+        assert findings == [{"type": "aws_access_key_id"}]
+
+    def test_scan_container_prefers_redacted_serialized_view_when_both_paths_match(self):
+        class DualSurfacePayload:
+            def __init__(self):
+                self.state_secret = "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+
+            def model_dump(self):
+                return "AWS_SECRET_ACCESS_KEY=FAKESecretAccessKeyForTestingEXAMPLE0000"
+
+        payload = DualSurfacePayload()
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 2
+        assert findings == [
+            {"type": "aws_access_key_id"},
+            {"type": "aws_secret_access_key"},
+        ]
+        assert redacted == "[REDACTED]"
 
     def test_scan_container_redacts_non_replayable_custom_object(self):
         class NonReplayableBox:

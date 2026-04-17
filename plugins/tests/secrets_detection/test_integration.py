@@ -369,3 +369,52 @@ class TestSecretsDetectionHookDispatch:
             assert result.modified_payload == payload
         finally:
             await manager.shutdown()
+
+    async def test_tool_post_invoke_blocks_without_redaction_via_plugin_manager(
+        self, tmp_path
+    ):
+        manager = await self.manager(
+            tmp_path, {"block_on_detection": True, "redact": False}
+        )
+        try:
+            payload = ToolPostInvokePayload(
+                name="writer",
+                result={"secret": "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"},
+            )
+            result, _ = await manager.invoke_hook(
+                ToolHookType.TOOL_POST_INVOKE,
+                payload,
+                global_context=self.global_context(),
+            )
+            assert result.continue_processing is False
+            assert result.violation.code == "SECRETS_DETECTED"
+            assert result.modified_payload == payload
+        finally:
+            await manager.shutdown()
+
+    async def test_resource_post_fetch_blocks_without_redaction_via_plugin_manager(
+        self, tmp_path
+    ):
+        manager = await self.manager(
+            tmp_path, {"block_on_detection": True, "redact": False}
+        )
+        try:
+            payload = ResourcePostFetchPayload(
+                uri="file:///tmp/secret.txt",
+                content=ResourceContent(
+                    type="resource",
+                    id="res-1",
+                    uri="file:///tmp/secret.txt",
+                    text="AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE",
+                ),
+            )
+            result, _ = await manager.invoke_hook(
+                ResourceHookType.RESOURCE_POST_FETCH,
+                payload,
+                global_context=self.global_context(),
+            )
+            assert result.continue_processing is False
+            assert result.violation.code == "SECRETS_DETECTED"
+            assert result.modified_payload == payload
+        finally:
+            await manager.shutdown()
