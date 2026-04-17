@@ -1,5 +1,8 @@
+import subprocess
+import sys
+
 import pytest
-from pydantic import BaseModel, model_serializer
+from pydantic import BaseModel, RootModel, model_serializer
 
 from mcpgateway_mock.plugins.framework import (
     GlobalContext,
@@ -273,7 +276,69 @@ class TestPublicRustApi:
 
         assert count == 1
         assert len(findings) == 1
-        assert redacted == payload
+        assert redacted == "[REDACTED]"
+
+    def test_scan_container_redacts_secret_exposed_only_by_root_model_dump(self):
+        payload = RootModel[str]("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 1
+        assert len(findings) == 1
+        assert isinstance(redacted, RootModel)
+        assert redacted.root == "AWS_ACCESS_KEY_ID=[REDACTED]"
+
+    def test_scan_container_handles_recursive_model_dump_without_crashing(self):
+        script = """
+from cpex_secrets_detection.secrets_detection_rust import py_scan_container
+
+class RecursivePayload:
+    def __init__(self):
+        self.secret = "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+
+    def model_dump(self):
+        return self
+
+count, redacted, findings = py_scan_container(
+    RecursivePayload(),
+    {"redact": True, "redaction_text": "[REDACTED]"},
+)
+assert count == 1
+assert len(findings) == 1
+assert redacted.secret == "AWS_ACCESS_KEY_ID=[REDACTED]"
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr or result.stdout
+
+    def test_scan_container_redacts_slots_declared_as_custom_iterable(self):
+        class SlotNames:
+            def __iter__(self):
+                return iter(("secret",))
+
+        class IterableSlotSecretBox:
+            __slots__ = SlotNames()
+
+            def __init__(self, secret):
+                self.secret = secret
+
+        payload = IterableSlotSecretBox("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 1
+        assert len(findings) == 1
+        assert isinstance(redacted, IterableSlotSecretBox)
+        assert redacted.secret == "AWS_ACCESS_KEY_ID=[REDACTED]"
 
 
 class TestPluginHookResults:
@@ -450,6 +515,42 @@ class TestPluginHookResults:
         assert result.continue_processing is False
         assert result.violation is not None
         assert result.violation.code == "SECRETS_DETECTED"
+
+    async def test_tool_post_invoke_redacts_secret_exposed_only_by_model_dump(self, plugin):
+        class SplitSecretModel(BaseModel):
+            prefix: str
+            suffix: str
+
+            @model_serializer(mode="plain")
+            def serialize_model(self):
+                return f"{self.prefix}{self.suffix}"
+
+        payload = ToolPostInvokePayload(
+            name="writer",
+            result=SplitSecretModel(prefix="AKIA", suffix="FAKE12345EXAMPLE"),
+        )
+
+        result = await plugin.tool_post_invoke(payload, _make_context())
+
+        assert result.continue_processing is True
+        assert result.modified_payload is not None
+        assert result.modified_payload.result == "[REDACTED]"
+        assert result.metadata == {"secrets_redacted": True, "count": 1}
+
+    async def test_tool_post_invoke_redacts_secret_exposed_only_by_root_model_dump(
+        self, plugin
+    ):
+        payload = ToolPostInvokePayload(
+            name="writer",
+            result=RootModel[str]("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"),
+        )
+
+        result = await plugin.tool_post_invoke(payload, _make_context())
+
+        assert result.continue_processing is True
+        assert result.modified_payload is not None
+        assert isinstance(result.modified_payload.result, RootModel)
+        assert result.modified_payload.result.root == "AWS_ACCESS_KEY_ID=[REDACTED]"
 
     async def test_tool_post_invoke_leaves_clean_payload_unmodified(self, plugin):
         payload = ToolPostInvokePayload(

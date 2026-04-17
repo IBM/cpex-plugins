@@ -19,7 +19,7 @@ pub fn inspect_object_state<'py>(
     if let Ok(model_dump) = container.call_method0("model_dump") {
         if let Ok(model_state) = model_dump.cast::<PyDict>() {
             mappings.push(model_state)?;
-        } else {
+        } else if !model_dump.is(container) {
             serialized_state = Some(model_dump);
         }
     }
@@ -34,8 +34,24 @@ pub fn inspect_object_state<'py>(
         mappings.push(&slot_state)?;
     }
 
+    let rebuild_state = mappings.finish();
+    if container.hasattr("root")?
+        && serialized_state.is_some()
+        && let Some(rebuild_state) = rebuild_state.as_ref()
+        && rebuild_state.contains("root")?
+        && let Some(serialized) = serialized_state.as_ref()
+        && rebuild_state
+            .get_item("root")?
+            .is_some_and(|root| root.eq(serialized).unwrap_or(false))
+    {
+        return Ok(InspectedObjectState {
+            rebuild_state: Some(rebuild_state.clone()),
+            serialized_state: None,
+        });
+    }
+
     Ok(InspectedObjectState {
-        rebuild_state: mappings.finish(),
+        rebuild_state,
         serialized_state,
     })
 }
@@ -81,7 +97,7 @@ pub fn rebuild_object_from_state<'py>(
             update_dict.set_item("root", redacted_state)?;
             kwargs.set_item("update", update_dict)?;
         } else {
-            return Ok(container.clone());
+            return Ok(redacted_state.clone());
         }
         return container.call_method("model_copy", (), Some(&kwargs));
     }
@@ -189,6 +205,13 @@ fn append_slot_names(slot_names: &Bound<'_, PyList>, slots: &Bound<'_, PyAny>) -
     if let Ok(set) = slots.cast::<PyFrozenSet>() {
         for name in set.iter() {
             slot_names.append(name)?;
+        }
+        return Ok(());
+    }
+
+    if let Ok(iter) = slots.try_iter() {
+        for name in iter {
+            slot_names.append(name?)?;
         }
     }
 

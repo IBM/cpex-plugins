@@ -1,6 +1,8 @@
 // Copyright 2026
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashSet;
+
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList, PyString, PyTuple};
 use serde_json::{Map, Number, Value};
@@ -20,6 +22,16 @@ pub fn scan_container<'py>(
     container: &Bound<'py, PyAny>,
     config: &SecretsDetectionConfig,
 ) -> PyResult<(usize, Bound<'py, PyAny>, Bound<'py, PyList>)> {
+    let mut seen = HashSet::new();
+    scan_container_inner(py, container, config, &mut seen)
+}
+
+fn scan_container_inner<'py>(
+    py: Python<'py>,
+    container: &Bound<'py, PyAny>,
+    config: &SecretsDetectionConfig,
+    seen: &mut HashSet<usize>,
+) -> PyResult<(usize, Bound<'py, PyAny>, Bound<'py, PyList>)> {
     let findings = PyList::empty(py);
 
     if let Ok(text) = container.extract::<String>() {
@@ -37,17 +49,24 @@ pub fn scan_container<'py>(
         ));
     }
 
+    let object_id = container.as_ptr() as usize;
+    if !seen.insert(object_id) {
+        return Ok((0, container.clone(), findings));
+    }
+
     if let Ok(dict) = container.cast::<PyDict>() {
         let new_dict = PyDict::new(py);
         let mut total = 0usize;
         for (key, value) in dict.iter() {
-            let (count, redacted_value, child_findings) = scan_container(py, &value, config)?;
+            let (count, redacted_value, child_findings) =
+                scan_container_inner(py, &value, config, seen)?;
             total += count;
             for finding in child_findings.iter() {
                 findings.append(finding)?;
             }
             new_dict.set_item(key, redacted_value)?;
         }
+        seen.remove(&object_id);
         return Ok((total, new_dict.into_any(), findings));
     }
 
@@ -55,13 +74,15 @@ pub fn scan_container<'py>(
         let new_list = PyList::empty(py);
         let mut total = 0usize;
         for item in list.iter() {
-            let (count, redacted_item, child_findings) = scan_container(py, &item, config)?;
+            let (count, redacted_item, child_findings) =
+                scan_container_inner(py, &item, config, seen)?;
             total += count;
             for finding in child_findings.iter() {
                 findings.append(finding)?;
             }
             new_list.append(redacted_item)?;
         }
+        seen.remove(&object_id);
         return Ok((total, new_list.into_any(), findings));
     }
 
@@ -69,7 +90,8 @@ pub fn scan_container<'py>(
         let mut items = Vec::with_capacity(tuple.len());
         let mut total = 0usize;
         for item in tuple.iter() {
-            let (count, redacted_item, child_findings) = scan_container(py, &item, config)?;
+            let (count, redacted_item, child_findings) =
+                scan_container_inner(py, &item, config, seen)?;
             total += count;
             for finding in child_findings.iter() {
                 findings.append(finding)?;
@@ -77,6 +99,7 @@ pub fn scan_container<'py>(
             items.push(redacted_item.unbind());
         }
         let new_tuple = PyTuple::new(py, items)?;
+        seen.remove(&object_id);
         return Ok((total, new_tuple.into_any(), findings));
     }
 
@@ -87,7 +110,7 @@ pub fn scan_container<'py>(
 
         if let Some(state) = object_state.rebuild_state {
             let (count, redacted_state, child_findings) =
-                scan_container(py, &state.into_any(), config)?;
+                scan_container_inner(py, &state.into_any(), config, seen)?;
             total += count;
             for finding in child_findings.iter() {
                 findings.append(finding)?;
@@ -99,7 +122,7 @@ pub fn scan_container<'py>(
 
         if let Some(serialized_state) = object_state.serialized_state {
             let (count, redacted_state, child_findings) =
-                scan_container(py, &serialized_state, config)?;
+                scan_container_inner(py, &serialized_state, config, seen)?;
             total += count;
             for finding in child_findings.iter() {
                 findings.append(finding)?;
@@ -109,6 +132,7 @@ pub fn scan_container<'py>(
             }
         }
 
+        seen.remove(&object_id);
         return Ok((
             total,
             rebuilt.unwrap_or_else(|| container.clone()),
@@ -116,6 +140,7 @@ pub fn scan_container<'py>(
         ));
     }
 
+    seen.remove(&object_id);
     Ok((0, container.clone(), findings))
 }
 
