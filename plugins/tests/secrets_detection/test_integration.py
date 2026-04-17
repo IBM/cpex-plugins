@@ -536,6 +536,34 @@ class TestPublicRustApi:
         assert redacted == payload
         assert isinstance(redacted, tuple)
 
+    def test_scan_container_handles_split_concerns_through_public_api(self):
+        class Wrapper:
+            def __init__(self, value, back=None):
+                self.value = value
+                self.back = back
+
+            def model_dump(self):
+                return {"value": "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE", "back": self.back}
+
+        back_edge = Wrapper("safe")
+        payload = ("safe", back_edge)
+        back_edge.back = payload
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 1
+        assert findings == [{"type": "aws_access_key_id"}]
+        assert isinstance(redacted, tuple)
+        assert redacted[0] == "safe"
+        assert isinstance(redacted[1], Wrapper)
+        assert redacted[1].value == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        assert redacted[1] is not back_edge
+        assert redacted[1].back is redacted
+        assert back_edge.value == "safe"
+        assert back_edge.back is payload
+
     def test_scan_container_preserves_opaque_object_when_clean(self):
         class SlotOnlyPayload:
             __slots__ = ("value",)
@@ -734,6 +762,26 @@ class TestPublicRustApi:
         assert count == 1
         assert len(findings) == 1
         assert redacted == "[REDACTED]"
+
+    def test_scan_container_detects_secret_when_model_dump_key_overlaps_internal_state(self):
+        class OverlappingStateBox:
+            def __init__(self):
+                self.secret = "safe"
+
+            def model_dump(self):
+                return {"secret": "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"}
+
+        payload = OverlappingStateBox()
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 1
+        assert len(findings) == 1
+        assert isinstance(redacted, OverlappingStateBox)
+        assert redacted.secret == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        assert payload.secret == "safe"
 
     def test_scan_container_redacts_secret_exposed_only_by_root_model_dump(self):
         payload = RootModel[str]("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")
@@ -1015,6 +1063,27 @@ assert redacted[1]["self"] is redacted[1]
         )
 
         assert result.returncode == 0, result.stderr or result.stdout
+
+    def test_scan_container_rewrites_tuple_cycle_references_inside_custom_objects(self):
+        class Box:
+            def __init__(self, back):
+                self.back = back
+
+        back_edge = Box(None)
+        payload = ("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE", back_edge)
+        back_edge.back = payload
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 1
+        assert len(findings) == 1
+        assert isinstance(redacted, tuple)
+        assert isinstance(redacted[1], Box)
+        assert redacted[0] == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        assert redacted[1].back is redacted
+        assert redacted[1].back[0] == "AWS_ACCESS_KEY_ID=[REDACTED]"
 
     def test_scan_container_redacts_slots_declared_as_custom_iterable(self):
         class SlotNames:

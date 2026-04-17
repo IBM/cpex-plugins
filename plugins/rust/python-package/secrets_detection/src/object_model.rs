@@ -18,6 +18,7 @@ pub fn inspect_object_state<'py>(
 
     if let Ok(model_dump) = container.call_method0("model_dump") {
         if let Ok(model_state) = model_dump.cast::<PyDict>() {
+            serialized_state = Some(model_state.clone().into_any());
             mappings.push(model_state)?;
         } else if !model_dump.is(container) {
             serialized_state = Some(model_dump);
