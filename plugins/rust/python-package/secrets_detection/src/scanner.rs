@@ -8,11 +8,9 @@ use crate::config::SecretsDetectionConfig;
 mod cycle_rewrite;
 mod python_scan;
 mod text_scan;
-mod value_conversion;
 
 pub use python_scan::scan_container;
 pub use text_scan::{Finding, detect_and_redact};
-pub use value_conversion::{findings_to_pylist, py_to_value, value_to_py};
 
 pub fn scan_value(value: &Value, config: &SecretsDetectionConfig) -> (usize, Value, Vec<Finding>) {
     match value {
