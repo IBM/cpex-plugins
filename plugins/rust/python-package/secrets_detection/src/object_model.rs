@@ -102,14 +102,32 @@ pub fn rebuild_object_from_state<'py>(
         return container.call_method("model_copy", (), Some(&kwargs));
     }
 
+    let cloned = prepare_rebuild_target(py, container)?;
+    apply_object_state(py, &cloned, redacted_state)?;
+    Ok(cloned)
+}
+
+pub fn prepare_rebuild_target<'py>(
+    py: Python<'py>,
+    container: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let builtins = py.import("builtins")?;
+    let object_type = builtins.getattr("object")?;
+    blank_instance(&object_type, container)
+}
+
+pub fn apply_object_state(
+    py: Python<'_>,
+    target: &Bound<'_, PyAny>,
+    redacted_state: &Bound<'_, PyAny>,
+) -> PyResult<()> {
     let state = redacted_state.cast::<PyDict>()?;
     let builtins = py.import("builtins")?;
     let object_type = builtins.getattr("object")?;
-    let cloned = blank_instance(&object_type, container)?;
     for (key, value) in state.iter() {
-        set_attr_without_hooks(&object_type, &cloned, &key.extract::<String>()?, &value)?;
+        set_attr_without_hooks(&object_type, target, &key.extract::<String>()?, &value)?;
     }
-    Ok(cloned)
+    Ok(())
 }
 
 fn blank_instance<'py>(

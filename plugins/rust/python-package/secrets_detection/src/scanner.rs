@@ -1,6 +1,7 @@
 // Copyright 2026
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 
 use pyo3::prelude::*;
@@ -8,7 +9,9 @@ use pyo3::types::{PyAny, PyDict, PyList, PyString, PyTuple};
 use serde_json::{Map, Number, Value};
 
 use crate::config::SecretsDetectionConfig;
-use crate::object_model::{inspect_object_state, rebuild_object_from_state};
+use crate::object_model::{
+    apply_object_state, inspect_object_state, prepare_rebuild_target, rebuild_object_from_state,
+};
 use crate::patterns::PATTERNS;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,7 +26,8 @@ pub fn scan_container<'py>(
     config: &SecretsDetectionConfig,
 ) -> PyResult<(usize, Bound<'py, PyAny>, Bound<'py, PyList>)> {
     let mut seen = HashSet::new();
-    scan_container_inner(py, container, config, &mut seen)
+    let mut memo = HashMap::new();
+    scan_container_inner(py, container, config, &mut seen, &mut memo)
 }
 
 fn scan_container_inner<'py>(
@@ -31,6 +35,7 @@ fn scan_container_inner<'py>(
     container: &Bound<'py, PyAny>,
     config: &SecretsDetectionConfig,
     seen: &mut HashSet<usize>,
+    memo: &mut HashMap<usize, Py<PyAny>>,
 ) -> PyResult<(usize, Bound<'py, PyAny>, Bound<'py, PyList>)> {
     let findings = PyList::empty(py);
 
@@ -51,15 +56,19 @@ fn scan_container_inner<'py>(
 
     let object_id = container.as_ptr() as usize;
     if !seen.insert(object_id) {
+        if let Some(existing) = memo.get(&object_id) {
+            return Ok((0, existing.bind(py).clone(), findings));
+        }
         return Ok((0, container.clone(), findings));
     }
 
     if let Ok(dict) = container.cast::<PyDict>() {
         let new_dict = PyDict::new(py);
+        memo.insert(object_id, new_dict.clone().into_any().unbind());
         let mut total = 0usize;
         for (key, value) in dict.iter() {
             let (count, redacted_value, child_findings) =
-                scan_container_inner(py, &value, config, seen)?;
+                scan_container_inner(py, &value, config, seen, memo)?;
             total += count;
             for finding in child_findings.iter() {
                 findings.append(finding)?;
@@ -72,10 +81,11 @@ fn scan_container_inner<'py>(
 
     if let Ok(list) = container.cast::<PyList>() {
         let new_list = PyList::empty(py);
+        memo.insert(object_id, new_list.clone().into_any().unbind());
         let mut total = 0usize;
         for item in list.iter() {
             let (count, redacted_item, child_findings) =
-                scan_container_inner(py, &item, config, seen)?;
+                scan_container_inner(py, &item, config, seen, memo)?;
             total += count;
             for finding in child_findings.iter() {
                 findings.append(finding)?;
@@ -87,11 +97,13 @@ fn scan_container_inner<'py>(
     }
 
     if let Ok(tuple) = container.cast::<PyTuple>() {
+        let tuple_placeholder = PyList::empty(py);
+        memo.insert(object_id, tuple_placeholder.clone().into_any().unbind());
         let mut items = Vec::with_capacity(tuple.len());
         let mut total = 0usize;
         for item in tuple.iter() {
             let (count, redacted_item, child_findings) =
-                scan_container_inner(py, &item, config, seen)?;
+                scan_container_inner(py, &item, config, seen, memo)?;
             total += count;
             for finding in child_findings.iter() {
                 findings.append(finding)?;
@@ -99,7 +111,16 @@ fn scan_container_inner<'py>(
             items.push(redacted_item.unbind());
         }
         let new_tuple = PyTuple::new(py, items)?;
+        let mut rewrite_seen = HashSet::new();
+        replace_placeholder_references(
+            py,
+            &new_tuple.clone().into_any(),
+            &tuple_placeholder.into_any(),
+            &new_tuple.clone().into_any(),
+            &mut rewrite_seen,
+        )?;
         seen.remove(&object_id);
+        memo.remove(&object_id);
         return Ok((total, new_tuple.into_any(), findings));
     }
 
@@ -107,41 +128,139 @@ fn scan_container_inner<'py>(
     if object_state.rebuild_state.is_some() || object_state.serialized_state.is_some() {
         let mut total = 0usize;
         let mut rebuilt = None;
+        let has_rebuild_state = object_state.rebuild_state.is_some();
+        let rebuild_state_for_gate = object_state
+            .rebuild_state
+            .as_ref()
+            .map(|state| state.as_any().clone());
 
         if let Some(state) = object_state.rebuild_state {
+            let target = prepare_rebuild_target(py, container)?;
+            memo.insert(object_id, target.clone().unbind());
             let (count, redacted_state, child_findings) =
-                scan_container_inner(py, &state.into_any(), config, seen)?;
+                scan_container_inner(py, &state.into_any(), config, seen, memo)?;
             total += count;
             for finding in child_findings.iter() {
                 findings.append(finding)?;
             }
             if count > 0 {
-                rebuilt = Some(rebuild_object_from_state(py, container, &redacted_state)?);
+                apply_object_state(py, &target, &redacted_state)?;
+                rebuilt = Some(target.into_any());
             }
         }
 
-        if let Some(serialized_state) = object_state.serialized_state {
+        if let Some(serialized_state) = object_state.serialized_state
+            && should_scan_serialized_state(
+                py,
+                container,
+                rebuild_state_for_gate.as_ref(),
+                &serialized_state,
+                has_rebuild_state,
+            )?
+        {
             let (count, redacted_state, child_findings) =
-                scan_container_inner(py, &serialized_state, config, seen)?;
+                scan_container_inner(py, &serialized_state, config, seen, memo)?;
             total += count;
             for finding in child_findings.iter() {
                 findings.append(finding)?;
             }
             if rebuilt.is_none() && count > 0 {
-                rebuilt = Some(rebuild_object_from_state(py, container, &redacted_state)?);
+                if redacted_state.get_type().is(container.get_type()) {
+                    rebuilt = Some(redacted_state.clone());
+                } else {
+                    rebuilt = Some(rebuild_object_from_state(py, container, &redacted_state)?);
+                }
             }
         }
 
         seen.remove(&object_id);
-        return Ok((
-            total,
-            rebuilt.unwrap_or_else(|| container.clone()),
-            findings,
-        ));
+        let result = rebuilt.unwrap_or_else(|| container.clone());
+        memo.remove(&object_id);
+        return Ok((total, result, findings));
     }
 
     seen.remove(&object_id);
     Ok((0, container.clone(), findings))
+}
+
+fn should_scan_serialized_state(
+    py: Python<'_>,
+    container: &Bound<'_, PyAny>,
+    rebuild_state: Option<&Bound<'_, PyAny>>,
+    serialized_state: &Bound<'_, PyAny>,
+    has_rebuild_state: bool,
+) -> PyResult<bool> {
+    if serialized_state.extract::<String>().is_ok()
+        || serialized_state.cast::<PyDict>().is_ok()
+        || serialized_state.cast::<PyList>().is_ok()
+        || serialized_state.cast::<PyTuple>().is_ok()
+    {
+        return Ok(true);
+    }
+
+    if !has_rebuild_state {
+        return Ok(!serialized_state.get_type().is(container.get_type()));
+    }
+
+    if !serialized_state.get_type().is(container.get_type()) {
+        return Ok(true);
+    }
+
+    let serialized_object_state = inspect_object_state(py, serialized_state)?;
+    let Some(serialized_rebuild_state) = serialized_object_state.rebuild_state.as_ref() else {
+        return Ok(false);
+    };
+    let Some(rebuild_state) = rebuild_state else {
+        return Ok(false);
+    };
+    Ok(!serialized_rebuild_state.as_any().eq(rebuild_state)?)
+}
+
+fn replace_placeholder_references(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    placeholder: &Bound<'_, PyAny>,
+    replacement: &Bound<'_, PyAny>,
+    seen: &mut HashSet<usize>,
+) -> PyResult<()> {
+    let object_id = value.as_ptr() as usize;
+    if !seen.insert(object_id) {
+        return Ok(());
+    }
+
+    if let Ok(dict) = value.cast::<PyDict>() {
+        let keys: Vec<Py<PyAny>> = dict.keys().iter().map(|key| key.unbind()).collect();
+        for key in keys {
+            let key = key.bind(py);
+            let item = dict.get_item(key)?.expect("key exists");
+            if item.is(placeholder) {
+                dict.set_item(key, replacement)?;
+            } else {
+                replace_placeholder_references(py, &item, placeholder, replacement, seen)?;
+            }
+        }
+        return Ok(());
+    }
+
+    if let Ok(list) = value.cast::<PyList>() {
+        for index in 0..list.len() {
+            let item = list.get_item(index)?;
+            if item.is(placeholder) {
+                list.set_item(index, replacement)?;
+            } else {
+                replace_placeholder_references(py, &item, placeholder, replacement, seen)?;
+            }
+        }
+        return Ok(());
+    }
+
+    if let Ok(tuple) = value.cast::<PyTuple>() {
+        for item in tuple.iter() {
+            replace_placeholder_references(py, &item, placeholder, replacement, seen)?;
+        }
+    }
+
+    Ok(())
 }
 
 pub fn scan_value(value: &Value, config: &SecretsDetectionConfig) -> (usize, Value, Vec<Finding>) {

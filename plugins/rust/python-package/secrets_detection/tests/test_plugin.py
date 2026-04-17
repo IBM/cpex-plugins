@@ -314,6 +314,247 @@ assert redacted.secret == "AWS_ACCESS_KEY_ID=[REDACTED]"
             capture_output=True,
             text=True,
             check=False,
+            timeout=5,
+        )
+
+        assert result.returncode == 0, result.stderr or result.stdout
+
+    def test_scan_container_redacts_cyclic_dict_without_leaking_original_back_edge(self):
+        payload = {}
+        payload["secret"] = "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+        payload["self"] = payload
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 1
+        assert len(findings) == 1
+        assert redacted["secret"] == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        assert redacted["self"] is redacted
+        assert redacted["self"]["secret"] == "AWS_ACCESS_KEY_ID=[REDACTED]"
+
+    def test_scan_container_redacts_self_referential_object_without_leaking_back_edge(self):
+        class SelfReferentialBox:
+            def __init__(self, secret):
+                self.secret = secret
+                self.self_ref = self
+
+        payload = SelfReferentialBox("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 1
+        assert len(findings) == 1
+        assert redacted is not payload
+        assert redacted.secret == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        assert redacted.self_ref is redacted
+        assert redacted.self_ref.secret == "AWS_ACCESS_KEY_ID=[REDACTED]"
+
+    def test_scan_container_redacts_tuple_cycle_without_leaking_original_back_edge(self):
+        back_edge = []
+        payload = ("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE", back_edge)
+        back_edge.append(payload)
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 1
+        assert len(findings) == 1
+        assert isinstance(redacted, tuple)
+        assert redacted[0] == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        assert redacted[1][0] is redacted
+        assert redacted[1][0][0] == "AWS_ACCESS_KEY_ID=[REDACTED]"
+
+    def test_scan_container_handles_recursive_model_dump_wrapper_without_crashing(self):
+        script = """
+from cpex_secrets_detection.secrets_detection_rust import py_scan_container
+
+class WrapperPayload:
+    def __init__(self, value):
+        self.value = value
+
+    def model_dump(self):
+        return WrapperPayload(self.value)
+
+count, redacted, findings = py_scan_container(
+    WrapperPayload("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"),
+    {"redact": True, "redaction_text": "[REDACTED]"},
+)
+assert count == 1
+assert len(findings) == 1
+assert redacted.value == "AWS_ACCESS_KEY_ID=[REDACTED]"
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+
+        assert result.returncode == 0, result.stderr or result.stdout
+
+    def test_scan_container_detects_secret_exposed_only_by_serialized_wrapper_object(self):
+        class View:
+            def __init__(self, secret):
+                self.secret = secret
+
+        class WrappedSerializerModel(BaseModel):
+            safe: str
+
+            @model_serializer(mode="plain")
+            def serialize_model(self):
+                return View("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")
+
+        payload = WrappedSerializerModel(safe="ok")
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 1
+        assert len(findings) == 1
+        assert isinstance(redacted, View)
+        assert redacted.secret == "AWS_ACCESS_KEY_ID=[REDACTED]"
+
+    def test_scan_container_redacts_self_referential_model_copy_object_without_leak(self):
+        class SelfReferentialModel(BaseModel):
+            secret: str
+            self_ref: "SelfReferentialModel | None" = None
+
+        payload = SelfReferentialModel(secret="AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")
+        object.__setattr__(payload, "self_ref", payload)
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 1
+        assert len(findings) == 1
+        assert redacted is not payload
+        assert isinstance(redacted, SelfReferentialModel)
+        assert redacted.secret == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        assert redacted.self_ref is redacted
+        assert redacted.self_ref.secret == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        assert payload.secret == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+        assert payload.self_ref is payload
+
+    def test_scan_container_does_not_call_model_copy_on_clean_object(self):
+        class CountingModel(BaseModel):
+            value: str
+            copies: int = 0
+
+            def model_copy(self, *, update=None, deep=False):
+                object.__setattr__(self, "copies", self.copies + 1)
+                return super().model_copy(update=update, deep=deep)
+
+        payload = CountingModel(value="clean")
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 0
+        assert findings == []
+        assert redacted is payload
+        assert payload.copies == 0
+
+    def test_scan_container_detects_secret_exposed_only_by_same_type_serialized_wrapper(self):
+        class SameTypeWrapper(BaseModel):
+            safe: str
+
+            @model_serializer(mode="plain")
+            def serialize_model(self):
+                return SameTypeWrapper.model_construct(
+                    safe="AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+                )
+
+        payload = SameTypeWrapper(safe="clean")
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 1
+        assert len(findings) == 1
+        assert isinstance(redacted, SameTypeWrapper)
+        assert redacted.safe == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        assert payload.safe == "clean"
+
+    def test_scan_container_redacts_same_type_serialized_wrapper_without_model_copy(self):
+        class Wrapper:
+            def __init__(self, value):
+                self.value = value
+
+            def model_dump(self):
+                return Wrapper("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")
+
+        payload = Wrapper("clean")
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 1
+        assert len(findings) == 1
+        assert isinstance(redacted, Wrapper)
+        assert redacted.value == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        assert payload.value == "clean"
+
+    def test_scan_container_handles_recursive_same_type_wrapper_without_rebuild_state(self):
+        script = """
+from cpex_secrets_detection.secrets_detection_rust import py_scan_container
+
+class Wrapper:
+    __slots__ = ()
+
+    def model_dump(self):
+        return Wrapper()
+
+count, redacted, findings = py_scan_container(
+    Wrapper(),
+    {"redact": True, "redaction_text": "[REDACTED]"},
+)
+assert count == 0
+assert findings == []
+assert isinstance(redacted, Wrapper)
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+
+        assert result.returncode == 0, result.stderr or result.stdout
+
+    def test_scan_container_handles_tuple_rewrite_with_cyclic_dict_subgraph(self):
+        script = """
+from cpex_secrets_detection.secrets_detection_rust import py_scan_container
+
+d = {}
+payload = ("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE", d)
+d["self"] = d
+
+count, redacted, findings = py_scan_container(
+    payload,
+    {"redact": True, "redaction_text": "[REDACTED]"},
+)
+assert count == 1
+assert redacted[0] == "AWS_ACCESS_KEY_ID=[REDACTED]"
+assert redacted[1]["self"] is redacted[1]
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
         )
 
         assert result.returncode == 0, result.stderr or result.stdout
