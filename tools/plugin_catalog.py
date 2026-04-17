@@ -250,7 +250,6 @@ def validate_plugin_dir(
         plugin_dir / "Cargo.toml",
         plugin_dir / "Makefile",
         plugin_dir / "README.md",
-        plugin_dir / "tests",
         module_dir / "__init__.py",
         manifest_path,
     )

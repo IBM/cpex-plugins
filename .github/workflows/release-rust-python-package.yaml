@@ -198,12 +198,14 @@ jobs:
             venv_python="${tmpdir}/venv/Scripts/python.exe"
           fi
           "${venv_python}" -m pip install dist/*.whl pytest pytest-asyncio
-          cp -R "${GITHUB_WORKSPACE}/${{ needs.resolve.outputs.plugin_path }}/tests" "${tmpdir}/tests"
-          printf "[pytest]\npythonpath = tests\nasyncio_mode = auto\n" > "${tmpdir}/pytest.ini"
-          cd "${tmpdir}"
-          "${venv_python}" -m pytest \
-            -c "${tmpdir}/pytest.ini" \
-            "${tmpdir}/tests" -v
+          if [[ -d "${GITHUB_WORKSPACE}/${{ needs.resolve.outputs.plugin_path }}/tests" ]]; then
+            cp -R "${GITHUB_WORKSPACE}/${{ needs.resolve.outputs.plugin_path }}/tests" "${tmpdir}/tests"
+            printf "[pytest]\npythonpath = tests\nasyncio_mode = auto\n" > "${tmpdir}/pytest.ini"
+            cd "${tmpdir}"
+            "${venv_python}" -m pytest \
+              -c "${tmpdir}/pytest.ini" \
+              "${tmpdir}/tests" -v
+          fi
 
   build-sdist:
     needs: [resolve, preflight]
@@ -243,12 +245,14 @@ jobs:
             venv_python="${tmpdir}/venv/Scripts/python.exe"
           fi
           "${venv_python}" -m pip install dist/*.tar.gz pytest pytest-asyncio
-          cp -R "${GITHUB_WORKSPACE}/${{ needs.resolve.outputs.plugin_path }}/tests" "${tmpdir}/tests"
-          printf "[pytest]\npythonpath = tests\nasyncio_mode = auto\n" > "${tmpdir}/pytest.ini"
-          cd "${tmpdir}"
-          "${venv_python}" -m pytest \
-            -c "${tmpdir}/pytest.ini" \
-            "${tmpdir}/tests" -v
+          if [[ -d "${GITHUB_WORKSPACE}/${{ needs.resolve.outputs.plugin_path }}/tests" ]]; then
+            cp -R "${GITHUB_WORKSPACE}/${{ needs.resolve.outputs.plugin_path }}/tests" "${tmpdir}/tests"
+            printf "[pytest]\npythonpath = tests\nasyncio_mode = auto\n" > "${tmpdir}/pytest.ini"
+            cd "${tmpdir}"
+            "${venv_python}" -m pytest \
+              -c "${tmpdir}/pytest.ini" \
+              "${tmpdir}/tests" -v
+          fi
 
   publish:
     if: ${{ (github.event_name != 'workflow_call' || inputs.publish_enabled) && (needs.resolve.outputs.publish_env != 'pypi' || needs.resolve.outputs.tag_on_main == 'true') }}

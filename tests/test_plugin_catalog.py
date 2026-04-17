@@ -60,7 +60,6 @@ class PluginCatalogTests(unittest.TestCase):
         manifest_kind = f"cpex_{slug}.{slug}.{class_name}"
         entry_point_kind = f"cpex_{slug}.{slug}:{class_name}"
         package_dir.mkdir(parents=True)
-        (plugin_dir / "tests").mkdir()
         (plugin_dir / "pyproject.toml").write_text(
             (
                 f"[project]\nname = \"cpex-{slug.replace('_', '-')}\"\ndynamic = [\"version\"]\n\n"
@@ -1592,7 +1591,14 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("shell: bash", workflow)
         self.assertIn("rustc --version", workflow)
         self.assertIn("working-directory: ${{ needs.resolve.outputs.plugin_path }}", workflow)
-        self.assertIn('cp -R "${GITHUB_WORKSPACE}/${{ needs.resolve.outputs.plugin_path }}/tests"', workflow)
+        self.assertIn(
+            'if [[ -d "${GITHUB_WORKSPACE}/${{ needs.resolve.outputs.plugin_path }}/tests" ]]; then',
+            workflow,
+        )
+        self.assertIn(
+            'cp -R "${GITHUB_WORKSPACE}/${{ needs.resolve.outputs.plugin_path }}/tests"',
+            workflow,
+        )
         self.assertIn('cd "${tmpdir}"', workflow)
         self.assertIn('printf "[pytest]\\npythonpath = tests\\nasyncio_mode = auto\\n" > "${tmpdir}/pytest.ini"', workflow)
         self.assertNotIn('PYTHONPATH="${GITHUB_WORKSPACE}/${{ needs.resolve.outputs.plugin_path }}/tests"', workflow)
