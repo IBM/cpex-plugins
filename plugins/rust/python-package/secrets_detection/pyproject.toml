@@ -23,11 +23,6 @@ module-name = "cpex_secrets_detection.secrets_detection_rust"
 python-source = "."
 features = ["pyo3/extension-module"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["tests"]
-asyncio_mode = "auto"
-
 [dependency-groups]
 dev = [
     "mcp-contextforge-gateway @ git+https://github.com/IBM/mcp-context-forge.git@v1.0.0-RC-3",
