@@ -4,6 +4,7 @@ import ast
 import subprocess
 import tempfile
 import textwrap
+import tomllib
 import unittest
 from pathlib import Path
 import re
@@ -171,6 +172,90 @@ class PluginCatalogTests(unittest.TestCase):
     def test_repo_validates_managed_plugins_layout(self) -> None:
         result = run_catalog("validate", str(REPO_ROOT))
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_repo_centralizes_shared_cargo_dependencies(self) -> None:
+        cargo = tomllib.loads((REPO_ROOT / "Cargo.toml").read_text())
+        workspace_deps = cargo["workspace"]["dependencies"]
+
+        self.assertEqual(
+            workspace_deps["cpex_framework_bridge"],
+            {"path": "crates/framework_bridge"},
+        )
+        self.assertEqual(
+            workspace_deps["criterion"],
+            {"version": "0.8", "features": ["html_reports"]},
+        )
+        self.assertEqual(workspace_deps["regex"], "1.12")
+        self.assertEqual(workspace_deps["serde_json"], "1.0")
+
+        expected_plugin_deps = {
+            "encoded_exfil_detection": {
+                "dependencies": {
+                    "cpex_framework_bridge": {"workspace": True},
+                    "regex": {"workspace": True},
+                    "serde_json": {"workspace": True},
+                },
+                "dev-dependencies": {
+                    "criterion": {"workspace": True},
+                },
+            },
+            "pii_filter": {
+                "dependencies": {
+                    "cpex_framework_bridge": {"workspace": True},
+                    "regex": {"workspace": True},
+                    "serde_json": {"workspace": True},
+                },
+                "dev-dependencies": {
+                    "criterion": {"workspace": True},
+                },
+            },
+            "rate_limiter": {
+                "dependencies": {
+                    "cpex_framework_bridge": {"workspace": True},
+                },
+                "dev-dependencies": {
+                    "criterion": {"workspace": True},
+                },
+            },
+            "retry_with_backoff": {
+                "dependencies": {},
+                "dev-dependencies": {},
+            },
+            "secrets_detection": {
+                "dependencies": {
+                    "cpex_framework_bridge": {"workspace": True},
+                    "regex": {"workspace": True},
+                },
+                "dev-dependencies": {
+                    "criterion": {"workspace": True},
+                },
+            },
+            "url_reputation": {
+                "dependencies": {},
+                "dev-dependencies": {},
+            },
+        }
+
+        for slug, expected_sections in expected_plugin_deps.items():
+            plugin_cargo = tomllib.loads(
+                (
+                    REPO_ROOT
+                    / "plugins"
+                    / "rust"
+                    / "python-package"
+                    / slug
+                    / "Cargo.toml"
+                ).read_text()
+            )
+            for section_name, expected_deps in expected_sections.items():
+                actual_section = plugin_cargo.get(section_name, {})
+                self.assertIsInstance(actual_section, dict)
+                for dependency_name, expected_value in expected_deps.items():
+                    self.assertEqual(
+                        actual_section.get(dependency_name),
+                        expected_value,
+                        f"{slug} should source {dependency_name} from workspace {section_name}",
+                    )
 
     def test_repo_lists_all_managed_plugins(self) -> None:
         result = run_catalog("list", str(REPO_ROOT))

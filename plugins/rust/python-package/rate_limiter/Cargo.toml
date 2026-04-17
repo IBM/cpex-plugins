@@ -16,7 +16,7 @@ name = "stub_gen"
 path = "src/bin/stub_gen.rs"
 
 [dependencies]
-cpex_framework_bridge = { path = "../../../../crates/framework_bridge" }
+cpex_framework_bridge = { workspace = true }
 log = { workspace = true }
 pyo3 = { workspace = true }
 pyo3-async-runtimes = { workspace = true }
@@ -28,7 +28,7 @@ redis = { version = "0.27", features = ["aio", "tokio-comp"] }
 tokio = { workspace = true }
 
 [dev-dependencies]
-criterion = { version = "0.8", features = ["html_reports"] }
+criterion = { workspace = true }
 
 [[bench]]
 name = "rate_limiter"

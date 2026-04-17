@@ -33,6 +33,38 @@ ENTRY_POINT_PATTERN = re.compile(
 MANIFEST_KIND_PATTERN = re.compile(
     r"^(?P<module>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\.(?P<object>[A-Za-z_][A-Za-z0-9_]*)$"
 )
+REQUIRED_WORKSPACE_DEPENDENCIES = {
+    "cpex_framework_bridge": {"path": "crates/framework_bridge"},
+    "criterion": {"version": "0.8", "features": ["html_reports"]},
+    "regex": "1.12",
+    "serde_json": "1.0",
+}
+REQUIRED_PLUGIN_WORKSPACE_DEPENDENCIES = {
+    "encoded_exfil_detection": {
+        "dependencies": ("cpex_framework_bridge", "regex", "serde_json"),
+        "dev-dependencies": ("criterion",),
+    },
+    "pii_filter": {
+        "dependencies": ("cpex_framework_bridge", "regex", "serde_json"),
+        "dev-dependencies": ("criterion",),
+    },
+    "rate_limiter": {
+        "dependencies": ("cpex_framework_bridge",),
+        "dev-dependencies": ("criterion",),
+    },
+    "retry_with_backoff": {
+        "dependencies": (),
+        "dev-dependencies": (),
+    },
+    "secrets_detection": {
+        "dependencies": ("cpex_framework_bridge", "regex"),
+        "dev-dependencies": ("criterion",),
+    },
+    "url_reputation": {
+        "dependencies": (),
+        "dev-dependencies": (),
+    },
+}
 
 
 class CatalogError(Exception):
@@ -187,6 +219,7 @@ def discover_plugins(root: Path) -> list[PluginRecord]:
             validate_plugin_dir(root, plugin_dir, workspace_members, workspace_package)
         )
     _validate_workspace_members(workspace_members, plugins)
+    _validate_workspace_dependency_ownership(root, plugins)
     return plugins
 
 
@@ -229,6 +262,43 @@ def _workspace_package_metadata(root: Path) -> dict:
     if not isinstance(package, dict):
         raise CatalogError("Workspace Cargo.toml must define [workspace.package] metadata")
     return package
+
+
+def _validate_workspace_dependency_ownership(
+    root: Path, plugins: list[PluginRecord]
+) -> None:
+    plugin_records = {plugin.slug: plugin for plugin in plugins}
+    if set(plugin_records) != set(REQUIRED_PLUGIN_WORKSPACE_DEPENDENCIES):
+        return
+
+    cargo = _parse_cargo(root / "Cargo.toml")
+    workspace = cargo.get("workspace", {})
+    if not isinstance(workspace, dict):
+        raise CatalogError("Workspace Cargo.toml must define [workspace] metadata as a table")
+    workspace_dependencies = workspace.get("dependencies")
+    if not isinstance(workspace_dependencies, dict):
+        raise CatalogError("Workspace Cargo.toml must define [workspace.dependencies]")
+
+    for dependency_name, expected_value in REQUIRED_WORKSPACE_DEPENDENCIES.items():
+        actual_value = workspace_dependencies.get(dependency_name)
+        if actual_value != expected_value:
+            raise CatalogError(
+                f"Workspace dependency {dependency_name!r} must be declared as {expected_value!r}, got {actual_value!r}"
+            )
+
+    for slug, section_requirements in REQUIRED_PLUGIN_WORKSPACE_DEPENDENCIES.items():
+        plugin = plugin_records[slug]
+        cargo_path = root / plugin.path / "Cargo.toml"
+        plugin_cargo = _parse_cargo(cargo_path)
+        for section_name, dependency_names in section_requirements.items():
+            section = plugin_cargo.get(section_name, {})
+            if not isinstance(section, dict):
+                raise CatalogError(f"{cargo_path}: [{section_name}] must be a table")
+            for dependency_name in dependency_names:
+                if section.get(dependency_name) != {"workspace": True}:
+                    raise CatalogError(
+                        f"{cargo_path}: {section_name}.{dependency_name} must use workspace = true"
+                    )
 
 
 def validate_plugin_dir(
