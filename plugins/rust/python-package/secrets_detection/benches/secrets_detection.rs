@@ -1,6 +1,6 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use secrets_detection_rust::config::SecretsDetectionConfig;
-use secrets_detection_rust::scanner::detect_and_redact;
+use secrets_detection_rust::detect_and_redact;
 
 fn bench_detect_and_redact(c: &mut Criterion) {
     let config = SecretsDetectionConfig {

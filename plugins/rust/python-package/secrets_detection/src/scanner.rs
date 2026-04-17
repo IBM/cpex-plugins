@@ -1,8 +1,10 @@
 // Copyright 2026
 // SPDX-License-Identifier: Apache-2.0
 
+#[cfg(test)]
 use serde_json::{Map, Value};
 
+#[cfg(test)]
 use crate::config::SecretsDetectionConfig;
 
 mod cycle_rewrite;
@@ -10,9 +12,13 @@ mod python_scan;
 mod text_scan;
 
 pub use python_scan::scan_container;
-pub use text_scan::{Finding, detect_and_redact};
+pub use text_scan::detect_and_redact;
 
-pub fn scan_value(value: &Value, config: &SecretsDetectionConfig) -> (usize, Value, Vec<Finding>) {
+#[cfg(test)]
+use text_scan::Finding;
+
+#[cfg(test)]
+fn scan_value(value: &Value, config: &SecretsDetectionConfig) -> (usize, Value, Vec<Finding>) {
     match value {
         Value::String(text) => {
             let (matches, redacted) = detect_and_redact(text, config);

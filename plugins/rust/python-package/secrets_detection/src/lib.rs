@@ -14,7 +14,7 @@ pub mod config;
 pub mod object_model;
 pub mod patterns;
 pub mod plugin;
-pub mod scanner;
+mod scanner;
 
 pub use config::SecretsDetectionConfig;
 pub use scanner::{detect_and_redact, scan_container};

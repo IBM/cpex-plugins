@@ -1870,6 +1870,31 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("make ci", makefile)
         self.assertNotIn("make install && make test-all", makefile)
 
+    def test_secrets_detection_keeps_scanner_module_internal(self) -> None:
+        lib_rs = (
+            REPO_ROOT
+            / "plugins"
+            / "rust"
+            / "python-package"
+            / "secrets_detection"
+            / "src"
+            / "lib.rs"
+        ).read_text()
+        bench_rs = (
+            REPO_ROOT
+            / "plugins"
+            / "rust"
+            / "python-package"
+            / "secrets_detection"
+            / "benches"
+            / "secrets_detection.rs"
+        ).read_text()
+        self.assertIn("mod scanner;", lib_rs)
+        self.assertNotIn("pub mod scanner;", lib_rs)
+        self.assertIn("pub use scanner::{detect_and_redact, scan_container};", lib_rs)
+        self.assertIn("use secrets_detection_rust::detect_and_redact;", bench_rs)
+        self.assertNotIn("use secrets_detection_rust::scanner::detect_and_redact;", bench_rs)
+
 
 if __name__ == "__main__":
     unittest.main()
