@@ -27,6 +27,7 @@ class PluginConfig:
     name: str = ""
     kind: str = ""
     hooks: list[Any] = field(default_factory=list)
+    mode: str = "enforce"
     config: dict[str, Any] | None = None
 
 

@@ -33,6 +33,9 @@ features = ["pyo3/extension-module"]
 testpaths = ["tests"]
 pythonpath = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "integration: end-to-end tests exercising the full plugin pipeline",
+]
 
 [dependency-groups]
 dev = [

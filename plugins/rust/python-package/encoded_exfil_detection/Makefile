@@ -29,8 +29,9 @@ clippy:
 # help: sync                  - Install plugin development dependencies
 # help: test                  - Run Rust unit tests
 # help: test-python           - Run Python plugin tests
+# help: test-integration      - Run integration tests only
 # help: test-all              - Run both Rust and Python tests
-.PHONY: sync test test-python test-all verify-stubs
+.PHONY: sync test test-python test-integration test-all verify-stubs
 
 sync:
 	uv sync --dev
@@ -42,6 +43,10 @@ test:
 test-python:
 	@echo "$(GREEN)Running Python tests...$(NC)"
 	uv run pytest tests/ -v
+
+test-integration:
+	@echo "$(GREEN)Running integration tests...$(NC)"
+	uv run pytest tests/integration/ -v
 
 test-all: test test-python
 
