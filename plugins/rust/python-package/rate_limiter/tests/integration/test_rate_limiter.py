@@ -1,18 +1,23 @@
 # -*- coding: utf-8 -*-
 """Integration tests for rate limiter plugin.
 
-Tests verify:
+Tests verify PLUGIN behaviour:
 1. Rate limit enforcement via plugin hooks
 2. HTTP 429 status code on limit exceeded
 3. Retry-After and X-RateLimit-* headers
 4. Multi-dimensional rate limiting (user, tenant, tool)
 5. Window reset behavior
 6. Plugin configuration from config file
-7. Mode enforcement via PluginExecutor (permissive vs enforce vs disabled)
-8. Redis backend correctness (optional — auto-skips without Docker/Redis)
+7. Redis backend correctness (optional — auto-skips without Docker/Redis)
 
-Note: This tests the PLUGIN directly — no MCP gateway is required.  The plugin
-framework imports are satisfied by the mcpgateway_mock package (see conftest.py).
+Out of scope here: executor-side dispatch (PERMISSIVE / ENFORCE / DISABLED
+mode handling).  Those live in mc-c-f's tests/unit/mcpgateway/plugins/
+framework/test_manager_*.py, where they are exercised against the real
+PluginExecutor with inline trivial plugins.
+
+Note: these tests drive the PLUGIN directly — no MCP gateway is required.
+The plugin's `from mcpgateway.plugins.framework import ...` resolves
+through the mcpgateway_mock package (see conftest.py).
 """
 
 # Standard
@@ -28,13 +33,8 @@ import pytest
 # First-Party (mcpgateway framework surface, satisfied by mcpgateway_mock)
 from mcpgateway_mock.plugins.framework import (
     GlobalContext,
-    HookRef,
     PluginConfig,
     PluginContext,
-    PluginExecutor,
-    PluginMode,
-    PluginRef,
-    PluginViolationError,
     PromptPrehookPayload,
     ToolPreInvokePayload,
 )
@@ -626,133 +626,19 @@ class TestCrossHookSharing:
         assert result.violation is not None, "Tenant limit must be enforced across both users and both hooks"
 
 
-class TestPermissiveMode:
-    """Permissive mode logs violations but never blocks requests.
-
-    Mode enforcement is handled by PluginExecutor.execute_plugin(), not the
-    plugin itself. These tests go through PluginExecutor to exercise that path.
-    """
-
-    def _make_plugin_and_hook(self, limit: str) -> tuple:
-        config = PluginConfig(
-            name="RateLimiter",
-            kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
-            hooks=["tool_pre_invoke"],
-            priority=100,
-            mode=PluginMode.PERMISSIVE,
-            config={"by_user": limit},
-        )
-        plugin = RateLimiterPlugin(config)
-        hook_ref = HookRef("tool_pre_invoke", PluginRef(plugin))
-        executor = PluginExecutor(timeout=5)
-        return plugin, hook_ref, executor
-
-    @pytest.mark.asyncio
-    async def test_permissive_mode_does_not_raise_on_violation(self):
-        """PluginExecutor must not raise PluginViolationError in permissive mode."""
-        plugin, hook_ref, executor = self._make_plugin_and_hook("1/s")
-        ctx = PluginContext(global_context=GlobalContext(request_id="r1", user="alice"))
-        payload = ToolPreInvokePayload(name="tool", arguments={})
-
-        await executor.execute_plugin(hook_ref, payload, ctx, violations_as_exceptions=True)
-
-        try:
-            result = await executor.execute_plugin(hook_ref, payload, ctx, violations_as_exceptions=True)
-        except PluginViolationError:
-            pytest.fail("PluginViolationError raised in permissive mode — should be suppressed by executor")
-
-        # Violation info is surfaced for observability but request is not blocked
-        assert result.violation is not None
-        assert result.violation.http_status_code == 429
-
-    @pytest.mark.asyncio
-    async def test_permissive_mode_still_tracks_counters(self):
-        """Permissive mode must still increment the counter — after exhausting the
-        limit, the next call surfaces a violation even though execution continues."""
-        plugin, hook_ref, executor = self._make_plugin_and_hook("2/s")
-        ctx = PluginContext(global_context=GlobalContext(request_id="r1", user="alice"))
-        payload = ToolPreInvokePayload(name="tool", arguments={})
-
-        # Consume the quota — permissive never raises
-        r1 = await executor.execute_plugin(hook_ref, payload, ctx, violations_as_exceptions=True)
-        r2 = await executor.execute_plugin(hook_ref, payload, ctx, violations_as_exceptions=True)
-        assert r1.violation is None and r2.violation is None
-
-        # Third call: counter would be exhausted if tracking happened.
-        # Permissive still doesn't raise — but the result must carry a violation.
-        r3 = await executor.execute_plugin(hook_ref, payload, ctx, violations_as_exceptions=True)
-        assert r3.violation is not None, "Permissive mode must still increment the counter"
-        assert r3.violation.http_status_code == 429
-
-    @pytest.mark.asyncio
-    async def test_permissive_mode_contrast_with_enforce(self):
-        """Enforce mode raises PluginViolationError; permissive mode does not."""
-        enforce_config = PluginConfig(
-            name="RateLimiter",
-            kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
-            hooks=["tool_pre_invoke"],
-            config={"by_user": "1/s"},
-            mode=PluginMode.ENFORCE,
-        )
-        enforce_plugin = RateLimiterPlugin(enforce_config)
-        enforce_ref = HookRef("tool_pre_invoke", PluginRef(enforce_plugin))
-        ctx = PluginContext(global_context=GlobalContext(request_id="r1", user="alice"))
-        payload = ToolPreInvokePayload(name="tool", arguments={})
-        executor = PluginExecutor(timeout=5)
-
-        await executor.execute_plugin(enforce_ref, payload, ctx, violations_as_exceptions=True)
-
-        with pytest.raises(PluginViolationError):
-            await executor.execute_plugin(enforce_ref, payload, ctx, violations_as_exceptions=True)
-
-
-class TestDisabledMode:
-    """Disabled mode — PluginExecutor.execute() skips the plugin entirely.
-
-    The disabled check lives in execute() (batch), not execute_plugin() (single),
-    so tests must go through execute() with a list of hook_refs.
-    """
-
-    def _make_plugin_and_refs(self) -> tuple:
-        config = PluginConfig(
-            name="RateLimiter",
-            kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
-            hooks=["tool_pre_invoke"],
-            priority=100,
-            mode=PluginMode.DISABLED,
-            config={"by_user": "1/s"},
-        )
-        plugin = RateLimiterPlugin(config)
-        hook_ref = HookRef("tool_pre_invoke", PluginRef(plugin))
-        executor = PluginExecutor(timeout=5)
-        return plugin, [hook_ref], executor
-
-    @pytest.mark.asyncio
-    async def test_disabled_mode_never_blocks(self):
-        """execute() skips a disabled plugin — no violation ever returned."""
-        plugin, hook_refs, executor = self._make_plugin_and_refs()
-        global_ctx = GlobalContext(request_id="r1", user="alice")
-        payload = ToolPreInvokePayload(name="tool", arguments={})
-
-        for _ in range(10):
-            result, _ = await executor.execute(hook_refs, payload, global_ctx, "tool_pre_invoke", violations_as_exceptions=True)
-            assert result.violation is None, "Disabled plugin must never produce a violation"
-
-    def test_disabled_plugin_mode_property(self):
-        """Plugin mode property reflects the configured disabled mode."""
-        plugin, _, _ = self._make_plugin_and_refs()
-        assert plugin.mode == PluginMode.DISABLED
-
-
 class TestTenantIsolation:
-    """Tenant isolation tests reflecting the real production GlobalContext path.
+    """Tenant isolation tests across the GlobalContext shapes the plugin may
+    receive from a gateway.
 
-    In production (mcpgateway/auth.py):
-      - global_context.tenant_id is always None (not derived from JWT teams)
-      - global_context.user is set as a dict {"email": ..., "is_admin": ..., "full_name": ...}
+    Two input shapes are covered:
+      - ``global_context.user`` as a ``dict`` (``{"email": ..., "is_admin":
+        ..., "full_name": ...}``) vs as a plain ``str`` username.
+      - ``global_context.tenant_id`` explicitly set vs ``None``.
 
-    These tests document the actual behaviour of the rate limiter under those
-    conditions so that regressions are caught if the production path changes.
+    These tests document the plugin's behaviour under each combination so
+    regressions are caught if bucket keying changes.  They do not attempt to
+    pin down which combination the gateway produces today — that is the
+    gateway's concern and is covered by gateway-side tests in mc-c-f.
     """
 
     @pytest.fixture
@@ -768,11 +654,12 @@ class TestTenantIsolation:
 
     @pytest.mark.asyncio
     async def test_user_dict_identity_is_rate_limited_independently(self, plugin):
-        """When user is a dict (production path), each distinct dict is a separate bucket.
+        """When user is a dict, each distinct dict is a separate bucket.
 
-        In production global_context.user = {"email": "alice@...", "is_admin": False, ...}.
-        The rate limiter uses this dict as the key via str(dict), so two users with
-        different email addresses must have independent per-user counters.
+        A gateway may pass ``global_context.user`` as a dict such as
+        ``{"email": "alice@...", "is_admin": False, ...}``.  The rate limiter
+        keys on ``str(user)``, so two distinct dicts must yield independent
+        per-user counters.
         """
         alice_dict = {"email": "alice@example.com", "is_admin": False, "full_name": "Alice"}
         bob_dict = {"email": "bob@example.com", "is_admin": False, "full_name": "Bob"}
@@ -831,18 +718,17 @@ class TestTenantIsolation:
         assert alice_allowed.violation is None, "Authenticated user must have a separate bucket from anonymous"
 
     # ------------------------------------------------------------------
-    # P0: desired behavior after the tenant_id propagation fix
+    # by_tenant behaviour when tenant_id is absent
     # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
     async def test_none_tenant_id_skips_by_tenant_entirely(self):
         """When tenant_id is None, by_tenant must be skipped — not enforced against a shared 'default' bucket.
 
-        Production path (mcpgateway/auth.py) always sets tenant_id=None.  Bucketing
-        every request into 'tenant:default' creates a global shared limit that
-        cross-throttles unrelated users — worse than no tenant limiting at all.
-
-        Expected behavior after fix: by_tenant is a no-op when tenant_id is absent.
+        Rationale: bucketing every tenant-less request into a single
+        'tenant:default' bucket would cross-throttle unrelated users — worse
+        than having no tenant limiting at all.  The plugin must treat
+        tenant_id=None as "no tenant dimension configured for this request".
         Uses a high by_user limit so only by_tenant could trigger a block.
         """
         config = PluginConfig(
