@@ -1020,6 +1020,36 @@ def _redis_port_open(host: str = "127.0.0.1", port: int = 6379, timeout: float =
         return False
 
 
+def _redis_responds_to_ping(host: str = "127.0.0.1", port: int = 6379, timeout: float = 0.5) -> bool:
+    """Return True if Redis responds PONG to a PING.
+
+    The Docker Redis container opens its TCP port before the server is
+    ready to serve commands; waiting only on the port can race the first
+    test.  Driving an end-to-end PING confirms readiness.
+    """
+    try:
+        # Third-Party
+        import redis as _redis_sync  # noqa: PLC0415 — same wheel as redis.asyncio
+    except Exception:
+        return False
+    try:
+        client = _redis_sync.Redis(
+            host=host,
+            port=port,
+            socket_connect_timeout=timeout,
+            socket_timeout=timeout,
+        )
+        try:
+            return bool(client.ping())
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
+    except Exception:
+        return False
+
+
 @pytest.fixture(scope="module")
 def redis_url_for_integration():
     """Yield a Redis URL pointing at a real Redis instance.
@@ -1050,14 +1080,18 @@ def redis_url_for_integration():
         except Exception as exc:
             pytest.skip(f"Redis unavailable and docker start failed: {exc}")
 
+        # Wait for both TCP and a successful PING.  Redis can accept TCP
+        # connections before it is ready to serve commands; without the
+        # PING check the first Redis-backed test races the server warmup
+        # on slower runners and fails with ConnectionError.
         for _ in range(50):
-            if _redis_port_open(host, port):
+            if _redis_port_open(host, port) and _redis_responds_to_ping(host, port):
                 break
             time.sleep(0.1)
         else:
             if container_id:
                 subprocess.run(["docker", "stop", container_id], check=False)
-            pytest.skip("Redis did not start in time")
+            pytest.skip("Redis did not become ready in time")
 
     yield f"redis://{host}:{port}/15"  # DB 15 — isolated from other data
 
