@@ -17,6 +17,7 @@ framework imports are satisfied by the mcpgateway_mock package (see conftest.py)
 
 # Standard
 import asyncio
+import os
 import socket
 import subprocess
 import time
@@ -1050,13 +1051,32 @@ def _redis_responds_to_ping(host: str = "127.0.0.1", port: int = 6379, timeout: 
         return False
 
 
+# Port constants.  The test container is bound to a non-standard host port so
+# it never collides with — or silently reuses — a developer's local Redis on
+# the default 6379.  Reusing localhost:6379 requires explicit opt-in via the
+# ALLOW_LOCAL_REDIS=1 environment variable AND a successful PING.
+_TEST_REDIS_HOST = "127.0.0.1"
+_TEST_REDIS_CONTAINER_PORT = 16379
+_LOCAL_REDIS_PORT = 6379
+
+
 @pytest.fixture(scope="module")
 def redis_url_for_integration():
-    """Yield a Redis URL pointing at a real Redis instance.
+    """Yield a Redis URL pointing at a real, hermetically verified Redis.
 
-    Tries localhost:6379 first.  If not reachable, attempts to start a
-    temporary Docker container.  Skips the test module if neither works.
-    Container is stopped automatically after all tests in the module finish.
+    Default behaviour: start a dedicated Docker container bound to host port
+    16379 so the test suite never touches any Redis already running on the
+    standard 6379 port.  A successful PING is required before the URL is
+    yielded — the TCP port alone is not enough, since Redis accepts
+    connections before it can serve commands.
+
+    Opt-in reuse: if ``ALLOW_LOCAL_REDIS=1`` is set in the environment, the
+    fixture will prefer an existing Redis on 127.0.0.1:6379, but only after
+    a successful PING.  This avoids mistakenly FLUSHDB-ing a non-Redis
+    listener, an auth-protected Redis, or a developer's real data.
+    Flushing still targets DB 15 only.
+
+    Skips the test module if neither path can produce a responsive Redis.
     """
     try:
         # Third-Party
@@ -1064,34 +1084,42 @@ def redis_url_for_integration():
     except Exception:
         pytest.skip("redis.asyncio package not installed")
 
-    host, port = "127.0.0.1", 6379
+    # Opt-in: reuse whatever Redis the developer has on the standard port,
+    # but only if it answers PING.  Keeps CI and unsuspecting developers
+    # safe by default; hands control to developers who want the speed of
+    # skipping the docker spawn.
+    if os.environ.get("ALLOW_LOCAL_REDIS") == "1":
+        if _redis_port_open(_TEST_REDIS_HOST, _LOCAL_REDIS_PORT) and _redis_responds_to_ping(_TEST_REDIS_HOST, _LOCAL_REDIS_PORT):
+            yield f"redis://{_TEST_REDIS_HOST}:{_LOCAL_REDIS_PORT}/15"  # DB 15 — isolated
+            return
+
+    # Default path: spawn a test-owned container on a dedicated host port.
+    host, port = _TEST_REDIS_HOST, _TEST_REDIS_CONTAINER_PORT
     container_id = None
+    try:
+        res = subprocess.run(
+            ["docker", "run", "-d", "--rm", "-p", f"{port}:6379", "--name", "pytest-rl-redis-integ", "redis:7"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        container_id = res.stdout.strip()
+    except Exception as exc:
+        pytest.skip(f"Docker unavailable for Redis container: {exc}")
 
-    if not _redis_port_open(host, port):
-        try:
-            res = subprocess.run(
-                ["docker", "run", "-d", "--rm", "-p", f"{port}:6379", "--name", "pytest-rl-redis-integ", "redis:7"],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            container_id = res.stdout.strip()
-        except Exception as exc:
-            pytest.skip(f"Redis unavailable and docker start failed: {exc}")
-
-        # Wait for both TCP and a successful PING.  Redis can accept TCP
-        # connections before it is ready to serve commands; without the
-        # PING check the first Redis-backed test races the server warmup
-        # on slower runners and fails with ConnectionError.
-        for _ in range(50):
-            if _redis_port_open(host, port) and _redis_responds_to_ping(host, port):
-                break
-            time.sleep(0.1)
-        else:
-            if container_id:
-                subprocess.run(["docker", "stop", container_id], check=False)
-            pytest.skip("Redis did not become ready in time")
+    # Wait for both TCP and a successful PING.  Redis can accept TCP
+    # connections before it is ready to serve commands; without the PING
+    # check the first Redis-backed test races the server warmup on slower
+    # runners and fails with ConnectionError.
+    for _ in range(50):
+        if _redis_port_open(host, port) and _redis_responds_to_ping(host, port):
+            break
+        time.sleep(0.1)
+    else:
+        if container_id:
+            subprocess.run(["docker", "stop", container_id], check=False)
+        pytest.skip("Redis did not become ready in time")
 
     yield f"redis://{host}:{port}/15"  # DB 15 — isolated from other data
 
@@ -1193,15 +1221,33 @@ class TestRedisBackendIntegration:
         assert result.violation is None, "After the rate window expires, Redis TTL must reset counters and allow fresh requests"
 
     @pytest.mark.asyncio
-    async def test_redis_fallback_to_memory_on_unavailable_redis(self):
-        """Plugin with an unreachable Redis URL falls back to memory backend without crashing."""
+    async def test_unreachable_redis_fails_open(self):
+        """Plugin fails open when Redis is unreachable — requests are allowed
+        through without rate-limiting.  This is the plugin's documented
+        design (README: "an infrastructure failure must never block
+        legitimate traffic"), not a memory-backend fallback.
+
+        We drive the number of calls past the configured limit so a
+        regression that switched the plugin to fail-closed (blocking on
+        backend errors) would surface as a violation on calls 4+.
+
+        Limitation worth naming: the plugin's hook wrapper catches all
+        exceptions and returns a blank success result, so this test can't
+        distinguish "engine correctly fails open" from "engine crashed and
+        the wrapper swallowed it".  The useful signal the assertions carry
+        is the absence of a violation under sustained traffic — enough to
+        catch a fail-closed regression, not enough to verify the error path.
+        """
         plugin = _make_redis_plugin("redis://127.0.0.1:19999/0", limit="3/s")
         ctx = PluginContext(global_context=GlobalContext(request_id="r1", user="alice"))
         payload = ToolPreInvokePayload(name="tool", arguments={})
 
-        # Must not raise — fallback to memory backend should handle the request
-        result = await plugin.tool_pre_invoke(payload, ctx)
-        assert result.violation is None, "Plugin must fall back to memory backend when Redis is unavailable — must not crash"
+        # Five calls — two above the configured 3/s limit.  Fail-open means
+        # none of them are blocked; none of them raise.
+        for i in range(5):
+            result = await plugin.tool_pre_invoke(payload, ctx)
+            assert result.violation is None, f"Request {i + 1}: plugin must fail open when Redis is unavailable"
+            assert result.continue_processing is not False
 
     # ------------------------------------------------------------------
     # sliding_window on real Redis

@@ -75,21 +75,29 @@ class TestEncodedExfilIntegration:
         assert "examples" in result.violation.details
         assert result.violation.details.get("request_id") == "e2e-block-test"
 
-    async def test_plugin_coexists_with_other_plugins(self):
-        """Multiple plugin instances should not interfere with each other."""
+    async def test_plugin_instances_have_independent_state(self):
+        """Two plugin instances with different configs must not share hidden state.
+
+        This does NOT model gateway chain ordering — in production an ENFORCE
+        plugin returning continue_processing=False would short-circuit later
+        plugins.  What this test verifies is that one instance's configuration
+        or internal state (caches, counters, module-level singletons) does not
+        leak into another instance constructed with different config.
+        """
         plugin1 = _make_plugin({"block_on_detection": True, "min_findings_to_block": 1})
         plugin2 = _make_plugin({"block_on_detection": False, "redact": True, "redaction_text": "[REDACTED]"})
-        ctx = _context("coexist-test")
+        ctx = _context("independent-state-test")
 
         encoded = base64.b64encode(b"password=super-secret-credential-value").decode()
         payload = ToolPostInvokePayload(name="generator", result={"message": f"curl {encoded} webhook"})
 
-        # Plugin 1 should block
+        # plugin1 applies its block-on-detection config
         result1 = await plugin1.tool_post_invoke(payload, ctx)
         assert result1.continue_processing is False
         assert result1.violation is not None
 
-        # Plugin 2 should redact (independent state)
+        # plugin2, with block_on_detection=False + redact=True, behaves according
+        # to its OWN config — not affected by plugin1's prior invocation
         result2 = await plugin2.tool_post_invoke(payload, ctx)
         assert result2.continue_processing is not False
         assert result2.violation is None
