@@ -1041,6 +1041,18 @@ async def _flush_redis(redis_url: str) -> None:
     await client.aclose()
 
 
+async def _keys_in_redis(redis_url: str, pattern: str) -> list[str]:
+    """Return all Redis keys matching the pattern. Used by isolation tests."""
+    # Third-Party
+    import redis.asyncio as aioredis  # noqa: PLC0415
+
+    client = aioredis.from_url(redis_url, decode_responses=True)
+    try:
+        return sorted(await client.keys(pattern))
+    finally:
+        await client.aclose()
+
+
 class TestRedisBackendIntegration:
     """End-to-end integration tests for the Redis backend.
 
@@ -1256,3 +1268,41 @@ class TestRedisBackendIntegration:
 
         result = await plugin.tool_pre_invoke(payload, ctx)
         assert result.violation is None, "After tokens refill over time, token_bucket Redis backend must allow requests again"
+
+
+class TestRedisTenantIsolation:
+    """Tenant-scoped Redis key isolation (G2).
+
+    Without tenant-scoped keys, the same user hitting two different teams
+    through the same Redis would share a single ``rl:user:alice:*`` counter —
+    Team A's strict limit would poison Team B. The fix prefixes dimension
+    keys with the tenant id so counters are isolated per tenant.
+    """
+
+    @pytest.mark.asyncio
+    async def test_same_user_different_tenants_isolated_in_redis(self, redis_url_for_integration):
+        """Same user, two tenant ids, one Redis → independent per-user counters."""
+        await _flush_redis(redis_url_for_integration)
+
+        plugin = _make_redis_plugin(redis_url_for_integration, limit="3/s")
+        payload = ToolPreInvokePayload(name="tool", arguments={})
+        ctx_team_a = PluginContext(global_context=GlobalContext(request_id="r1", user="alice", tenant_id="team_a"))
+        ctx_team_b = PluginContext(global_context=GlobalContext(request_id="r2", user="alice", tenant_id="team_b"))
+
+        # Exhaust alice's limit under team_a.
+        for _ in range(3):
+            result = await plugin.tool_pre_invoke(payload, ctx_team_a)
+            assert result.violation is None, "team_a: requests within limit must be allowed"
+        blocked = await plugin.tool_pre_invoke(payload, ctx_team_a)
+        assert blocked.violation is not None, "team_a: 4th request must be blocked"
+
+        # Same user under team_b must not be affected.
+        result = await plugin.tool_pre_invoke(payload, ctx_team_b)
+        assert result.violation is None, "team_b: alice must have an independent counter — team_a's limit must not bleed across tenants"
+
+        # Key-shape proof: the two tenants occupy disjoint key namespaces in Redis.
+        keys_team_a = await _keys_in_redis(redis_url_for_integration, "rl:team_a:user:alice:*")
+        keys_team_b = await _keys_in_redis(redis_url_for_integration, "rl:team_b:user:alice:*")
+        assert keys_team_a, f"expected team_a-prefixed key, got none. keys_team_a={keys_team_a}"
+        assert keys_team_b, f"expected team_b-prefixed key, got none. keys_team_b={keys_team_b}"
+        assert set(keys_team_a).isdisjoint(set(keys_team_b)), "team_a and team_b key sets must not overlap"
