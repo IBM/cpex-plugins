@@ -46,7 +46,7 @@ test-verbose:
 
 test-python:
 	@echo "$(GREEN)Running Python tests...$(NC)"
-	uv run pytest tests/ -v
+	uv run pytest ../../../tests/pii_filter/test_integration.py -v -rs
 
 test-all: test test-python
 

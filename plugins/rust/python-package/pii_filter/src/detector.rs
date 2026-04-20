@@ -798,7 +798,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pyo3::ffi::c_str;
     use pyo3::types::PyDict;
+    use pyo3::types::PyModule;
 
     #[test]
     fn test_detect_ssn() {
@@ -1301,6 +1303,97 @@ mod tests {
             assert!(
                 !det_dict.is_empty(),
                 "expected detections to be returned for masked value"
+            );
+        });
+    }
+
+    #[test]
+    fn test_process_nested_masks_tuple_items() {
+        Python::initialize();
+        Python::attach(|py| {
+            let config = PyDict::new(py);
+            config.set_item("detect_email", true).unwrap();
+            let detector = PIIDetectorRust::new(&config.into_any()).unwrap();
+            let data = PyTuple::new(py, ["alice@example.com", "safe"]).unwrap();
+
+            let (modified, new_data, detections) =
+                detector.process_nested(py, &data.into_any(), "").unwrap();
+
+            assert!(modified);
+            let masked = new_data.bind(py).cast::<PyTuple>().unwrap();
+            assert_eq!(
+                masked.get_item(0).unwrap().extract::<String>().unwrap(),
+                "[REDACTED]"
+            );
+            assert_eq!(
+                detections
+                    .bind(py)
+                    .cast::<PyDict>()
+                    .unwrap()
+                    .get_item("email")
+                    .unwrap()
+                    .unwrap()
+                    .cast::<PyList>()
+                    .unwrap()
+                    .len(),
+                1
+            );
+        });
+    }
+
+    #[test]
+    fn test_process_nested_masks_set_items() {
+        Python::initialize();
+        Python::attach(|py| {
+            let config = PyDict::new(py);
+            config.set_item("detect_email", true).unwrap();
+            let detector = PIIDetectorRust::new(&config.into_any()).unwrap();
+            let data = PySet::new(py, ["alice@example.com", "safe"]).unwrap();
+
+            let (modified, new_data, _detections) =
+                detector.process_nested(py, &data.into_any(), "").unwrap();
+
+            assert!(modified);
+            let masked = new_data.bind(py).cast::<PySet>().unwrap();
+            assert!(masked.contains("[REDACTED]").unwrap());
+        });
+    }
+
+    #[test]
+    fn test_process_nested_masks_object_attributes() {
+        Python::initialize();
+        Python::attach(|py| {
+            let config = PyDict::new(py);
+            config.set_item("detect_email", true).unwrap();
+            let detector = PIIDetectorRust::new(&config.into_any()).unwrap();
+
+            let module = PyModule::from_code(
+                py,
+                c_str!(
+                    "class Profile:\n    def __init__(self, email):\n        self.email = email\n"
+                ),
+                c_str!("profile_fixture.py"),
+                c_str!("profile_fixture"),
+            )
+            .unwrap();
+            let profile = module
+                .getattr("Profile")
+                .unwrap()
+                .call1(("alice@example.com",))
+                .unwrap();
+
+            let (modified, new_data, _detections) =
+                detector.process_nested(py, &profile, "").unwrap();
+
+            assert!(modified);
+            assert_eq!(
+                new_data
+                    .bind(py)
+                    .getattr("email")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "[REDACTED]"
             );
         });
     }

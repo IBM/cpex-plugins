@@ -40,7 +40,7 @@ pub fn mask_pii<'a>(
         }
     }
 
-    all_detections.sort_by(|a, b| a.0.start.cmp(&b.0.start));
+    all_detections.sort_by_key(|a| a.0.start);
 
     let mut result = String::with_capacity(text.len());
     let mut cursor = 0usize;

@@ -263,11 +263,13 @@ impl PIIFilterPluginCore {
             }
         }
         if modified {
-            payload.setattr(spec.source_attr, new_value.bind(py))?;
             return build_result(
                 py,
                 spec.result_class,
-                [("modified_payload", payload.clone().unbind())],
+                [(
+                    "modified_payload",
+                    clone_payload_with_attr(py, payload, spec.source_attr, &new_value)?,
+                )],
             );
         }
 
@@ -420,6 +422,28 @@ fn default_result<'py>(py: Python<'py>, class_name: &str) -> PyResult<Py<PyAny>>
     bridge_default_result(py, class_name)
 }
 
+fn clone_payload_with_attr(
+    py: Python<'_>,
+    payload: &Bound<'_, PyAny>,
+    attr: &str,
+    new_value: &Py<PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let cloned = if payload.hasattr("model_copy")? {
+        let kwargs = PyDict::new(py);
+        let update = PyDict::new(py);
+        update.set_item(attr, new_value.bind(py))?;
+        kwargs.set_item("update", update)?;
+        payload.call_method("model_copy", (), Some(&kwargs))?
+    } else {
+        let copy = PyModule::import(py, "copy")?;
+        let cloned = copy.getattr("copy")?.call1((payload,))?;
+        cloned.setattr(attr, new_value.bind(py))?;
+        cloned
+    };
+
+    Ok(cloned.unbind())
+}
+
 fn count_detections(detections: &HashMap<PIIType, Vec<Detection>>) -> usize {
     detections.values().map(Vec::len).sum()
 }
@@ -431,4 +455,36 @@ fn sorted_detection_types(detections: &HashMap<PIIType, Vec<Detection>>) -> Vec<
         .collect();
     kinds.sort();
     kinds
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sorted_detection_types_are_stable() {
+        let detections = HashMap::from([
+            (
+                PIIType::Ssn,
+                vec![Detection {
+                    value: "123-45-6789".to_string(),
+                    start: 0,
+                    end: 11,
+                    mask_strategy: crate::config::MaskingStrategy::Redact,
+                }],
+            ),
+            (
+                PIIType::Email,
+                vec![Detection {
+                    value: "alice@example.com".to_string(),
+                    start: 12,
+                    end: 29,
+                    mask_strategy: crate::config::MaskingStrategy::Redact,
+                }],
+            ),
+        ]);
+
+        assert_eq!(sorted_detection_types(&detections), vec!["email", "ssn"]);
+        assert_eq!(count_detections(&detections), 2);
+    }
 }
