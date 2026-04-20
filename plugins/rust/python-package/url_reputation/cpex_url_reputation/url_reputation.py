@@ -76,10 +76,15 @@ class URLReputationConfig(BaseModel):
 
 
 class URLReputationPlugin(Plugin):
-    """Gateway-facing Plugin subclass that delegates behavior to the engine."""
+    """Gateway-facing Plugin subclass that delegates behavior to the Rust engine."""
 
     def __init__(self, config) -> None:
         super().__init__(config)
+        if not _RUST_AVAILABLE or URLReputationPluginCore is None:
+            raise RuntimeError(
+                "Rust url_reputation_rust module is required but not available. "
+                "Please ensure the plugin is properly installed with: make install"
+            )
         self._cfg = URLReputationConfig(**(config.config or {}))
         self._core = URLReputationPluginCore(self._cfg.model_dump())
 
