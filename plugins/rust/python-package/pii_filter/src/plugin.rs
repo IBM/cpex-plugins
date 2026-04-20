@@ -441,10 +441,7 @@ mod tests {
     fn install_framework_mocks(py: Python<'_>) -> PyResult<()> {
         let sys = PyModule::import(py, "sys")?;
         let path = sys.getattr("path")?.cast_into::<PyList>()?;
-        path.insert(
-            0,
-            format!("{}/test_support", env!("CARGO_MANIFEST_DIR")),
-        )?;
+        path.insert(0, format!("{}/test_support", env!("CARGO_MANIFEST_DIR")))?;
 
         let mcpgateway = PyModule::import(py, "mcpgateway_mock")?;
         let plugins = PyModule::import(py, "mcpgateway_mock.plugins")?;
