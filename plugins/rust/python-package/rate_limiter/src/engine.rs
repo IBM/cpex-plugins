@@ -233,7 +233,7 @@ impl RateLimiterEngine {
 
         let eval = EvalResult::from_dims(&dim_results);
         let headers = build_headers_dict(py, &eval, include_retry_after)?;
-        let meta = build_meta_dict(py, &eval, now_unix)?;
+        let meta = build_meta_dict(py, &eval, now_unix, Some(user), tenant)?;
         Ok((eval.allowed, headers, meta))
     }
 
@@ -274,6 +274,10 @@ impl RateLimiterEngine {
         let backend = self.backend.clone();
         let algorithm = self.config.algorithm;
         let clock = Arc::clone(&self.clock);
+        // Capture identity as owned for the async move so build_meta_dict
+        // can surface tenant_id/user_id in violation details (G7).
+        let user_owned = user.to_string();
+        let tenant_owned = tenant.map(|s| s.to_string());
 
         future_into_py(py, async move {
             let dim_results: Vec<DimResult> =
@@ -303,7 +307,13 @@ impl RateLimiterEngine {
             let eval = EvalResult::from_dims(&dim_results);
             Python::attach(|py| -> PyResult<Py<PyAny>> {
                 let headers = build_headers_dict(py, &eval, include_retry_after)?;
-                let meta = build_meta_dict(py, &eval, now_unix)?;
+                let meta = build_meta_dict(
+                    py,
+                    &eval,
+                    now_unix,
+                    Some(user_owned.as_str()),
+                    tenant_owned.as_deref(),
+                )?;
                 let tup = pyo3::types::PyTuple::new(
                     py,
                     [
@@ -390,10 +400,18 @@ fn build_headers_dict<'py>(
 }
 
 /// Build metadata dict — mirrors Python `_rust_to_plugin_meta()`.
+///
+/// When the caller supplies `user` and/or `tenant`, they are surfaced in
+/// the meta dict as `user_id` and `tenant_id` so that a blocked request's
+/// `PluginViolation.details` carries enough identity for downstream
+/// debugging (G7). Missing values are omitted rather than written as
+/// empty strings.
 fn build_meta_dict<'py>(
     py: Python<'py>,
     eval: &EvalResult,
     now_unix: i64,
+    user: Option<&str>,
+    tenant: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let meta = PyDict::new(py);
     let reset_in = eval
@@ -402,6 +420,12 @@ fn build_meta_dict<'py>(
     meta.set_item("limited", true)?;
     meta.set_item("remaining", eval.remaining)?;
     meta.set_item("reset_in", reset_in)?;
+    if let Some(u) = user.filter(|s| !s.is_empty()) {
+        meta.set_item("user_id", u)?;
+    }
+    if let Some(t) = tenant.filter(|s| !s.is_empty()) {
+        meta.set_item("tenant_id", t)?;
+    }
 
     let has_violated = !eval.violated_dimensions.is_empty();
     let has_allowed = !eval.allowed_dimensions.is_empty();

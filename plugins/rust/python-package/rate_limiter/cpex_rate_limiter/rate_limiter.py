@@ -85,12 +85,17 @@ class RateLimiterPlugin(Plugin):
             _logger.exception("rate limiter shutdown: core.shutdown() raised")
 
     async def prompt_pre_fetch(self, payload, context):
+        # The Rust core handles fail_mode policy internally (open vs closed)
+        # and logs backend errors via log_exception. The except here is a
+        # final safety net for the unlikely case that a non-backend bug in
+        # the core escapes as a Python exception.
         try:
             result = self._core.prompt_pre_fetch(payload, context)
             if hasattr(result, "__await__"):
                 return await result
             return result
         except Exception:
+            _logger.warning("rate limiter prompt_pre_fetch: unexpected core error; allowing request", exc_info=True)
             return PromptPrehookResult()
 
     async def tool_pre_invoke(self, payload, context):
@@ -100,6 +105,7 @@ class RateLimiterPlugin(Plugin):
                 return await result
             return result
         except Exception:
+            _logger.warning("rate limiter tool_pre_invoke: unexpected core error; allowing request", exc_info=True)
             return ToolPreInvokeResult()
 
 

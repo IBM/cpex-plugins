@@ -1374,3 +1374,105 @@ class TestRedisLifecycle:
             "plugin.shutdown() must release the Rust core's cached Redis connection — "
             f"expected fewer clients after shutdown, got before={clients_before} after={clients_after}"
         )
+
+
+def _make_redis_plugin_with_config(redis_url: str, extra_config: dict) -> RateLimiterPlugin:
+    """Redis-backed plugin with caller-supplied extra config keys (e.g. fail_mode)."""
+    base = {
+        "by_user": "3/s",
+        "backend": "redis",
+        "redis_url": redis_url,
+        "algorithm": "fixed_window",
+    }
+    base.update(extra_config)
+    return RateLimiterPlugin(
+        PluginConfig(
+            name="RateLimiter",
+            kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
+            hooks=["tool_pre_invoke"],
+            priority=100,
+            config=base,
+        )
+    )
+
+
+# A Redis URL that parses fine but points at a port where nothing listens.
+# Used by fail-mode tests to trigger a backend error deterministically
+# without depending on Docker being slow or flaky.
+_DEAD_REDIS_URL = "redis://127.0.0.1:1/15"
+
+
+class TestRedisFailModeAndViolationContext:
+    """Fail-mode policy and violation context (G4, G7, G8, G14).
+
+    When the Redis backend is unreachable, the plugin must either fail open
+    (default) or fail closed (opt-in via fail_mode="closed") — and in both
+    cases an operator-visible log record must describe what happened. When
+    the plugin blocks a request the violation must carry enough context
+    (tenant_id, user_id) for downstream debugging.
+    """
+
+    @pytest.mark.asyncio
+    async def test_redis_unreachable_default_fail_open_logs_warning(self, caplog):
+        """Unreachable backend + default fail_mode: request is allowed AND a WARNING is logged."""
+        import logging  # noqa: PLC0415
+
+        plugin = RateLimiterPlugin(
+            PluginConfig(
+                name="RateLimiter",
+                kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
+                hooks=["tool_pre_invoke"],
+                priority=100,
+                config={"by_user": "3/s", "backend": "redis", "redis_url": _DEAD_REDIS_URL},
+            )
+        )
+        ctx = PluginContext(global_context=GlobalContext(request_id="r1", user="alice"))
+        payload = ToolPreInvokePayload(name="tool", arguments={})
+
+        with caplog.at_level(logging.WARNING, logger="cpex_rate_limiter.rate_limiter"):
+            result = await plugin.tool_pre_invoke(payload, ctx)
+
+        assert result.violation is None, "default fail_mode=open: unreachable backend must not block"
+        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert warnings, (
+            "backend failures must be logged at WARNING or higher so operators notice silent fail-open — "
+            f"captured records: {[(r.levelname, r.getMessage()) for r in caplog.records]}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_redis_unreachable_fail_mode_closed_blocks(self):
+        """fail_mode=closed: unreachable backend blocks the request with BACKEND_UNAVAILABLE."""
+        plugin = _make_redis_plugin_with_config(_DEAD_REDIS_URL, {"fail_mode": "closed"})
+        ctx = PluginContext(global_context=GlobalContext(request_id="r1", user="alice"))
+        payload = ToolPreInvokePayload(name="tool", arguments={})
+
+        result = await plugin.tool_pre_invoke(payload, ctx)
+
+        assert result.violation is not None, "fail_mode=closed must block when the backend is unreachable"
+        assert result.violation.code == "BACKEND_UNAVAILABLE", (
+            f"expected code=BACKEND_UNAVAILABLE, got {result.violation.code!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_violation_details_includes_tenant_and_user(self, redis_url_for_integration):
+        """Blocked requests carry tenant_id + user_id in violation.details for downstream debugging."""
+        await _flush_redis(redis_url_for_integration)
+
+        plugin = _make_redis_plugin(redis_url_for_integration, limit="2/s")
+        ctx = PluginContext(
+            global_context=GlobalContext(request_id="r1", user="alice@example.com", tenant_id="team_a")
+        )
+        payload = ToolPreInvokePayload(name="tool", arguments={})
+
+        await plugin.tool_pre_invoke(payload, ctx)
+        await plugin.tool_pre_invoke(payload, ctx)
+        blocked = await plugin.tool_pre_invoke(payload, ctx)
+
+        assert blocked.violation is not None, "3rd request must be blocked"
+        details = blocked.violation.details or {}
+        assert details.get("tenant_id") == "team_a", (
+            f"violation.details must carry tenant_id; got details={details!r}"
+        )
+        assert details.get("user_id") == "alice@example.com", (
+            f"violation.details must carry user_id; got details={details!r}"
+        )

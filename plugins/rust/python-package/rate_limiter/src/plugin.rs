@@ -21,6 +21,10 @@ const LOGGER_NAME: &str = "cpex_rate_limiter.rate_limiter";
 pub struct RateLimiterPluginCore {
     engine: Arc<RateLimiterEngine>,
     use_async: bool,
+    /// When true, backend failures produce a BACKEND_UNAVAILABLE violation
+    /// (fail-closed) instead of the default allow result (fail-open). Read
+    /// from the `fail_mode` config key at init time.
+    fail_closed: bool,
 }
 
 #[gen_stub_pymethods]
@@ -29,9 +33,18 @@ impl RateLimiterPluginCore {
     #[new]
     pub fn new(config: &Bound<'_, PyDict>) -> PyResult<Self> {
         let engine = Arc::new(RateLimiterEngine::new(config)?);
+        let fail_closed = match config.get_item("fail_mode")? {
+            Some(v) if !v.is_none() => v
+                .extract::<String>()
+                .ok()
+                .map(|s| s.trim().eq_ignore_ascii_case("closed"))
+                .unwrap_or(false),
+            _ => false,
+        };
         Ok(Self {
             use_async: engine.uses_async_backend(),
             engine,
+            fail_closed,
         })
     }
 
@@ -57,6 +70,7 @@ impl RateLimiterPluginCore {
         // Use tenant_id as the context prefix so that each team's rate limit
         // counters are isolated in Redis. Without this, all teams share keys.
         let context_prefix = tenant.as_deref();
+        let fail_closed = self.fail_closed;
         if !self.use_async {
             return match evaluate_sync_request(
                 &self.engine,
@@ -76,9 +90,10 @@ impl RateLimiterPluginCore {
                 Err(_err) => {
                     log_exception(
                         py,
-                        "RateLimiterPlugin.prompt_pre_fetch error; allowing request",
+                        error_log_message("prompt_pre_fetch", fail_closed),
                     )?;
-                    Ok(default_result(py, "PromptPrehookResult")?.into_bound(py))
+                    Ok(backend_error_result(py, "PromptPrehookResult", fail_closed)?
+                        .into_bound(py))
                 }
             };
         }
@@ -105,11 +120,8 @@ impl RateLimiterPluginCore {
                     )
                 }),
                 Err(_err) => Python::attach(|py| {
-                    log_exception(
-                        py,
-                        "RateLimiterPlugin.prompt_pre_fetch error; allowing request",
-                    )?;
-                    default_result(py, "PromptPrehookResult")
+                    log_exception(py, error_log_message("prompt_pre_fetch", fail_closed))?;
+                    backend_error_result(py, "PromptPrehookResult", fail_closed)
                 }),
             }
         })
@@ -128,6 +140,7 @@ impl RateLimiterPluginCore {
             .to_ascii_lowercase();
         let (user, tenant) = extract_request_context(context)?;
         let context_prefix = tenant.as_deref();
+        let fail_closed = self.fail_closed;
         if !self.use_async {
             return match evaluate_sync_request(
                 &self.engine,
@@ -147,9 +160,10 @@ impl RateLimiterPluginCore {
                 Err(_err) => {
                     log_exception(
                         py,
-                        "RateLimiterPlugin.tool_pre_invoke error; allowing request",
+                        error_log_message("tool_pre_invoke", fail_closed),
                     )?;
-                    Ok(default_result(py, "ToolPreInvokeResult")?.into_bound(py))
+                    Ok(backend_error_result(py, "ToolPreInvokeResult", fail_closed)?
+                        .into_bound(py))
                 }
             };
         }
@@ -176,14 +190,37 @@ impl RateLimiterPluginCore {
                     )
                 }),
                 Err(_err) => Python::attach(|py| {
-                    log_exception(
-                        py,
-                        "RateLimiterPlugin.tool_pre_invoke error; allowing request",
-                    )?;
-                    default_result(py, "ToolPreInvokeResult")
+                    log_exception(py, error_log_message("tool_pre_invoke", fail_closed))?;
+                    backend_error_result(py, "ToolPreInvokeResult", fail_closed)
                 }),
             }
         })
+    }
+}
+
+fn error_log_message(hook: &str, fail_closed: bool) -> &'static str {
+    match (hook, fail_closed) {
+        ("prompt_pre_fetch", false) => {
+            "RateLimiterPlugin.prompt_pre_fetch error; allowing request (fail_mode=open)"
+        }
+        ("prompt_pre_fetch", true) => {
+            "RateLimiterPlugin.prompt_pre_fetch error; blocking request (fail_mode=closed)"
+        }
+        ("tool_pre_invoke", false) => {
+            "RateLimiterPlugin.tool_pre_invoke error; allowing request (fail_mode=open)"
+        }
+        ("tool_pre_invoke", true) => {
+            "RateLimiterPlugin.tool_pre_invoke error; blocking request (fail_mode=closed)"
+        }
+        _ => "RateLimiterPlugin hook error",
+    }
+}
+
+fn backend_error_result(py: Python<'_>, class_name: &str, fail_closed: bool) -> PyResult<Py<PyAny>> {
+    if fail_closed {
+        build_backend_unavailable_result(py, class_name)
+    } else {
+        default_result(py, class_name)
     }
 }
 
@@ -295,6 +332,59 @@ fn build_prehook_result(
         [
             ("metadata", meta.clone().into_any().unbind()),
             ("http_headers", headers.clone().into_any().unbind()),
+        ],
+    )
+}
+
+/// Build a prehook/tool result that carries a BACKEND_UNAVAILABLE violation.
+/// Used when `fail_mode=closed` and the Rust engine could not evaluate the
+/// rate limit (e.g. Redis unreachable). The result blocks the request with
+/// HTTP 503 and a Retry-After hint.
+fn build_backend_unavailable_result(py: Python<'_>, class_name: &str) -> PyResult<Py<PyAny>> {
+    let headers = PyDict::new(py);
+    headers.set_item("Retry-After", "1")?;
+    let violation = build_framework_object(
+        py,
+        "PluginViolation",
+        [
+            (
+                "reason",
+                "Rate limiter backend unavailable"
+                    .into_pyobject(py)?
+                    .into_any()
+                    .unbind(),
+            ),
+            (
+                "description",
+                "Rate limiter backend unavailable; failing closed per fail_mode=closed"
+                    .into_pyobject(py)?
+                    .into_any()
+                    .unbind(),
+            ),
+            (
+                "code",
+                "BACKEND_UNAVAILABLE"
+                    .into_pyobject(py)?
+                    .into_any()
+                    .unbind(),
+            ),
+            ("details", PyDict::new(py).into_any().unbind()),
+            (
+                "http_status_code",
+                503i32.into_pyobject(py)?.into_any().unbind(),
+            ),
+            ("http_headers", headers.into_any().unbind()),
+        ],
+    )?;
+    build_framework_object(
+        py,
+        class_name,
+        [
+            (
+                "continue_processing",
+                false.into_pyobject(py)?.to_owned().into_any().unbind(),
+            ),
+            ("violation", violation),
         ],
     )
 }
