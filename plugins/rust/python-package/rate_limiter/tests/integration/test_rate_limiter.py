@@ -1053,6 +1053,23 @@ async def _keys_in_redis(redis_url: str, pattern: str) -> list[str]:
         await client.aclose()
 
 
+async def _count_redis_clients(redis_url: str) -> int:
+    """Return the number of connected clients reported by Redis CLIENT LIST.
+
+    Includes the monitoring client we open here, so callers use this as a
+    relative measure (delta before/after an action), not an absolute count.
+    """
+    # Third-Party
+    import redis.asyncio as aioredis  # noqa: PLC0415
+
+    client = aioredis.from_url(redis_url, decode_responses=True)
+    try:
+        listing = await client.execute_command("CLIENT", "LIST")
+        return len([line for line in listing.splitlines() if line.strip()])
+    finally:
+        await client.aclose()
+
+
 class TestRedisBackendIntegration:
     """End-to-end integration tests for the Redis backend.
 
@@ -1306,3 +1323,54 @@ class TestRedisTenantIsolation:
         assert keys_team_a, f"expected team_a-prefixed key, got none. keys_team_a={keys_team_a}"
         assert keys_team_b, f"expected team_b-prefixed key, got none. keys_team_b={keys_team_b}"
         assert set(keys_team_a).isdisjoint(set(keys_team_b)), "team_a and team_b key sets must not overlap"
+
+
+class TestRedisLifecycle:
+    """Plugin-manager lifecycle compliance (G3, G10).
+
+    When the plugin framework disables a plugin it calls ``await plugin.shutdown()``;
+    when it re-enables, a fresh instance is constructed. A compliant Redis-backed
+    plugin must release its cached connection on shutdown so the old instance
+    doesn't leak sockets while the new one opens its own.
+    """
+
+    @pytest.mark.asyncio
+    async def test_initialize_logs_backend(self, redis_url_for_integration, caplog):
+        """plugin.initialize() emits a log record identifying the active backend."""
+        import logging  # noqa: PLC0415
+
+        plugin = _make_redis_plugin(redis_url_for_integration, limit="5/s")
+
+        with caplog.at_level(logging.INFO, logger="cpex_rate_limiter.rate_limiter"):
+            await plugin.initialize()
+
+        matches = [r for r in caplog.records if "initialized" in r.getMessage() and "redis" in r.getMessage()]
+        assert matches, (
+            "plugin.initialize() must log a record mentioning the backend so operators can confirm the plugin is live — "
+            f"captured records: {[r.getMessage() for r in caplog.records]}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_shutdown_releases_redis_connection(self, redis_url_for_integration):
+        """After plugin.shutdown(), the Redis connection cached by the Rust core is dropped."""
+        await _flush_redis(redis_url_for_integration)
+
+        plugin = _make_redis_plugin(redis_url_for_integration, limit="5/s")
+        ctx = PluginContext(global_context=GlobalContext(request_id="r1", user="alice"))
+        payload = ToolPreInvokePayload(name="tool", arguments={})
+
+        # Warm the connection — the Rust core opens Redis lazily on first request.
+        await plugin.tool_pre_invoke(payload, ctx)
+
+        clients_before = await _count_redis_clients(redis_url_for_integration)
+
+        await plugin.shutdown()
+
+        # Allow the TCP close to propagate to the server's client list.
+        await asyncio.sleep(0.2)
+        clients_after = await _count_redis_clients(redis_url_for_integration)
+
+        assert clients_after < clients_before, (
+            "plugin.shutdown() must release the Rust core's cached Redis connection — "
+            f"expected fewer clients after shutdown, got before={clients_before} after={clients_after}"
+        )

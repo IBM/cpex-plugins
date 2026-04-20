@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import logging
+
 try:
     from mcpgateway.plugins.framework import Plugin, PromptPrehookResult, ToolPreInvokeResult
 except ModuleNotFoundError:
@@ -54,12 +56,33 @@ class RateLimiterConfig:
             setattr(self, field, config.get(field))
 
 
+_logger = logging.getLogger(__name__)
+
+
 class RateLimiterPlugin(Plugin):
     """Gateway-facing Plugin subclass that delegates behavior to Rust."""
 
     def __init__(self, config) -> None:
         super().__init__(config)
         self._core = RateLimiterPluginCore(config.config or {})
+
+    async def initialize(self) -> None:
+        """Lifecycle hook: called once when the plugin manager constructs us."""
+        cfg = self.config.config or {}
+        backend = cfg.get("backend", "memory")
+        _logger.info("rate limiter initialized: backend=%s", backend)
+
+    async def shutdown(self) -> None:
+        """Lifecycle hook: release Rust-held resources (e.g. Redis connection).
+
+        The plugin manager calls this on disable and on re-instantiation.
+        Without it, the cached Redis connection leaks until the plugin
+        instance is garbage-collected.
+        """
+        try:
+            self._core.shutdown()
+        except Exception:
+            _logger.exception("rate limiter shutdown: core.shutdown() raised")
 
     async def prompt_pre_fetch(self, payload, context):
         try:

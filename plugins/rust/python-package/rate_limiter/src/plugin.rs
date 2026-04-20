@@ -35,6 +35,13 @@ impl RateLimiterPluginCore {
         })
     }
 
+    /// Release backend-held resources (e.g. the cached Redis multiplexed
+    /// connection). Called by the Python shim's `shutdown()` when the plugin
+    /// framework tears the plugin down.
+    pub fn shutdown(&self) {
+        self.engine.shutdown();
+    }
+
     pub fn prompt_pre_fetch<'py>(
         &self,
         py: Python<'py>,

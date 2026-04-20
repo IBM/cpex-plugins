@@ -103,3 +103,9 @@ class Plugin:
     @property
     def mode(self) -> str:
         return self._config.mode
+
+    async def initialize(self) -> None:
+        """Lifecycle hook. Mirrors mcpgateway.plugins.framework.base.Plugin."""
+
+    async def shutdown(self) -> None:
+        """Lifecycle hook. Mirrors mcpgateway.plugins.framework.base.Plugin."""

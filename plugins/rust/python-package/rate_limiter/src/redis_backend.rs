@@ -233,6 +233,13 @@ impl RedisRateLimiter {
         *self.script_sha.lock() = None;
     }
 
+    /// Drop the cached multiplexed connection and script SHA so the server
+    /// can close the socket. In-flight requests hold their own clones and
+    /// remain valid. Called from `RateLimiterEngine::shutdown()`.
+    pub fn shutdown(&self) {
+        self.reset_connection();
+    }
+
     /// Return the batch Lua script for the active algorithm.
     fn batch_script(&self) -> &'static str {
         match self.algorithm {

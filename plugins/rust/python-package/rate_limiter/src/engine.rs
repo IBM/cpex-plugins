@@ -77,6 +77,16 @@ impl RateLimiterEngine {
     pub fn uses_async_backend(&self) -> bool {
         matches!(self.backend, EngineBackend::Redis(_))
     }
+
+    /// Release backend-held resources. For Redis, this drops the cached
+    /// multiplexed connection so the server can close the socket; in-flight
+    /// requests that already cloned the handle remain valid. Memory backend
+    /// has no external resources and is a no-op.
+    pub fn shutdown(&self) {
+        if let EngineBackend::Redis(redis) = &self.backend {
+            redis.shutdown();
+        }
+    }
 }
 
 #[gen_stub_pymethods]
