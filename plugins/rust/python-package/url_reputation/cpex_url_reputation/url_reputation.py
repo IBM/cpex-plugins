@@ -45,7 +45,13 @@ except ModuleNotFoundError:
             self.metadata = metadata
             self.http_headers = http_headers
 
-from cpex_url_reputation.url_reputation_rust import URLReputationEngine, URLReputationPluginCore
+try:
+    from cpex_url_reputation.url_reputation_rust import URLReputationEngine, URLReputationPluginCore
+    _RUST_AVAILABLE = True
+except ImportError:
+    URLReputationEngine = None  # type: ignore[misc,assignment]
+    URLReputationPluginCore = None  # type: ignore[misc,assignment]
+    _RUST_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 

@@ -1,10 +1,11 @@
-// Copyright 2026
-// SPDX-License-Identifier: Apache-2.0
-
 use pyo3::prelude::*;
+pub mod engine;
+pub mod filters;
+pub mod types;
 
 #[pymodule]
-fn url_reputation_rust(_m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn url_reputation_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     pyo3_log::init();
+    m.add_class::<engine::URLReputationPlugin>()?;
     Ok(())
 }
