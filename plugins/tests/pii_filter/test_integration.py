@@ -1,7 +1,9 @@
 import pytest
 
-from mcpgateway_mock.plugins.framework import (
-    GlobalContext,
+pytest.importorskip("mcpgateway.plugins.framework")
+pytest.importorskip("mcpgateway.plugins.framework.models")
+
+from mcpgateway.plugins.framework import (
     Message,
     PluginConfig,
     PluginContext,
@@ -12,6 +14,7 @@ from mcpgateway_mock.plugins.framework import (
     ToolPostInvokePayload,
     ToolPreInvokePayload,
 )
+from mcpgateway.plugins.framework.models import GlobalContext
 
 from cpex_pii_filter.pii_filter import PIIDetectorRust, PIIFilterPlugin
 

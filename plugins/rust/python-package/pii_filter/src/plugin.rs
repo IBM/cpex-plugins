@@ -443,7 +443,7 @@ mod tests {
         let path = sys.getattr("path")?.cast_into::<PyList>()?;
         path.insert(
             0,
-            format!("{}/../../../tests/pii_filter", env!("CARGO_MANIFEST_DIR")),
+            format!("{}/test_support", env!("CARGO_MANIFEST_DIR")),
         )?;
 
         let mcpgateway = PyModule::import(py, "mcpgateway_mock")?;
