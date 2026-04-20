@@ -63,8 +63,8 @@ test-python:
 	uv run pytest tests/ -v
 
 test-integration:
-	@echo "$(GREEN)Running integration tests (requires Redis)...$(NC)"
-	uv run pytest tests/ -k integration -v
+	@echo "$(GREEN)Running integration tests (Redis tests auto-skip without Docker)...$(NC)"
+	uv run pytest tests/integration/ -v
 
 test-all: test test-python
 
