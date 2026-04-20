@@ -1476,3 +1476,42 @@ class TestRedisFailModeAndViolationContext:
         assert details.get("user_id") == "alice@example.com", (
             f"violation.details must carry user_id; got details={details!r}"
         )
+
+
+class TestConfigHardening:
+    """Config hardening (G13, G15).
+
+    The plugin must reject obviously-misconfigured rate strings and warn
+    when the operator passes a key the engine doesn't understand (typos
+    surface visibly instead of silently being ignored).
+    """
+
+    @pytest.mark.asyncio
+    async def test_unknown_config_key_emits_warning(self, redis_url_for_integration, caplog):
+        """Misspelled config keys (e.g. 'redis_ur') log a WARNING so the operator notices."""
+        import logging  # noqa: PLC0415
+
+        with caplog.at_level(logging.WARNING):
+            RateLimiterPlugin(
+                PluginConfig(
+                    name="RateLimiter",
+                    kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
+                    hooks=["tool_pre_invoke"],
+                    priority=100,
+                    config={
+                        "by_user": "3/s",
+                        "backend": "redis",
+                        "redis_url": redis_url_for_integration,
+                        "redis_ur": "typo-key",  # misspelled
+                    },
+                )
+            )
+
+        warnings = [
+            r for r in caplog.records
+            if r.levelno >= logging.WARNING and "redis_ur" in r.getMessage()
+        ]
+        assert warnings, (
+            "engine must warn on unknown config keys so misspellings are visible — "
+            f"captured records: {[(r.levelname, r.getMessage()) for r in caplog.records]}"
+        )

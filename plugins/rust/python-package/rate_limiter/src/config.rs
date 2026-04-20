@@ -31,6 +31,8 @@ pub enum ConfigError {
     InvalidRateString(String),
     #[error("rate count must be > 0, got {0}")]
     ZeroCount(u64),
+    #[error("rate count {0} exceeds the sanity ceiling of {MAX_RATE_COUNT}; if you really need this, raise the limit deliberately")]
+    CountAboveCeiling(u64),
     #[error("{field}: {message}")]
     FieldError { field: String, message: String },
     #[error(
@@ -38,6 +40,11 @@ pub enum ConfigError {
     )]
     InvalidAlgorithm(String),
 }
+
+/// Upper bound for any single rate-limit count. Above this, configurations
+/// are almost certainly typos or denial-of-service vectors against the
+/// memory backend (which allocates per dimension key).
+pub const MAX_RATE_COUNT: u64 = 1_000_000;
 
 /// Parse a rate string like `"30/m"`, `"100/s"`, `"1000/h"`.
 ///
@@ -56,6 +63,9 @@ pub fn parse_rate(s: &str) -> Result<RateLimit, ConfigError> {
 
     if count == 0 {
         return Err(ConfigError::ZeroCount(count));
+    }
+    if count > MAX_RATE_COUNT {
+        return Err(ConfigError::CountAboveCeiling(count));
     }
 
     let window_secs: u64 = match unit_str.trim().to_ascii_lowercase().as_str() {
@@ -196,6 +206,25 @@ mod tests {
     #[test]
     fn parse_rate_zero_count_errors() {
         assert!(parse_rate("0/s").is_err());
+    }
+
+    // --- Bounds: reject absurd counts so misconfig can't allocate huge
+    //     windows, overflow internal math, or starve other memory.
+    //     See config_hardening_bounds_rationale in the README.
+
+    #[test]
+    fn parse_rate_rejects_count_above_upper_bound() {
+        assert!(
+            parse_rate("99999999/h").is_err(),
+            "parse_rate must reject counts above the sanity ceiling"
+        );
+    }
+
+    #[test]
+    fn parse_rate_accepts_reasonable_large_count() {
+        // 100000/h is plausibly a real quota — must still parse.
+        let r = parse_rate("100000/h").unwrap();
+        assert_eq!(r.count, 100_000);
     }
 
     // --- Algorithm::from_str ---

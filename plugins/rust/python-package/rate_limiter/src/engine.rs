@@ -101,8 +101,17 @@ impl RateLimiterEngine {
     /// - `backend`: `"memory"` (default) or `"redis"`
     /// - `redis_url`: required when `backend = "redis"`
     /// - `redis_key_prefix`: key namespace prefix (default `"rl"`)
+    /// - `fail_mode`: `"open"` (default) or `"closed"` — handled by the
+    ///   plugin shim, but accepted here so it doesn't trip the unknown-key
+    ///   warning below.
+    ///
+    /// Any other key in the dict is logged at WARN so misspellings (e.g.
+    /// `redis_ur` instead of `redis_url`) surface visibly instead of being
+    /// silently ignored.
     #[new]
     pub fn new(config: &Bound<'_, PyDict>) -> PyResult<Self> {
+        warn_on_unknown_config_keys(config);
+
         let by_user: Option<String> = config.get_item("by_user")?.and_then(|v| v.extract().ok());
         let by_tenant: Option<String> =
             config.get_item("by_tenant")?.and_then(|v| v.extract().ok());
@@ -376,6 +385,38 @@ impl RateLimiterEngine {
             checks.push((key, rl.count, rl.window_nanos));
         }
         checks
+    }
+}
+
+/// Emit a single WARN-level log listing config keys we don't recognise.
+/// Catches misspellings (e.g. ``redis_ur`` instead of ``redis_url``) that
+/// would otherwise silently default and surprise the operator at runtime.
+fn warn_on_unknown_config_keys(config: &Bound<'_, PyDict>) {
+    const KNOWN: &[&str] = &[
+        "by_user",
+        "by_tenant",
+        "by_tool",
+        "algorithm",
+        "backend",
+        "redis_url",
+        "redis_key_prefix",
+        "fail_mode",
+    ];
+    let mut unknown: Vec<String> = Vec::new();
+    for (key, _) in config.iter() {
+        if let Ok(name) = key.extract::<String>() {
+            if !KNOWN.iter().any(|k| *k == name.as_str()) {
+                unknown.push(name);
+            }
+        }
+    }
+    if !unknown.is_empty() {
+        unknown.sort();
+        warn!(
+            "rate limiter: unknown config key(s): {}; expected one of: {}",
+            unknown.join(", "),
+            KNOWN.join(", "),
+        );
     }
 }
 
