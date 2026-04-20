@@ -1,22 +1,34 @@
+from dataclasses import dataclass
+
 import pytest
 
-pytest.importorskip("mcpgateway.plugins.framework")
-pytest.importorskip("mcpgateway.plugins.framework.models")
-
 from mcpgateway.plugins.framework import (
-    Message,
     PluginConfig,
     PluginContext,
     PromptPosthookPayload,
     PromptPrehookPayload,
-    PromptResult,
-    TextContent,
     ToolPostInvokePayload,
     ToolPreInvokePayload,
 )
 from mcpgateway.plugins.framework.models import GlobalContext
 
 from cpex_pii_filter.pii_filter import PIIDetectorRust, PIIFilterPlugin
+
+
+@dataclass
+class TextContent:
+    text: str
+
+
+@dataclass
+class Message:
+    role: str
+    content: TextContent
+
+
+@dataclass
+class PromptResult:
+    messages: list[Message]
 
 
 def _make_config(**overrides) -> PluginConfig:
@@ -26,11 +38,17 @@ def _make_config(**overrides) -> PluginConfig:
         "block_on_detection": False,
     }
     config.update(overrides)
-    return PluginConfig(name="pii_filter", config=config)
+    return PluginConfig(
+        name="pii_filter",
+        kind="cpex_pii_filter.pii_filter.PIIFilterPlugin",
+        config=config,
+    )
 
 
 def _make_context() -> PluginContext:
-    return PluginContext(global_context=GlobalContext(user="user-1"))
+    return PluginContext(
+        global_context=GlobalContext(request_id="req-pii", server_id="srv-pii")
+    )
 
 
 def test_python_module_exports_rust_types():
@@ -56,6 +74,7 @@ async def test_prompt_pre_fetch_masks_through_python_shim():
 async def test_prompt_post_fetch_masks_message_content_through_python_shim():
     plugin = PIIFilterPlugin(_make_config())
     payload = PromptPosthookPayload(
+        prompt_id="prompt-1",
         result=PromptResult(
             messages=[
                 Message(
