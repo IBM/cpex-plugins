@@ -47,8 +47,17 @@ impl RateLimiterPluginCore {
             .trim()
             .to_ascii_lowercase();
         let (user, tenant) = extract_request_context(context)?;
+        // Use tenant_id as the context prefix so that each team's rate limit
+        // counters are isolated in Redis. Without this, all teams share keys.
+        let context_prefix = tenant.as_deref();
         if !self.use_async {
-            return match evaluate_sync_request(&self.engine, &user, tenant.as_deref(), &prompt) {
+            return match evaluate_sync_request(
+                &self.engine,
+                &user,
+                tenant.as_deref(),
+                &prompt,
+                context_prefix,
+            ) {
                 Ok((allowed, headers, meta)) => Ok(build_prehook_result(
                     py,
                     "PromptPrehookResult",
@@ -68,8 +77,17 @@ impl RateLimiterPluginCore {
         }
 
         let engine = Arc::clone(&self.engine);
+        let context_prefix_owned = context_prefix.map(|s| s.to_string());
         future_into_py(py, async move {
-            match evaluate_async_request(&engine, &user, tenant.as_deref(), &prompt).await {
+            match evaluate_async_request(
+                &engine,
+                &user,
+                tenant.as_deref(),
+                &prompt,
+                context_prefix_owned.as_deref(),
+            )
+            .await
+            {
                 Ok((allowed, headers, meta)) => Python::attach(|py| {
                     build_prehook_result(
                         py,
@@ -102,8 +120,15 @@ impl RateLimiterPluginCore {
             .trim()
             .to_ascii_lowercase();
         let (user, tenant) = extract_request_context(context)?;
+        let context_prefix = tenant.as_deref();
         if !self.use_async {
-            return match evaluate_sync_request(&self.engine, &user, tenant.as_deref(), &tool) {
+            return match evaluate_sync_request(
+                &self.engine,
+                &user,
+                tenant.as_deref(),
+                &tool,
+                context_prefix,
+            ) {
                 Ok((allowed, headers, meta)) => Ok(build_prehook_result(
                     py,
                     "ToolPreInvokeResult",
@@ -123,8 +148,17 @@ impl RateLimiterPluginCore {
         }
 
         let engine = Arc::clone(&self.engine);
+        let context_prefix_owned = context_prefix.map(|s| s.to_string());
         future_into_py(py, async move {
-            match evaluate_async_request(&engine, &user, tenant.as_deref(), &tool).await {
+            match evaluate_async_request(
+                &engine,
+                &user,
+                tenant.as_deref(),
+                &tool,
+                context_prefix_owned.as_deref(),
+            )
+            .await
+            {
                 Ok((allowed, headers, meta)) => Python::attach(|py| {
                     build_prehook_result(
                         py,
@@ -151,6 +185,7 @@ fn evaluate_sync_request(
     user: &str,
     tenant: Option<&str>,
     tool_or_prompt: &str,
+    context_prefix: Option<&str>,
 ) -> PyResult<(bool, Py<PyDict>, Py<PyDict>)> {
     let now_unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -158,8 +193,15 @@ fn evaluate_sync_request(
         .as_secs() as i64;
 
     Python::attach(|py| {
-        let (allowed, headers, meta) =
-            engine.check(py, user, tenant, tool_or_prompt, now_unix, true)?;
+        let (allowed, headers, meta) = engine.check(
+            py,
+            user,
+            tenant,
+            tool_or_prompt,
+            now_unix,
+            true,
+            context_prefix,
+        )?;
         Ok((allowed, headers.unbind(), meta.unbind()))
     })
 }
@@ -169,6 +211,7 @@ async fn evaluate_async_request(
     user: &str,
     tenant: Option<&str>,
     tool_or_prompt: &str,
+    context_prefix: Option<&str>,
 ) -> PyResult<(bool, Py<PyDict>, Py<PyDict>)> {
     let now_unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -176,7 +219,15 @@ async fn evaluate_async_request(
         .as_secs() as i64;
     let awaitable = Python::attach(|py| {
         engine
-            .check_async(py, user, tenant, tool_or_prompt, now_unix, true)
+            .check_async(
+                py,
+                user,
+                tenant,
+                tool_or_prompt,
+                now_unix,
+                true,
+                context_prefix,
+            )
             .map(|awaitable| awaitable.unbind())
     })?;
     await_async_tuple(awaitable).await

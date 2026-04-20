@@ -161,11 +161,17 @@ impl RateLimiterEngine {
     ///
     /// Returns `(allowed, headers_dict, meta_dict)`.
     ///
+    /// When `context_prefix` is provided (e.g. a team/tenant ID), it is
+    /// prepended to every dimension key so that separate plugin instances
+    /// for different tenants use isolated Redis counters instead of sharing
+    /// a single key namespace.
+    ///
     /// **Note:** The Redis backend arm uses `block_on()` on a dedicated Tokio
     /// runtime, which would deadlock if called from within a Tokio context.
     /// The Python wrapper routes Redis to `check_async()` instead; this sync
     /// path is intended for the memory backend.  The `debug_assert` below
     /// guards against accidental misuse.
+    #[allow(clippy::too_many_arguments)]
     pub fn check<'py>(
         &self,
         py: Python<'py>,
@@ -174,13 +180,14 @@ impl RateLimiterEngine {
         tool: &str,
         now_unix: i64,
         include_retry_after: bool,
+        context_prefix: Option<&str>,
     ) -> PyResult<(bool, Bound<'py, PyDict>, Bound<'py, PyDict>)> {
         if matches!(self.backend, EngineBackend::Redis(_)) {
             return Err(pyo3::exceptions::PyRuntimeError::new_err(
                 "check() must not be called with the Redis backend — use check_async() instead",
             ));
         }
-        let checks = self.build_checks(user, tenant, tool);
+        let checks = self.build_checks(user, tenant, tool, context_prefix);
         if checks.is_empty() {
             let headers = PyDict::new(py);
             let meta = PyDict::new(py);
@@ -223,6 +230,7 @@ impl RateLimiterEngine {
     /// Async variant of `check()` for Redis-backed deployments.
     ///
     /// Returns an awaitable that resolves to `(allowed, headers_dict, meta_dict)`.
+    #[allow(clippy::too_many_arguments)]
     pub fn check_async<'py>(
         &self,
         py: Python<'py>,
@@ -231,8 +239,9 @@ impl RateLimiterEngine {
         tool: &str,
         now_unix: i64,
         include_retry_after: bool,
+        context_prefix: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let checks = self.build_checks(user, tenant, tool);
+        let checks = self.build_checks(user, tenant, tool, context_prefix);
         if checks.is_empty() {
             return future_into_py(py, async move {
                 Python::attach(|py| -> PyResult<Py<PyAny>> {
@@ -306,23 +315,45 @@ impl RateLimiterEngine {
 impl RateLimiterEngine {
     /// Build dimension checks from engine config.
     /// Mirrors Python `_build_rust_checks()` but runs in Rust.
+    ///
+    /// When `context_prefix` is `Some("team_a")` the keys become
+    /// `team_a:user:alice`, `team_a:tenant:team_a`, `team_a:tool:search`
+    /// instead of the unprefixed versions. This prevents counter collisions
+    /// across plugin-manager contexts (teams) that share the same Redis.
     fn build_checks(
         &self,
         user: &str,
         tenant: Option<&str>,
         tool: &str,
+        context_prefix: Option<&str>,
     ) -> Vec<(String, u64, u64)> {
         let mut checks = Vec::with_capacity(3);
+        let pfx = context_prefix.unwrap_or("");
         if let Some(ref rl) = self.config.by_user {
-            checks.push((format!("user:{}", user), rl.count, rl.window_nanos));
+            let key = if pfx.is_empty() {
+                format!("user:{}", user)
+            } else {
+                format!("{}:user:{}", pfx, user)
+            };
+            checks.push((key, rl.count, rl.window_nanos));
         }
         if let (Some(t), Some(rl)) = (tenant, &self.config.by_tenant) {
-            checks.push((format!("tenant:{}", t), rl.count, rl.window_nanos));
+            let key = if pfx.is_empty() {
+                format!("tenant:{}", t)
+            } else {
+                format!("{}:tenant:{}", pfx, t)
+            };
+            checks.push((key, rl.count, rl.window_nanos));
         }
         // Tool names are already normalised (lowercase) in EngineConfig at init time.
         // The caller passes the already-lowercased tool name from Python.
         if let Some(rl) = self.config.by_tool.get(tool) {
-            checks.push((format!("tool:{}", tool), rl.count, rl.window_nanos));
+            let key = if pfx.is_empty() {
+                format!("tool:{}", tool)
+            } else {
+                format!("{}:tool:{}", pfx, tool)
+            };
+            checks.push((key, rl.count, rl.window_nanos));
         }
         checks
     }
@@ -558,5 +589,76 @@ mod tests {
         let _ = engine.evaluate_many(checks(), 1_000_000).unwrap();
         let result = engine.evaluate_many(checks(), 1_000_000).unwrap();
         assert!(!result.allowed); // tenant exhausted → blocked
+    }
+
+    // --- Context prefix: tenant-scoped key isolation ---
+
+    #[test]
+    fn build_checks_without_prefix_produces_unprefixed_keys() {
+        let (engine, _handle) = engine_with_fake_clock(Some("10/s"), Algorithm::FixedWindow);
+        let checks = engine.build_checks("alice", Some("acme"), "search", None);
+        let keys: Vec<&str> = checks.iter().map(|(k, _, _)| k.as_str()).collect();
+        assert!(keys.contains(&"user:alice"));
+        assert!(keys.contains(&"tool:search"));
+    }
+
+    #[test]
+    fn build_checks_with_prefix_prepends_to_all_keys() {
+        let (engine, _handle) = engine_with_fake_clock(Some("10/s"), Algorithm::FixedWindow);
+        let checks = engine.build_checks("alice", Some("acme"), "search", Some("team_a"));
+        let keys: Vec<&str> = checks.iter().map(|(k, _, _)| k.as_str()).collect();
+        assert!(keys.contains(&"team_a:user:alice"), "keys: {:?}", keys);
+        assert!(keys.contains(&"team_a:tool:search"), "keys: {:?}", keys);
+    }
+
+    #[test]
+    fn build_checks_with_prefix_includes_tenant_dimension() {
+        init_python();
+        let (clock, _handle) = FakeClock::new(1_000_000);
+        let cfg = EngineConfig {
+            by_user: Some(crate::config::parse_rate("10/s").unwrap()),
+            by_tenant: Some(crate::config::parse_rate("100/s").unwrap()),
+            by_tool: HashMap::new(),
+            algorithm: Algorithm::FixedWindow,
+        };
+        let engine = RateLimiterEngine::new_with_clock(cfg, Arc::new(clock));
+        let checks = engine.build_checks("alice", Some("acme"), "search", Some("team_a"));
+        let keys: Vec<&str> = checks.iter().map(|(k, _, _)| k.as_str()).collect();
+        assert!(keys.contains(&"team_a:user:alice"), "keys: {:?}", keys);
+        assert!(keys.contains(&"team_a:tenant:acme"), "keys: {:?}", keys);
+    }
+
+    #[test]
+    fn different_prefixes_produce_isolated_counters() {
+        let (engine, _handle) = engine_with_fake_clock(Some("2/s"), Algorithm::FixedWindow);
+        // Exhaust limit for team_a
+        let checks_a = || engine.build_checks("alice", None, "search", Some("team_a"));
+        let _ = engine.evaluate_many(checks_a(), 1_000_000).unwrap();
+        let _ = engine.evaluate_many(checks_a(), 1_000_000).unwrap();
+        let result_a = engine.evaluate_many(checks_a(), 1_000_000).unwrap();
+        assert!(
+            !result_a.allowed,
+            "team_a should be blocked after 2 requests"
+        );
+
+        // team_b should still be allowed — different prefix, different counters
+        let checks_b = || engine.build_checks("alice", None, "search", Some("team_b"));
+        let result_b = engine.evaluate_many(checks_b(), 1_000_000).unwrap();
+        assert!(
+            result_b.allowed,
+            "team_b should be allowed — isolated counter"
+        );
+    }
+
+    #[test]
+    fn empty_prefix_matches_no_prefix_behavior() {
+        let (engine, _handle) = engine_with_fake_clock(Some("10/s"), Algorithm::FixedWindow);
+        let checks_none = engine.build_checks("alice", None, "search", None);
+        let checks_empty = engine.build_checks("alice", None, "search", Some(""));
+        // Both should produce the same unprefixed keys
+        assert_eq!(checks_none.len(), checks_empty.len());
+        for ((k1, _, _), (k2, _, _)) in checks_none.iter().zip(checks_empty.iter()) {
+            assert_eq!(k1, k2);
+        }
     }
 }
