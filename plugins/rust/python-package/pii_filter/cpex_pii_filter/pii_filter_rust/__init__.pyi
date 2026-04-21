@@ -12,18 +12,18 @@ __all__ = [
 class PIIDetectorRust:
     r"""
     Main PII detector exposed to Python
-    
+
     # Example (Python)
     ```python
     from cpex_pii_filter import PIIDetectorRust
-    
+
     config = {"detect_ssn": True, "detect_email": True}
     detector = PIIDetectorRust(config)
-    
+
     text = "My SSN is 123-45-6789 and email is john@example.com"
     detections = detector.detect(text)
     print(detections)  # {"ssn": [...], "email": [...]}
-    
+
     masked = detector.mask(text, detections)
     print(masked)  # "My SSN is [REDACTED] and email is [REDACTED]"
     ```
@@ -31,10 +31,10 @@ class PIIDetectorRust:
     def __new__(cls, config: typing.Any) -> PIIDetectorRust:
         r"""
         Create a new PII detector
-        
+
         # Arguments
         * `config` - Python dictionary or Pydantic model with configuration
-        
+
         # Configuration Keys
         * `detect_ssn` (bool): Detect Social Security Numbers
         * `detect_bsn` (bool): Detect Dutch citizen service numbers
@@ -55,16 +55,17 @@ class PIIDetectorRust:
         * `max_text_bytes` (int): Maximum text payload size to inspect
         * `max_nested_depth` (int): Maximum nested container depth to inspect
         * `max_collection_items` (int): Maximum items to inspect per collection
-        * `custom_patterns` (list[dict]): Additional regex-based PII patterns
+        * `custom_patterns` (list[dict]): Additional regex-based PII patterns.
+          `mask_strategy` is optional and inherits `default_mask_strategy` when omitted or `None`.
         * `whitelist_patterns` (list[str]): Regex patterns to exclude from detection
         """
     def detect(self, text: builtins.str) -> typing.Any:
         r"""
         Detect PII in text
-        
+
         # Arguments
         * `text` - Text to scan for PII
-        
+
         # Returns
         Dictionary mapping PII type to list of detections:
         ```python
@@ -81,22 +82,22 @@ class PIIDetectorRust:
     def mask(self, text: builtins.str, detections: typing.Any) -> builtins.str:
         r"""
         Mask detected PII in text
-        
+
         # Arguments
         * `text` - Original text
         * `detections` - Detection results from detect()
-        
+
         # Returns
         Masked text with PII replaced
         """
     def process_nested(self, data: typing.Any, path: builtins.str) -> tuple[builtins.bool, typing.Any, typing.Any]:
         r"""
         Process nested data structures (dicts, lists, strings)
-        
+
         # Arguments
         * `data` - Python object (dict, list, str, or other)
         * `path` - Current path in the structure (for logging)
-        
+
         # Returns
         Tuple of (modified: bool, new_data: Any, detections: dict)
         """
@@ -108,4 +109,3 @@ class PIIFilterPluginCore:
     def prompt_post_fetch(self, payload: typing.Any, context: typing.Any) -> typing.Any: ...
     def tool_pre_invoke(self, payload: typing.Any, context: typing.Any) -> typing.Any: ...
     def tool_post_invoke(self, payload: typing.Any, context: typing.Any) -> typing.Any: ...
-

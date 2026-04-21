@@ -66,23 +66,38 @@ impl PIIFilterPluginCore {
             return default_result(py, "PromptPosthookResult");
         };
 
+        let mut updated_messages = Vec::with_capacity(messages.len());
         let mut changed = false;
         let mut total_count = 0usize;
         let mut detected_types = BTreeSet::new();
 
         for message in messages.iter() {
             let Ok(content) = message.getattr("content") else {
+                updated_messages.push(clone_python_object(py, &message)?.unbind());
                 continue;
             };
             let Ok(text_obj) = content.getattr("text") else {
+                updated_messages.push(clone_payload_with_attr(
+                    py,
+                    &message,
+                    "content",
+                    &clone_python_object(py, &content)?.unbind(),
+                )?);
                 continue;
             };
             let Ok(text) = text_obj.extract::<String>() else {
+                updated_messages.push(clone_payload_with_attr(
+                    py,
+                    &message,
+                    "content",
+                    &clone_python_object(py, &content)?.unbind(),
+                )?);
                 continue;
             };
 
             let detections = self.detector.detect_rust(&text)?;
             if detections.is_empty() {
+                updated_messages.push(clone_prompt_message(py, &message, &content, &text_obj)?);
                 continue;
             }
 
@@ -122,7 +137,7 @@ impl PIIFilterPluginCore {
             }
 
             let masked = self.detector.mask_rust(&text, &detections)?;
-            content.setattr("text", masked)?;
+            let masked_text = masked.into_pyobject(py)?.into_any().unbind();
             self.log_detections(
                 py,
                 "prompt_post_fetch",
@@ -131,6 +146,12 @@ impl PIIFilterPluginCore {
                 role.as_deref(),
                 false,
             )?;
+            updated_messages.push(clone_prompt_message(
+                py,
+                &message,
+                &content,
+                masked_text.bind(py),
+            )?);
             changed = true;
         }
 
@@ -142,10 +163,23 @@ impl PIIFilterPluginCore {
             detected_types.into_iter().collect(),
         )?;
         if changed {
+            let cloned_messages = PyList::empty(py);
+            for message in updated_messages {
+                cloned_messages.append(message.bind(py))?;
+            }
+            let cloned_result = clone_payload_with_attr(
+                py,
+                &result,
+                "messages",
+                &cloned_messages.into_any().unbind(),
+            )?;
             return build_result(
                 py,
                 "PromptPosthookResult",
-                [("modified_payload", payload.clone().unbind())],
+                [(
+                    "modified_payload",
+                    clone_payload_with_attr(py, payload, "result", &cloned_result)?,
+                )],
             );
         }
 
@@ -422,6 +456,18 @@ fn default_result<'py>(py: Python<'py>, class_name: &str) -> PyResult<Py<PyAny>>
     bridge_default_result(py, class_name)
 }
 
+fn clone_python_object<'py>(
+    py: Python<'py>,
+    object: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    if object.hasattr("model_copy")? {
+        object.call_method0("model_copy")
+    } else {
+        let copy = PyModule::import(py, "copy")?;
+        copy.getattr("copy")?.call1((object,))
+    }
+}
+
 fn clone_payload_with_attr(
     py: Python<'_>,
     payload: &Bound<'_, PyAny>,
@@ -435,13 +481,23 @@ fn clone_payload_with_attr(
         kwargs.set_item("update", update)?;
         payload.call_method("model_copy", (), Some(&kwargs))?
     } else {
-        let copy = PyModule::import(py, "copy")?;
-        let cloned = copy.getattr("copy")?.call1((payload,))?;
+        let cloned = clone_python_object(py, payload)?;
         cloned.setattr(attr, new_value.bind(py))?;
         cloned
     };
 
     Ok(cloned.unbind())
+}
+
+fn clone_prompt_message(
+    py: Python<'_>,
+    message: &Bound<'_, PyAny>,
+    content: &Bound<'_, PyAny>,
+    text_value: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let cloned_content =
+        clone_payload_with_attr(py, content, "text", &text_value.clone().unbind())?;
+    clone_payload_with_attr(py, message, "content", &cloned_content)
 }
 
 fn count_detections(detections: &HashMap<PIIType, Vec<Detection>>) -> usize {
@@ -460,6 +516,7 @@ fn sorted_detection_types(detections: &HashMap<PIIType, Vec<Detection>>) -> Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pyo3::types::{PyDict, PyModule};
 
     #[test]
     fn sorted_detection_types_are_stable() {
@@ -486,5 +543,79 @@ mod tests {
 
         assert_eq!(sorted_detection_types(&detections), vec!["email", "ssn"]);
         assert_eq!(count_detections(&detections), 2);
+    }
+
+    #[test]
+    fn clone_payload_with_attr_copies_non_pydantic_payload_without_mutating_original() {
+        Python::initialize();
+        Python::attach(|py| {
+            let payload_module = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    r#"
+class Payload:
+    def __init__(self):
+        self.prompt_id = "prompt-1"
+        self.args = {"user": {"email": "alice@example.com"}}
+"#
+                ),
+                pyo3::ffi::c_str!("test_payload.py"),
+                pyo3::ffi::c_str!("test_payload"),
+            )
+            .unwrap();
+            let payload = payload_module.getattr("Payload").unwrap().call0().unwrap();
+
+            let masked_args = PyDict::new(py);
+            let masked_user = PyDict::new(py);
+            masked_user.set_item("email", "[REDACTED]").unwrap();
+            masked_args.set_item("user", masked_user).unwrap();
+
+            let cloned =
+                clone_payload_with_attr(py, &payload, "args", &masked_args.into_any().unbind())
+                    .unwrap();
+            let cloned = cloned.bind(py);
+            let original_args = payload
+                .getattr("args")
+                .unwrap()
+                .cast_into::<PyDict>()
+                .unwrap();
+            let original_user = original_args
+                .get_item("user")
+                .unwrap()
+                .unwrap()
+                .cast_into::<PyDict>()
+                .unwrap();
+            let cloned_args = cloned
+                .getattr("args")
+                .unwrap()
+                .cast_into::<PyDict>()
+                .unwrap();
+            let cloned_user = cloned_args
+                .get_item("user")
+                .unwrap()
+                .unwrap()
+                .cast_into::<PyDict>()
+                .unwrap();
+
+            assert_eq!(
+                original_user
+                    .get_item("email")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "alice@example.com"
+            );
+            assert_eq!(
+                cloned_user
+                    .get_item("email")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "[REDACTED]"
+            );
+            assert!(!original_args.is(&cloned_args));
+        });
     }
 }

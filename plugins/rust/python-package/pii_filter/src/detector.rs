@@ -166,7 +166,8 @@ impl PIIDetectorRust {
     /// * `max_text_bytes` (int): Maximum text payload size to inspect
     /// * `max_nested_depth` (int): Maximum nested container depth to inspect
     /// * `max_collection_items` (int): Maximum items to inspect per collection
-    /// * `custom_patterns` (list[dict]): Additional regex-based PII patterns
+    /// * `custom_patterns` (list[dict]): Additional regex-based PII patterns.
+    ///   `mask_strategy` is optional and inherits `default_mask_strategy` when omitted or `None`.
     /// * `whitelist_patterns` (list[str]): Regex patterns to exclude from detection
     #[new]
     pub fn new(config: &Bound<'_, PyAny>) -> PyResult<Self> {
@@ -880,7 +881,7 @@ mod tests {
     }
 
     #[test]
-    fn test_built_in_patterns_keep_explicit_mask_strategy() {
+    fn test_built_in_patterns_follow_global_default_mask_strategy() {
         let config = PIIConfig {
             detect_ssn: true,
             detect_email: true,
@@ -906,7 +907,7 @@ mod tests {
     }
 
     #[test]
-    fn test_built_in_mask_strategy_matrix_survives_global_override() {
+    fn test_built_in_mask_strategy_matrix_follows_global_override() {
         let config = PIIConfig {
             detect_ssn: true,
             detect_credit_card: true,
@@ -924,24 +925,53 @@ mod tests {
 
         assert_eq!(
             detections[&PIIType::Ssn][0].mask_strategy,
-            MaskingStrategy::Redact
+            MaskingStrategy::Hash
         );
         assert_eq!(
             detections[&PIIType::CreditCard][0].mask_strategy,
-            MaskingStrategy::Redact
+            MaskingStrategy::Hash
         );
         assert_eq!(
             detections[&PIIType::Email][0].mask_strategy,
-            MaskingStrategy::Redact
+            MaskingStrategy::Hash
         );
         assert_eq!(
             detections[&PIIType::Phone][0].mask_strategy,
-            MaskingStrategy::Redact
+            MaskingStrategy::Hash
         );
         assert_eq!(
             detections[&PIIType::IpAddress][0].mask_strategy,
-            MaskingStrategy::Redact
+            MaskingStrategy::Hash
         );
+    }
+
+    #[test]
+    fn test_built_in_mask_uses_global_partial_default() {
+        let config = PIIConfig {
+            detect_ssn: true,
+            detect_email: true,
+            detect_phone: false,
+            detect_ip_address: false,
+            detect_bsn: false,
+            detect_credit_card: false,
+            detect_bank_account: false,
+            detect_date_of_birth: false,
+            detect_passport: false,
+            detect_driver_license: false,
+            detect_medical_record: false,
+            default_mask_strategy: MaskingStrategy::Partial,
+            ..Default::default()
+        };
+        let patterns = compile_patterns(&config).unwrap();
+        let detector = PIIDetectorRust { patterns, config };
+        let detections = detector.detect_internal("SSN: 123-45-6789 Email: john@example.com");
+        let masked = detector
+            .mask_rust("SSN: 123-45-6789 Email: john@example.com", &detections)
+            .unwrap();
+
+        assert!(masked.contains("***-**-6789"));
+        assert!(masked.contains("j***n@example.com"));
+        assert!(!masked.contains("[REDACTED]"));
     }
 
     #[test]
@@ -1208,7 +1238,7 @@ mod tests {
             .push(super::super::config::CustomPattern {
                 pattern: r"\bEMP\d{6}\b".to_string(),
                 description: "Employee ID".to_string(),
-                mask_strategy: MaskingStrategy::Partial,
+                mask_strategy: Some(MaskingStrategy::Partial),
                 enabled: true,
             });
 
@@ -1220,6 +1250,108 @@ mod tests {
             detections[&PIIType::Custom][0].mask_strategy,
             MaskingStrategy::Partial
         );
+    }
+
+    #[test]
+    fn test_custom_patterns_without_explicit_mask_strategy_follow_global_default() {
+        Python::initialize();
+        Python::attach(|py| {
+            let config = PyDict::new(py);
+            config.set_item("default_mask_strategy", "partial").unwrap();
+
+            let custom_pattern = PyDict::new(py);
+            custom_pattern.set_item("pattern", r"\bEMP\d{6}\b").unwrap();
+            custom_pattern
+                .set_item("description", "Employee ID")
+                .unwrap();
+
+            let custom_patterns = PyList::empty(py);
+            custom_patterns.append(custom_pattern).unwrap();
+            config.set_item("custom_patterns", custom_patterns).unwrap();
+
+            let detector = PIIDetectorRust::new(&config.into_any()).unwrap();
+            let detections = detector.detect_internal("Employee ID EMP123456");
+
+            assert_eq!(
+                detections[&PIIType::Custom][0].mask_strategy,
+                MaskingStrategy::Partial
+            );
+        });
+    }
+
+    #[test]
+    fn test_model_dump_config_with_none_mask_strategy_follows_global_default() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    r#"
+class ConfigModel:
+    def model_dump(self):
+        return {
+            "default_mask_strategy": "partial",
+            "custom_patterns": [
+                {
+                    "pattern": r"\bEMP\d{6}\b",
+                    "description": "Employee ID",
+                    "mask_strategy": None,
+                }
+            ],
+        }
+"#
+                ),
+                pyo3::ffi::c_str!("test_detector_model.py"),
+                pyo3::ffi::c_str!("test_detector_model"),
+            )
+            .unwrap();
+            let config_model = module.getattr("ConfigModel").unwrap().call0().unwrap();
+
+            let detector = PIIDetectorRust::new(&config_model).unwrap();
+            let detections = detector.detect_internal("Employee ID EMP123456");
+
+            assert_eq!(
+                detections[&PIIType::Custom][0].mask_strategy,
+                MaskingStrategy::Partial
+            );
+        });
+    }
+
+    #[test]
+    fn test_model_dump_config_with_omitted_mask_strategy_follows_global_default() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    r#"
+class ConfigModel:
+    def model_dump(self):
+        return {
+            "default_mask_strategy": "partial",
+            "custom_patterns": [
+                {
+                    "pattern": r"\bEMP\d{6}\b",
+                    "description": "Employee ID",
+                }
+            ],
+        }
+"#
+                ),
+                pyo3::ffi::c_str!("test_detector_model_omitted.py"),
+                pyo3::ffi::c_str!("test_detector_model_omitted"),
+            )
+            .unwrap();
+            let config_model = module.getattr("ConfigModel").unwrap().call0().unwrap();
+
+            let detector = PIIDetectorRust::new(&config_model).unwrap();
+            let detections = detector.detect_internal("Employee ID EMP123456");
+
+            assert_eq!(
+                detections[&PIIType::Custom][0].mask_strategy,
+                MaskingStrategy::Partial
+            );
+        });
     }
 
     #[test]
@@ -1268,7 +1400,7 @@ mod tests {
                 .push(super::super::config::CustomPattern {
                     pattern: r"\bEMP\d{6}\b".to_string(),
                     description: "Employee ID".to_string(),
-                    mask_strategy: MaskingStrategy::Redact,
+                    mask_strategy: Some(MaskingStrategy::Redact),
                     enabled: true,
                 });
 
@@ -1463,7 +1595,7 @@ mod tests {
             .push(super::super::config::CustomPattern {
                 pattern: r"\bBSN\b".to_string(),
                 description: "Short custom token".to_string(),
-                mask_strategy: MaskingStrategy::Redact,
+                mask_strategy: Some(MaskingStrategy::Redact),
                 enabled: true,
             });
 

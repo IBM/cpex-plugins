@@ -70,7 +70,7 @@ pub enum MaskingStrategy {
 pub struct CustomPattern {
     pub pattern: String,
     pub description: String,
-    pub mask_strategy: MaskingStrategy,
+    pub mask_strategy: Option<MaskingStrategy>,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 }
@@ -159,6 +159,20 @@ impl Default for PIIConfig {
 }
 
 impl PIIConfig {
+    fn parse_mask_strategy(strategy_str: &str, field_name: &str) -> PyResult<MaskingStrategy> {
+        match strategy_str {
+            "redact" => Ok(MaskingStrategy::Redact),
+            "partial" => Ok(MaskingStrategy::Partial),
+            "hash" => Ok(MaskingStrategy::Hash),
+            "tokenize" => Ok(MaskingStrategy::Tokenize),
+            "remove" => Ok(MaskingStrategy::Remove),
+            _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Invalid '{}' value '{}'. Expected one of: redact, partial, hash, tokenize, remove",
+                field_name, strategy_str
+            ))),
+        }
+    }
+
     /// Extract configuration from Python object (dict or Pydantic model)
     pub fn from_py_object(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
         // Try to convert to dict first (handles both dict and Pydantic models)
@@ -255,14 +269,8 @@ impl PIIConfig {
         // Extract mask strategy
         if let Some(value) = dict.get_item("default_mask_strategy")? {
             let strategy_str: String = value.extract()?;
-            config.default_mask_strategy = match strategy_str.as_str() {
-                "redact" => MaskingStrategy::Redact,
-                "partial" => MaskingStrategy::Partial,
-                "hash" => MaskingStrategy::Hash,
-                "tokenize" => MaskingStrategy::Tokenize,
-                "remove" => MaskingStrategy::Remove,
-                _ => MaskingStrategy::Redact,
-            };
+            config.default_mask_strategy =
+                Self::parse_mask_strategy(&strategy_str, "default_mask_strategy")?;
         }
 
         // Extract custom patterns
@@ -283,22 +291,20 @@ impl PIIConfig {
                             pyo3::exceptions::PyValueError::new_err("Missing 'description' field")
                         })?
                         .extract()?;
-                    let mask_strategy_str: String = match py_dict.get_item("mask_strategy")? {
-                        Some(val) => val.extract()?,
-                        None => "redact".to_string(),
+                    let mask_strategy = match py_dict.get_item("mask_strategy")? {
+                        Some(val) if val.is_none() => None,
+                        Some(val) => {
+                            let mask_strategy_str: String = val.extract()?;
+                            Some(Self::parse_mask_strategy(
+                                &mask_strategy_str,
+                                "custom_patterns[].mask_strategy",
+                            )?)
+                        }
+                        None => None,
                     };
                     let enabled: bool = match py_dict.get_item("enabled")? {
                         Some(val) => val.extract()?,
                         None => true,
-                    };
-
-                    let mask_strategy = match mask_strategy_str.as_str() {
-                        "redact" => MaskingStrategy::Redact,
-                        "partial" => MaskingStrategy::Partial,
-                        "hash" => MaskingStrategy::Hash,
-                        "tokenize" => MaskingStrategy::Tokenize,
-                        "remove" => MaskingStrategy::Remove,
-                        _ => MaskingStrategy::Redact,
                     };
 
                     config.custom_patterns.push(CustomPattern {
@@ -323,7 +329,7 @@ impl PIIConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyo3::types::PyDict;
+    use pyo3::types::{PyDict, PyList, PyModule};
 
     #[test]
     fn test_pii_type_as_str() {
@@ -380,6 +386,218 @@ mod tests {
 
             let err = PIIConfig::from_py_dict(&dict).unwrap_err();
             assert!(err.to_string().contains("max_collection_items"));
+        });
+    }
+
+    #[test]
+    fn test_from_py_dict_custom_pattern_without_mask_strategy_keeps_none() {
+        Python::initialize();
+        Python::attach(|py| {
+            let dict = PyDict::new(py);
+            dict.set_item("default_mask_strategy", "partial").unwrap();
+
+            let custom_pattern = PyDict::new(py);
+            custom_pattern.set_item("pattern", r"\bEMP\d{6}\b").unwrap();
+            custom_pattern
+                .set_item("description", "Employee ID")
+                .unwrap();
+
+            let custom_patterns = pyo3::types::PyList::empty(py);
+            custom_patterns.append(custom_pattern).unwrap();
+            dict.set_item("custom_patterns", custom_patterns).unwrap();
+
+            let config = PIIConfig::from_py_dict(&dict).unwrap();
+
+            assert_eq!(config.default_mask_strategy, MaskingStrategy::Partial);
+            assert_eq!(config.custom_patterns.len(), 1);
+            assert_eq!(config.custom_patterns[0].mask_strategy, None);
+        });
+    }
+
+    #[test]
+    fn test_from_py_dict_custom_pattern_with_mask_strategy_none_keeps_none() {
+        Python::initialize();
+        Python::attach(|py| {
+            let dict = PyDict::new(py);
+            dict.set_item("default_mask_strategy", "partial").unwrap();
+
+            let custom_pattern = PyDict::new(py);
+            custom_pattern.set_item("pattern", r"\bEMP\d{6}\b").unwrap();
+            custom_pattern
+                .set_item("description", "Employee ID")
+                .unwrap();
+            custom_pattern.set_item("mask_strategy", py.None()).unwrap();
+
+            let custom_patterns = PyList::empty(py);
+            custom_patterns.append(custom_pattern).unwrap();
+            dict.set_item("custom_patterns", custom_patterns).unwrap();
+
+            let config = PIIConfig::from_py_dict(&dict).unwrap();
+
+            assert_eq!(config.default_mask_strategy, MaskingStrategy::Partial);
+            assert_eq!(config.custom_patterns.len(), 1);
+            assert_eq!(config.custom_patterns[0].mask_strategy, None);
+        });
+    }
+
+    #[test]
+    fn test_from_py_object_model_dump_none_mask_strategy_keeps_none() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    r#"
+class ConfigModel:
+    def model_dump(self):
+        return {
+            "default_mask_strategy": "partial",
+            "custom_patterns": [
+                {
+                    "pattern": r"\bEMP\d{6}\b",
+                    "description": "Employee ID",
+                    "mask_strategy": None,
+                }
+            ],
+        }
+"#
+                ),
+                pyo3::ffi::c_str!("test_config_model.py"),
+                pyo3::ffi::c_str!("test_config_model"),
+            )
+            .unwrap();
+            let config_model = module.getattr("ConfigModel").unwrap().call0().unwrap();
+
+            let config = PIIConfig::from_py_object(&config_model).unwrap();
+
+            assert_eq!(config.default_mask_strategy, MaskingStrategy::Partial);
+            assert_eq!(config.custom_patterns.len(), 1);
+            assert_eq!(config.custom_patterns[0].mask_strategy, None);
+        });
+    }
+
+    #[test]
+    fn test_from_py_object_model_dump_omitted_mask_strategy_keeps_none() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    r#"
+class ConfigModel:
+    def model_dump(self):
+        return {
+            "default_mask_strategy": "partial",
+            "custom_patterns": [
+                {
+                    "pattern": r"\bEMP\d{6}\b",
+                    "description": "Employee ID",
+                }
+            ],
+        }
+"#
+                ),
+                pyo3::ffi::c_str!("test_config_model_omitted.py"),
+                pyo3::ffi::c_str!("test_config_model_omitted"),
+            )
+            .unwrap();
+            let config_model = module.getattr("ConfigModel").unwrap().call0().unwrap();
+
+            let config = PIIConfig::from_py_object(&config_model).unwrap();
+
+            assert_eq!(config.default_mask_strategy, MaskingStrategy::Partial);
+            assert_eq!(config.custom_patterns.len(), 1);
+            assert_eq!(config.custom_patterns[0].mask_strategy, None);
+        });
+    }
+
+    #[test]
+    fn test_from_py_dict_rejects_invalid_default_mask_strategy() {
+        Python::initialize();
+        Python::attach(|py| {
+            let dict = PyDict::new(py);
+            dict.set_item("default_mask_strategy", "partail").unwrap();
+
+            let err = PIIConfig::from_py_dict(&dict).unwrap_err();
+            assert!(err.to_string().contains("default_mask_strategy"));
+        });
+    }
+
+    #[test]
+    fn test_from_py_dict_rejects_invalid_custom_mask_strategy() {
+        Python::initialize();
+        Python::attach(|py| {
+            let dict = PyDict::new(py);
+
+            let custom_pattern = PyDict::new(py);
+            custom_pattern.set_item("pattern", r"\bEMP\d{6}\b").unwrap();
+            custom_pattern
+                .set_item("description", "Employee ID")
+                .unwrap();
+            custom_pattern.set_item("mask_strategy", "partail").unwrap();
+
+            let custom_patterns = PyList::empty(py);
+            custom_patterns.append(custom_pattern).unwrap();
+            dict.set_item("custom_patterns", custom_patterns).unwrap();
+
+            let err = PIIConfig::from_py_dict(&dict).unwrap_err();
+            assert!(err.to_string().contains("custom_patterns[].mask_strategy"));
+        });
+    }
+
+    #[test]
+    fn test_from_py_object_rejects_invalid_default_mask_strategy_from_model_dump() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    r#"
+class ConfigModel:
+    def model_dump(self):
+        return {"default_mask_strategy": "partail"}
+"#
+                ),
+                pyo3::ffi::c_str!("test_invalid_default_model.py"),
+                pyo3::ffi::c_str!("test_invalid_default_model"),
+            )
+            .unwrap();
+            let config_model = module.getattr("ConfigModel").unwrap().call0().unwrap();
+
+            let err = PIIConfig::from_py_object(&config_model).unwrap_err();
+            assert!(err.to_string().contains("default_mask_strategy"));
+        });
+    }
+
+    #[test]
+    fn test_from_py_object_rejects_invalid_custom_mask_strategy_from_model_dump() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    r#"
+class ConfigModel:
+    def model_dump(self):
+        return {
+            "custom_patterns": [
+                {
+                    "pattern": r"\bEMP\d{6}\b",
+                    "description": "Employee ID",
+                    "mask_strategy": "partail",
+                }
+            ]
+        }
+"#
+                ),
+                pyo3::ffi::c_str!("test_invalid_custom_model.py"),
+                pyo3::ffi::c_str!("test_invalid_custom_model"),
+            )
+            .unwrap();
+            let config_model = module.getattr("ConfigModel").unwrap().call0().unwrap();
+
+            let err = PIIConfig::from_py_object(&config_model).unwrap_err();
+            assert!(err.to_string().contains("custom_patterns[].mask_strategy"));
         });
     }
 }

@@ -1023,7 +1023,7 @@ dependencies = [
 
 [[package]]
 name = "pii_filter"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "cpex_framework_bridge",
  "criterion",

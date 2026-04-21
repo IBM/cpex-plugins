@@ -1231,7 +1231,7 @@ class PluginCatalogTests(unittest.TestCase):
         )
 
     def test_release_info_gives_pii_filter_the_same_target_matrix(self) -> None:
-        result = run_catalog("release-info", str(REPO_ROOT), "pii-filter-v0.2.0")
+        result = run_catalog("release-info", str(REPO_ROOT), "pii-filter-v0.2.1")
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["slug"], "pii_filter")
@@ -1253,7 +1253,7 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("canonical", result.stderr.lower())
 
     def test_release_info_field_supports_kind(self) -> None:
-        result = run_catalog("release-info-field", str(REPO_ROOT), "pii-filter-v0.2.0", "kind")
+        result = run_catalog("release-info-field", str(REPO_ROOT), "pii-filter-v0.2.1", "kind")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "cpex_pii_filter.pii_filter.PIIFilterPlugin")
 

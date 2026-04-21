@@ -26,8 +26,8 @@ pub struct CompiledPatterns {
     pub whitelist: Vec<Regex>,
 }
 
-/// Pattern definitions (pattern, description, explicit masking strategy)
-type PatternDef = (&'static str, &'static str, MaskingStrategy);
+/// Pattern definitions (pattern, description, optional explicit masking strategy)
+type PatternDef = (&'static str, &'static str, Option<MaskingStrategy>);
 
 const VALID_SSN_DASHED_PATTERN: &str = r"\b(?:00[1-9]|0[1-9][0-9]|[1-5][0-9]{2}|6(?:[0-5][0-9]|6[0-57-9]|[7-9][0-9])|[7-8][0-9]{2})-(?:0[1-9]|[1-9][0-9])-(?:000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})\b";
 const VALID_SSN_CONTEXTUAL_PATTERN: &str = r"\b(?:SSN|Social\s+Security(?:\s+Number)?)[:\s#-]*(?:00[1-9]|0[1-9][0-9]|[1-5][0-9]{2}|6(?:[0-5][0-9]|6[0-57-9]|[7-9][0-9])|[7-8][0-9]{2})(?:0[1-9]|[1-9][0-9])(?:000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})\b";
@@ -35,15 +35,11 @@ const VALID_SSN_CONTEXTUAL_PATTERN: &str = r"\b(?:SSN|Social\s+Security(?:\s+Num
 // SSN patterns
 static SSN_PATTERNS: Lazy<Vec<PatternDef>> = Lazy::new(|| {
     vec![
-        (
-            VALID_SSN_DASHED_PATTERN,
-            "US Social Security Number",
-            MaskingStrategy::Redact,
-        ),
+        (VALID_SSN_DASHED_PATTERN, "US Social Security Number", None),
         (
             VALID_SSN_CONTEXTUAL_PATTERN,
             "US Social Security Number with explicit context",
-            MaskingStrategy::Redact,
+            None,
         ),
     ]
 });
@@ -55,31 +51,26 @@ static BSN_PATTERNS: Lazy<Vec<PatternDef>> = Lazy::new(|| {
         (
             r"\b(?:BSN|Citizen\s+ID|Citizen\s+Service\s+Number|Burgerservicenummer)[:\s#]*\d{9}\b",
             "Dutch BSN with explicit context",
-            MaskingStrategy::Redact,
+            None,
         ),
         (
             r"\b(?:My\s+)?BSN\s+(?:is\s+)?\d{9}\b",
             "BSN with 'is' context",
-            MaskingStrategy::Redact,
+            None,
         ),
     ]
 });
 
 // Credit card patterns
-static CREDIT_CARD_PATTERNS: Lazy<Vec<PatternDef>> = Lazy::new(|| {
-    vec![(
-        r"\b(?:\d[-\s]?){12,18}\d\b",
-        "Credit card number",
-        MaskingStrategy::Redact,
-    )]
-});
+static CREDIT_CARD_PATTERNS: Lazy<Vec<PatternDef>> =
+    Lazy::new(|| vec![(r"\b(?:\d[-\s]?){12,18}\d\b", "Credit card number", None)]);
 
 // Email patterns
 static EMAIL_PATTERNS: Lazy<Vec<PatternDef>> = Lazy::new(|| {
     vec![(
         r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
         "Email address",
-        MaskingStrategy::Redact,
+        None,
     )]
 });
 
@@ -89,13 +80,9 @@ static PHONE_PATTERNS: Lazy<Vec<PatternDef>> = Lazy::new(|| {
         (
             r"\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b",
             "US phone number",
-            MaskingStrategy::Redact,
+            None,
         ),
-        (
-            r"\+[1-9]\d{9,14}\b",
-            "International phone number",
-            MaskingStrategy::Redact,
-        ),
+        (r"\+[1-9]\d{9,14}\b", "International phone number", None),
     ]
 });
 
@@ -105,12 +92,12 @@ static IP_ADDRESS_PATTERNS: Lazy<Vec<PatternDef>> = Lazy::new(|| {
         (
             r"\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b",
             "IPv4 address",
-            MaskingStrategy::Redact,
+            None,
         ),
         (
             r"\b(?:[A-Fa-f0-9]{1,4}:){7}[A-Fa-f0-9]{1,4}\b",
             "IPv6 address",
-            MaskingStrategy::Redact,
+            None,
         ),
     ]
 });
@@ -121,12 +108,12 @@ static DOB_PATTERNS: Lazy<Vec<PatternDef>> = Lazy::new(|| {
         (
             r"\b(?:DOB|Date of Birth|Born|Birthday)[:\s]+\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b",
             "Date of birth with label",
-            MaskingStrategy::Redact,
+            None,
         ),
         (
             r"\b(?:0[1-9]|1[0-2])[-/](?:0[1-9]|[12]\d|3[01])[-/](?:19|20)\d{2}\b",
             "Date in MM/DD/YYYY format",
-            MaskingStrategy::Redact,
+            None,
         ),
     ]
 });
@@ -136,7 +123,7 @@ static PASSPORT_PATTERNS: Lazy<Vec<PatternDef>> = Lazy::new(|| {
     vec![(
         r"\b(?:Passport\s+Number|Passport\s+No|Passport)[#:\s-]+[A-Z0-9]{6,9}\b",
         "Passport number with explicit context",
-        MaskingStrategy::Redact,
+        None,
     )]
 });
 
@@ -145,7 +132,7 @@ static DRIVER_LICENSE_PATTERNS: Lazy<Vec<PatternDef>> = Lazy::new(|| {
     vec![(
         r"\b(?:DL|License|Driver'?s? License)[#:\s]+[A-Z0-9]{5,20}\b",
         "Driver's license number",
-        MaskingStrategy::Redact,
+        None,
     )]
 });
 
@@ -155,13 +142,9 @@ static BANK_ACCOUNT_PATTERNS: Lazy<Vec<PatternDef>> = Lazy::new(|| {
         (
             r"\b(?:Account|Acct|Bank\s+Account|Account\s+Number|Routing\s+Account)[#:\s-]*\d{8,17}\b",
             "Bank account number with explicit context",
-            MaskingStrategy::Redact,
+            None,
         ),
-        (
-            r"\b[A-Z]{2}\d{2}[A-Z0-9]{4}\d{7}(?:\d{3})?\b",
-            "IBAN",
-            MaskingStrategy::Redact,
-        ),
+        (r"\b[A-Z]{2}\d{2}[A-Z0-9]{4}\d{7}(?:\d{3})?\b", "IBAN", None),
     ]
 });
 
@@ -170,7 +153,7 @@ static MEDICAL_RECORD_PATTERNS: Lazy<Vec<PatternDef>> = Lazy::new(|| {
     vec![(
         r"\b(?:MRN|Medical Record)[#:\s]+[A-Z0-9]{6,12}\b",
         "Medical record number",
-        MaskingStrategy::Redact,
+        None,
     )]
 });
 
@@ -193,7 +176,7 @@ pub fn compile_patterns(config: &PIIConfig) -> Result<CompiledPatterns, String> 
                     patterns.push(CompiledPattern {
                         pii_type: $pii_type,
                         regex,
-                        mask_strategy: Some(*mask_strategy),
+                        mask_strategy: *mask_strategy,
                         description: description.to_string(),
                     });
                 }
@@ -261,7 +244,7 @@ pub fn compile_patterns(config: &PIIConfig) -> Result<CompiledPatterns, String> 
             patterns.push(CompiledPattern {
                 pii_type: PIIType::Custom,
                 regex,
-                mask_strategy: Some(custom.mask_strategy),
+                mask_strategy: custom.mask_strategy,
                 description: custom.description.clone(),
             });
         }
@@ -439,7 +422,7 @@ mod tests {
         config.custom_patterns.push(super::super::config::CustomPattern {
             pattern: "(foo|bar|baz|qux|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen)".to_string(),
             description: "Too many branches".to_string(),
-            mask_strategy: MaskingStrategy::Redact,
+            mask_strategy: Some(MaskingStrategy::Redact),
             enabled: true,
         });
 
@@ -455,7 +438,7 @@ mod tests {
             .push(super::super::config::CustomPattern {
                 pattern: r"foo\|bar\+\?\{baz\}".to_string(),
                 description: "Escaped regex metacharacters".to_string(),
-                mask_strategy: MaskingStrategy::Redact,
+                mask_strategy: Some(MaskingStrategy::Redact),
                 enabled: true,
             });
 
