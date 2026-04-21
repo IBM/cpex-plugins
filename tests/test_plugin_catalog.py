@@ -1288,7 +1288,7 @@ class PluginCatalogTests(unittest.TestCase):
             payload = json.loads(result.stdout)
             self.assertEqual(payload, {"plugins": ["pii_filter", "rate_limiter"], "has_plugins": True})
 
-    def test_ci_selection_treats_shared_test_and_tool_changes_as_all_plugins(self) -> None:
+    def test_ci_selection_treats_catalog_test_change_as_not_shared(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             git = lambda *args: subprocess.run(  # noqa: E731
@@ -1313,16 +1313,112 @@ class PluginCatalogTests(unittest.TestCase):
             tests_dir = root / "tests"
             tests_dir.mkdir()
             (tests_dir / "test_plugin_catalog.py").write_text("# shared test change\n")
+            git("add", ".")
+            git("commit", "--no-verify", "-m", "catalog test change")
+
+            result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload, {"plugins": [], "has_plugins": False})
+
+    def test_ci_selection_treats_shared_tool_changes_as_all_plugins(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            git = lambda *args: subprocess.run(  # noqa: E731
+                ["git", *args],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            git("init")
+            git("config", "user.name", "Test User")
+            git("config", "user.email", "test@example.com")
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/rate_limiter", "plugins/rust/python-package/pii_filter"]\n'
+            )
+            self._create_plugin(root, "rate_limiter")
+            self._create_plugin(root, "pii_filter")
+            git("add", ".")
+            git("commit", "--no-verify", "-m", "seed layout")
+            base_sha = git("rev-parse", "HEAD").stdout.strip()
+
             tools_dir = root / "tools"
             tools_dir.mkdir()
             (tools_dir / "plugin_catalog.py").write_text("# shared tool change\n")
             git("add", ".")
-            git("commit", "--no-verify", "-m", "shared ci inputs")
+            git("commit", "--no-verify", "-m", "shared tool input")
 
             result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = json.loads(result.stdout)
             self.assertEqual(payload, {"plugins": ["pii_filter", "rate_limiter"], "has_plugins": True})
+
+    def test_ci_selection_treats_cargo_lock_change_as_not_shared(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            git = lambda *args: subprocess.run(  # noqa: E731
+                ["git", *args],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            git("init")
+            git("config", "user.name", "Test User")
+            git("config", "user.email", "test@example.com")
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/rate_limiter", "plugins/rust/python-package/pii_filter"]\n'
+            )
+            self._create_plugin(root, "rate_limiter")
+            self._create_plugin(root, "pii_filter")
+            (root / "Cargo.lock").write_text("# seed\n")
+            git("add", ".")
+            git("commit", "--no-verify", "-m", "seed layout")
+            base_sha = git("rev-parse", "HEAD").stdout.strip()
+
+            (root / "Cargo.lock").write_text("# updated\n")
+            git("add", ".")
+            git("commit", "--no-verify", "-m", "lockfile update")
+
+            result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload, {"plugins": [], "has_plugins": False})
+
+    def test_changed_returns_plugin_for_plugin_integration_test_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            git = lambda *args: subprocess.run(  # noqa: E731
+                ["git", *args],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            git("init")
+            git("config", "user.name", "Test User")
+            git("config", "user.email", "test@example.com")
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/rate_limiter", "plugins/rust/python-package/pii_filter"]\n'
+            )
+            self._create_plugin(root, "rate_limiter")
+            self._create_plugin(root, "pii_filter")
+            integration_dir = root / "plugins" / "tests" / "pii_filter"
+            integration_dir.mkdir(parents=True)
+            (integration_dir / "test_integration.py").write_text("# seed\n")
+            git("add", ".")
+            git("commit", "--no-verify", "-m", "seed layout")
+            base_sha = git("rev-parse", "HEAD").stdout.strip()
+
+            (integration_dir / "test_integration.py").write_text("# updated\n")
+            git("add", ".")
+            git("commit", "--no-verify", "-m", "plugin integration change")
+
+            result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload, {"plugins": ["pii_filter"], "has_plugins": True})
 
     def test_ci_selection_treats_shared_crate_changes_as_all_plugins(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1423,14 +1519,46 @@ class PluginCatalogTests(unittest.TestCase):
         expected_paths = {
             "Makefile",
             "Cargo.toml",
-            "Cargo.lock",
             "crates/**",
             "README.md",
             "DEVELOPING.md",
             "TESTING.md",
-            "tests/**",
+            "plugins/tests/**",
             "tools/**",
             ".github/workflows/ci-rust-python-package.yaml",
+            ".github/workflows/release-rust-python-package.yaml",
+        }
+        actual_paths = {
+            match.group(1)
+            for match in re.finditer(r'- "([^"]+)"', workflow)
+        }
+        self.assertTrue(expected_paths.issubset(actual_paths))
+
+    def test_catalog_workflow_paths_match_contract(self) -> None:
+        workflow = (
+            REPO_ROOT / ".github" / "workflows" / "ci-plugin-catalog.yaml"
+        ).read_text()
+        expected_paths = {
+            "tests/test_plugin_catalog.py",
+            "tools/plugin_catalog.py",
+            ".github/workflows/ci-plugin-catalog.yaml",
+            ".github/workflows/ci-rust-python-package.yaml",
+            ".github/workflows/release-rust-python-package.yaml",
+        }
+        actual_paths = {
+            match.group(1)
+            for match in re.finditer(r'- "([^"]+)"', workflow)
+        }
+        self.assertTrue(expected_paths.issubset(actual_paths))
+
+    def test_install_wheel_workflow_paths_match_contract(self) -> None:
+        workflow = (
+            REPO_ROOT / ".github" / "workflows" / "ci-install-built-wheel.yaml"
+        ).read_text()
+        expected_paths = {
+            "tests/test_install_built_wheel.py",
+            "plugins/rust/python-package/**",
+            ".github/workflows/ci-install-built-wheel.yaml",
             ".github/workflows/release-rust-python-package.yaml",
         }
         actual_paths = {
@@ -1545,7 +1673,8 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertNotIn("pulls?state=open&head=", workflow)
         self.assertNotIn("dedupe:", workflow)
         self.assertIn("if: needs.validate-and-detect.outputs.has_plugins == 'true'", workflow)
-        self.assertIn("tests/test_install_built_wheel.py", workflow)
+        self.assertNotIn("tests/test_plugin_catalog.py", workflow)
+        self.assertNotIn("tests/test_install_built_wheel.py", workflow)
         self.assertIn("python3 tools/plugin_catalog.py ci-selection . diff", workflow)
         self.assertIn("run: make ci", workflow)
         self.assertIn("shell: bash", workflow)
@@ -1578,6 +1707,45 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertNotRegex(
             workflow,
             r"defaults:\n\s+run:\n\s+shell: bash\n\s+working-directory: .*\$\{\{",
+        )
+
+    def test_catalog_workflow_runs_catalog_suite(self) -> None:
+        workflow = (
+            REPO_ROOT / ".github" / "workflows" / "ci-plugin-catalog.yaml"
+        ).read_text()
+        self.assertIn("name: CI Plugin Catalog", workflow)
+        self.assertIn("concurrency:", workflow)
+        self.assertIn("cancel-in-progress: true", workflow)
+        self.assertIn("python3 -m unittest tests/test_plugin_catalog.py", workflow)
+        self.assertNotIn("tests/test_install_built_wheel.py", workflow)
+        self.assertNotIn("python3 tools/plugin_catalog.py ci-selection", workflow)
+        self.assertIn(
+            "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+            workflow,
+        )
+        self.assertIn(
+            "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+            workflow,
+        )
+
+    def test_install_wheel_workflow_runs_install_suite(self) -> None:
+        workflow = (
+            REPO_ROOT / ".github" / "workflows" / "ci-install-built-wheel.yaml"
+        ).read_text()
+        self.assertIn("name: CI Install Built Wheel", workflow)
+        self.assertIn("concurrency:", workflow)
+        self.assertIn("cancel-in-progress: true", workflow)
+        self.assertIn("python3 -m unittest tests/test_install_built_wheel.py", workflow)
+        self.assertNotIn("tests/test_plugin_catalog.py", workflow)
+        self.assertIn("uses: ./.github/workflows/release-rust-python-package.yaml", workflow)
+        self.assertIn("publish_enabled: false", workflow)
+        self.assertIn(
+            "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+            workflow,
+        )
+        self.assertIn(
+            "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+            workflow,
         )
 
     def test_release_workflow_tests_artifacts_outside_source_tree(self) -> None:

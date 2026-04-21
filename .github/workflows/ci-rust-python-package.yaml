@@ -6,13 +6,12 @@ on:
     paths:
       - "Makefile"
       - "Cargo.toml"
-      - "Cargo.lock"
       - "crates/**"
       - "README.md"
       - "DEVELOPING.md"
       - "TESTING.md"
       - "plugins/rust/python-package/**"
-      - "tests/**"
+      - "plugins/tests/**"
       - "tools/**"
       - ".github/workflows/ci-rust-python-package.yaml"
       - ".github/workflows/release-rust-python-package.yaml"
@@ -21,13 +20,12 @@ on:
     paths:
       - "Makefile"
       - "Cargo.toml"
-      - "Cargo.lock"
       - "crates/**"
       - "README.md"
       - "DEVELOPING.md"
       - "TESTING.md"
       - "plugins/rust/python-package/**"
-      - "tests/**"
+      - "plugins/tests/**"
       - "tools/**"
       - ".github/workflows/ci-rust-python-package.yaml"
       - ".github/workflows/release-rust-python-package.yaml"
@@ -54,9 +52,6 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.12"
-
-      - name: Run catalog tests
-        run: python3 -m unittest tests/test_plugin_catalog.py tests/test_install_built_wheel.py
 
       - id: detect
         shell: bash

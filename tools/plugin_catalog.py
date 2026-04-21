@@ -20,12 +20,10 @@ SHARED_PATH_PREFIXES = (
     "Makefile",
     ".github/workflows/",
     "Cargo.toml",
-    "Cargo.lock",
     "crates/",
     "README.md",
     "DEVELOPING.md",
     "TESTING.md",
-    "tests/",
     "tools/",
 )
 
@@ -379,10 +377,14 @@ def _changed_plugins_for_records(
 
     changed: set[str] = set()
     managed_prefix = f"{MANAGED_ROOT.as_posix()}/"
+    integration_prefix = "plugins/tests/"
     for path in changed_paths:
         if not path.startswith(managed_prefix):
-            continue
-        relative = path[len(managed_prefix):]
+            if not path.startswith(integration_prefix):
+                continue
+            relative = path[len(integration_prefix):]
+        else:
+            relative = path[len(managed_prefix):]
         slug = relative.split("/", maxsplit=1)[0]
         if slug in plugin_lookup:
             changed.add(slug)
