@@ -163,6 +163,41 @@ async def test_prompt_post_fetch_masks_message_content_through_python_shim():
 
 
 @pytest.mark.asyncio
+async def test_prompt_post_fetch_does_not_mutate_original_payload():
+    plugin = PIIFilterPlugin(_make_config())
+    original_first = Message(
+        role="assistant",
+        content=TextContent(text="Contact alice@example.com"),
+    )
+    original_second = Message(
+        role="assistant",
+        content=TextContent(text="Status nominal"),
+    )
+    payload = PromptPosthookPayload(
+        prompt_id="prompt-1",
+        result=PromptResult(
+            messages=[original_first, original_second]
+        ),
+    )
+
+    result = await plugin.prompt_post_fetch(payload, _make_context())
+
+    assert result.modified_payload is not None
+    assert payload.result.messages[0].content.text == "Contact alice@example.com"
+    assert payload.result.messages[1].content.text == "Status nominal"
+    assert (
+        "alice@example.com"
+        not in result.modified_payload.result.messages[0].content.text
+    )
+    assert result.modified_payload.result.messages[1].content.text == "Status nominal"
+    assert result.modified_payload.result.messages is not payload.result.messages
+    assert result.modified_payload.result.messages[0] is not original_first
+    assert result.modified_payload.result.messages[0].content is not original_first.content
+    assert result.modified_payload.result.messages[1] is not original_second
+    assert result.modified_payload.result.messages[1].content is not original_second.content
+
+
+@pytest.mark.asyncio
 async def test_prompt_post_fetch_blocks_when_configured():
     plugin = PIIFilterPlugin(_make_config(block_on_detection=True))
     payload = PromptPosthookPayload(

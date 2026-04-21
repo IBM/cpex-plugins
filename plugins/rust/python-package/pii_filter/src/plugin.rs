@@ -66,23 +66,38 @@ impl PIIFilterPluginCore {
             return default_result(py, "PromptPosthookResult");
         };
 
+        let mut updated_messages = Vec::with_capacity(messages.len());
         let mut changed = false;
         let mut total_count = 0usize;
         let mut detected_types = BTreeSet::new();
 
         for message in messages.iter() {
             let Ok(content) = message.getattr("content") else {
+                updated_messages.push(clone_python_object(py, &message)?.unbind());
                 continue;
             };
             let Ok(text_obj) = content.getattr("text") else {
+                updated_messages.push(clone_payload_with_attr(
+                    py,
+                    &message,
+                    "content",
+                    &clone_python_object(py, &content)?.unbind(),
+                )?);
                 continue;
             };
             let Ok(text) = text_obj.extract::<String>() else {
+                updated_messages.push(clone_payload_with_attr(
+                    py,
+                    &message,
+                    "content",
+                    &clone_python_object(py, &content)?.unbind(),
+                )?);
                 continue;
             };
 
             let detections = self.detector.detect_rust(&text)?;
             if detections.is_empty() {
+                updated_messages.push(clone_prompt_message(py, &message, &content, &text_obj)?);
                 continue;
             }
 
@@ -122,7 +137,7 @@ impl PIIFilterPluginCore {
             }
 
             let masked = self.detector.mask_rust(&text, &detections)?;
-            content.setattr("text", masked)?;
+            let masked_text = masked.into_pyobject(py)?.into_any().unbind();
             self.log_detections(
                 py,
                 "prompt_post_fetch",
@@ -131,6 +146,12 @@ impl PIIFilterPluginCore {
                 role.as_deref(),
                 false,
             )?;
+            updated_messages.push(clone_prompt_message(
+                py,
+                &message,
+                &content,
+                masked_text.bind(py),
+            )?);
             changed = true;
         }
 
@@ -142,10 +163,23 @@ impl PIIFilterPluginCore {
             detected_types.into_iter().collect(),
         )?;
         if changed {
+            let cloned_messages = PyList::empty(py);
+            for message in updated_messages {
+                cloned_messages.append(message.bind(py))?;
+            }
+            let cloned_result = clone_payload_with_attr(
+                py,
+                &result,
+                "messages",
+                &cloned_messages.into_any().unbind(),
+            )?;
             return build_result(
                 py,
                 "PromptPosthookResult",
-                [("modified_payload", payload.clone().unbind())],
+                [(
+                    "modified_payload",
+                    clone_payload_with_attr(py, payload, "result", &cloned_result)?,
+                )],
             );
         }
 
@@ -422,6 +456,18 @@ fn default_result<'py>(py: Python<'py>, class_name: &str) -> PyResult<Py<PyAny>>
     bridge_default_result(py, class_name)
 }
 
+fn clone_python_object<'py>(
+    py: Python<'py>,
+    object: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    if object.hasattr("model_copy")? {
+        object.call_method0("model_copy")
+    } else {
+        let copy = PyModule::import(py, "copy")?;
+        copy.getattr("copy")?.call1((object,))
+    }
+}
+
 fn clone_payload_with_attr(
     py: Python<'_>,
     payload: &Bound<'_, PyAny>,
@@ -435,13 +481,23 @@ fn clone_payload_with_attr(
         kwargs.set_item("update", update)?;
         payload.call_method("model_copy", (), Some(&kwargs))?
     } else {
-        let copy = PyModule::import(py, "copy")?;
-        let cloned = copy.getattr("copy")?.call1((payload,))?;
+        let cloned = clone_python_object(py, payload)?;
         cloned.setattr(attr, new_value.bind(py))?;
         cloned
     };
 
     Ok(cloned.unbind())
+}
+
+fn clone_prompt_message(
+    py: Python<'_>,
+    message: &Bound<'_, PyAny>,
+    content: &Bound<'_, PyAny>,
+    text_value: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let cloned_content =
+        clone_payload_with_attr(py, content, "text", &text_value.clone().unbind())?;
+    clone_payload_with_attr(py, message, "content", &cloned_content)
 }
 
 fn count_detections(detections: &HashMap<PIIType, Vec<Detection>>) -> usize {
@@ -529,7 +585,11 @@ class Payload:
                 .unwrap()
                 .cast_into::<PyDict>()
                 .unwrap();
-            let cloned_args = cloned.getattr("args").unwrap().cast_into::<PyDict>().unwrap();
+            let cloned_args = cloned
+                .getattr("args")
+                .unwrap()
+                .cast_into::<PyDict>()
+                .unwrap();
             let cloned_user = cloned_args
                 .get_item("user")
                 .unwrap()

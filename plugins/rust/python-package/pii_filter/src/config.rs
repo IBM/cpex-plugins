@@ -544,4 +544,60 @@ class ConfigModel:
             assert!(err.to_string().contains("custom_patterns[].mask_strategy"));
         });
     }
+
+    #[test]
+    fn test_from_py_object_rejects_invalid_default_mask_strategy_from_model_dump() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    r#"
+class ConfigModel:
+    def model_dump(self):
+        return {"default_mask_strategy": "partail"}
+"#
+                ),
+                pyo3::ffi::c_str!("test_invalid_default_model.py"),
+                pyo3::ffi::c_str!("test_invalid_default_model"),
+            )
+            .unwrap();
+            let config_model = module.getattr("ConfigModel").unwrap().call0().unwrap();
+
+            let err = PIIConfig::from_py_object(&config_model).unwrap_err();
+            assert!(err.to_string().contains("default_mask_strategy"));
+        });
+    }
+
+    #[test]
+    fn test_from_py_object_rejects_invalid_custom_mask_strategy_from_model_dump() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    r#"
+class ConfigModel:
+    def model_dump(self):
+        return {
+            "custom_patterns": [
+                {
+                    "pattern": r"\bEMP\d{6}\b",
+                    "description": "Employee ID",
+                    "mask_strategy": "partail",
+                }
+            ]
+        }
+"#
+                ),
+                pyo3::ffi::c_str!("test_invalid_custom_model.py"),
+                pyo3::ffi::c_str!("test_invalid_custom_model"),
+            )
+            .unwrap();
+            let config_model = module.getattr("ConfigModel").unwrap().call0().unwrap();
+
+            let err = PIIConfig::from_py_object(&config_model).unwrap_err();
+            assert!(err.to_string().contains("custom_patterns[].mask_strategy"));
+        });
+    }
 }
