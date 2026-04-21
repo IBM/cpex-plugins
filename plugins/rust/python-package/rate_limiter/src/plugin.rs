@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use cpex_framework_bridge::{build_framework_object, default_result};
+use log::warn;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyModule, PyTuple};
 use pyo3_async_runtimes::tokio::{future_into_py, into_future};
@@ -33,14 +34,7 @@ impl RateLimiterPluginCore {
     #[new]
     pub fn new(config: &Bound<'_, PyDict>) -> PyResult<Self> {
         let engine = Arc::new(RateLimiterEngine::new(config)?);
-        let fail_closed = match config.get_item("fail_mode")? {
-            Some(v) if !v.is_none() => v
-                .extract::<String>()
-                .ok()
-                .map(|s| s.trim().eq_ignore_ascii_case("closed"))
-                .unwrap_or(false),
-            _ => false,
-        };
+        let fail_closed = parse_fail_mode(config)?;
         Ok(Self {
             use_async: engine.uses_async_backend(),
             engine,
@@ -193,6 +187,55 @@ impl RateLimiterPluginCore {
                 }),
             }
         })
+    }
+}
+
+/// Parse the ``fail_mode`` config key into a ``fail_closed`` bool.
+///
+/// Accepted values (case-insensitive, trimmed): ``"open"`` and ``"closed"``.
+/// An absent key, an explicit ``None``, or an empty string all resolve to
+/// fail-open (the safe default for backwards compatibility). Any other
+/// value — including typos like ``"clsoed"`` and non-string types — is
+/// logged at WARN and falls through to fail-open rather than silently
+/// disabling the fail-closed hardening the operator asked for.
+fn parse_fail_mode(config: &Bound<'_, PyDict>) -> PyResult<bool> {
+    let item = match config.get_item("fail_mode")? {
+        None => return Ok(false),
+        Some(v) if v.is_none() => return Ok(false),
+        Some(v) => v,
+    };
+
+    match item.extract::<String>() {
+        Ok(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                return Ok(false);
+            }
+            match trimmed.to_ascii_lowercase().as_str() {
+                "open" => Ok(false),
+                "closed" => Ok(true),
+                _ => {
+                    warn!(
+                        "rate limiter: unknown fail_mode={:?}; expected \"open\" or \"closed\"; defaulting to \"open\"",
+                        trimmed,
+                    );
+                    Ok(false)
+                }
+            }
+        }
+        Err(_) => {
+            // Non-string value (dict, int, list, ...). Stringify for the log
+            // so the operator sees what was actually passed.
+            let repr = item
+                .repr()
+                .map(|r| r.to_string())
+                .unwrap_or_else(|_| "<unrepresentable>".into());
+            warn!(
+                "rate limiter: fail_mode must be a string (\"open\" or \"closed\"); got {}; defaulting to \"open\"",
+                repr,
+            );
+            Ok(false)
+        }
     }
 }
 

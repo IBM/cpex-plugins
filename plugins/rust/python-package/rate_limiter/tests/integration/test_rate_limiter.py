@@ -1478,6 +1478,40 @@ class TestRedisFailModeAndViolationContext:
         )
 
     @pytest.mark.asyncio
+    async def test_invalid_fail_mode_logs_warning_and_defaults_open(self, redis_url_for_integration, caplog):
+        """Typos like 'clsoed' must WARN and default to fail-open, not silently disable.
+
+        Before the strict parser, anything that didn't case-insensitively
+        equal 'closed' silently became fail-open — including obvious
+        typos — which undermined the point of having a fail-closed knob.
+        Operators get no signal that their configured policy isn't the
+        one being applied. After the fix, unknown values are rejected
+        with a WARN log so the typo surfaces at init time.
+        """
+        import logging  # noqa: PLC0415
+
+        with caplog.at_level(logging.WARNING):
+            plugin = _make_redis_plugin_with_config(redis_url_for_integration, {"fail_mode": "clsoed"})
+
+        warnings = [
+            r for r in caplog.records
+            if r.levelno >= logging.WARNING
+            and "fail_mode" in r.getMessage()
+            and "clsoed" in r.getMessage()
+        ]
+        assert warnings, (
+            "invalid fail_mode must emit a WARN naming both the field and the bad value; "
+            f"captured records: {[(r.levelname, r.getMessage()) for r in caplog.records]}"
+        )
+
+        # Behaviour: fall back to fail-open (not fail-closed, not crash).
+        ctx = PluginContext(global_context=GlobalContext(request_id="r1", user="alice"))
+        payload = ToolPreInvokePayload(name="tool", arguments={})
+        # Deliberately hit the happy path — limit is 3/s, one request stays well under.
+        result = await plugin.tool_pre_invoke(payload, ctx)
+        assert result.violation is None, "invalid fail_mode must default to fail-open, not block"
+
+    @pytest.mark.asyncio
     async def test_allowed_request_metadata_does_not_carry_identity(self, redis_url_for_integration):
         """Allowed responses must NOT carry user_id / tenant_id in metadata.
 
