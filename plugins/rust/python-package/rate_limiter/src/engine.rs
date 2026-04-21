@@ -443,11 +443,11 @@ fn build_headers_dict<'py>(
 
 /// Build metadata dict — mirrors Python `_rust_to_plugin_meta()`.
 ///
-/// When the caller supplies `user` and/or `tenant`, they are surfaced in
-/// the meta dict as `user_id` and `tenant_id` so that a blocked request's
-/// `PluginViolation.details` carries enough identity for downstream
-/// debugging (G7). Missing values are omitted rather than written as
-/// empty strings.
+/// When a request is blocked, identity (`user_id` / `tenant_id`) is
+/// surfaced in the meta dict so the resulting `PluginViolation.details`
+/// carries enough context for downstream debugging (G7). Identity is
+/// intentionally NOT attached on allowed responses to avoid widening
+/// identity exposure to every metadata consumer on the hot path.
 fn build_meta_dict<'py>(
     py: Python<'py>,
     eval: &EvalResult,
@@ -462,11 +462,13 @@ fn build_meta_dict<'py>(
     meta.set_item("limited", true)?;
     meta.set_item("remaining", eval.remaining)?;
     meta.set_item("reset_in", reset_in)?;
-    if let Some(u) = user.filter(|s| !s.is_empty()) {
-        meta.set_item("user_id", u)?;
-    }
-    if let Some(t) = tenant.filter(|s| !s.is_empty()) {
-        meta.set_item("tenant_id", t)?;
+    if !eval.allowed {
+        if let Some(u) = user.filter(|s| !s.is_empty()) {
+            meta.set_item("user_id", u)?;
+        }
+        if let Some(t) = tenant.filter(|s| !s.is_empty()) {
+            meta.set_item("tenant_id", t)?;
+        }
     }
 
     let has_violated = !eval.violated_dimensions.is_empty();

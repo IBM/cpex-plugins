@@ -1477,6 +1477,35 @@ class TestRedisFailModeAndViolationContext:
             f"violation.details must carry user_id; got details={details!r}"
         )
 
+    @pytest.mark.asyncio
+    async def test_allowed_request_metadata_does_not_carry_identity(self, redis_url_for_integration):
+        """Allowed responses must NOT carry user_id / tenant_id in metadata.
+
+        Identity fields belong on the block path (violation.details) so
+        operators can see who triggered a 429. Exposing them on every
+        allowed response widens identity leak surface to downstream
+        consumers that inspect plugin metadata and bloats the hot path
+        with data no caller needs.
+        """
+        await _flush_redis(redis_url_for_integration)
+
+        plugin = _make_redis_plugin(redis_url_for_integration, limit="5/s")
+        ctx = PluginContext(
+            global_context=GlobalContext(request_id="r1", user="alice@example.com", tenant_id="team_a")
+        )
+        payload = ToolPreInvokePayload(name="tool", arguments={})
+
+        result = await plugin.tool_pre_invoke(payload, ctx)
+
+        assert result.violation is None, "request under limit must be allowed"
+        metadata = result.metadata or {}
+        assert "user_id" not in metadata, (
+            f"allowed response must not carry user_id in metadata; got metadata={metadata!r}"
+        )
+        assert "tenant_id" not in metadata, (
+            f"allowed response must not carry tenant_id in metadata; got metadata={metadata!r}"
+        )
+
 
 class TestConfigHardening:
     """Config hardening (G13, G15).
