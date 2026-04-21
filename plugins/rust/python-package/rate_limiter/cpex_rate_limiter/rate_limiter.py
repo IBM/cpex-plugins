@@ -47,6 +47,7 @@ class RateLimiterConfig:
         "backend",
         "redis_url",
         "redis_key_prefix",
+        "fail_mode",
     )
 
     def __init__(self, **overrides) -> None:

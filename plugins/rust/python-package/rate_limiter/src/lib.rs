@@ -31,6 +31,7 @@ fn compat_default_config(py: Python<'_>) -> PyResult<Py<PyDict>> {
     defaults.set_item("backend", "memory")?;
     defaults.set_item("redis_url", py.None())?;
     defaults.set_item("redis_key_prefix", "rl")?;
+    defaults.set_item("fail_mode", "open")?;
     Ok(defaults.unbind())
 }
 

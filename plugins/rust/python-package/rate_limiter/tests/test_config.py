@@ -106,3 +106,38 @@ class TestRateLimiterPluginConfig:
             redis_url="redis://localhost:6379/0",
         ))
         assert plugin is not None
+
+
+class TestFailModePublicSurface:
+    """fail_mode must be reachable through the advertised Python compat API.
+
+    G6 of the review feedback: the Rust core supports fail_mode, but the
+    public compat layer was dropping it, so callers following the
+    RateLimiterConfig helper pattern couldn't actually enable fail-closed
+    behaviour.
+    """
+
+    def test_compat_default_config_includes_fail_mode(self):
+        """compat_default_config() must list fail_mode among its keys."""
+        from cpex_rate_limiter.rate_limiter_rust import compat_default_config  # noqa: PLC0415
+
+        defaults = compat_default_config()
+        assert "fail_mode" in defaults, (
+            f"compat_default_config() must include 'fail_mode'; got keys={sorted(defaults.keys())}"
+        )
+
+    def test_rate_limiter_config_preserves_fail_mode(self):
+        """RateLimiterConfig(fail_mode=...) must round-trip through the __slots__."""
+        cfg = RateLimiterConfig(fail_mode="closed")
+        assert getattr(cfg, "fail_mode", None) == "closed", (
+            "RateLimiterConfig must expose fail_mode via its attribute surface"
+        )
+
+    def test_rate_limiter_config_fail_mode_defaults_to_open(self):
+        """When fail_mode is not passed, RateLimiterConfig exposes the safe default."""
+        cfg = RateLimiterConfig()
+        # Default should be the string "open" (mirroring the Rust-side fallback),
+        # not None — this is what operators read when inspecting the config object.
+        assert getattr(cfg, "fail_mode", "__missing__") == "open", (
+            "RateLimiterConfig.fail_mode must default to 'open' for fail-open behaviour"
+        )
