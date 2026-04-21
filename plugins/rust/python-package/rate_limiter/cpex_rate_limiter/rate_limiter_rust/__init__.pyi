@@ -102,8 +102,15 @@ class RateLimiterEngine:
         - `backend`: `"memory"` (default) or `"redis"`
         - `redis_url`: required when `backend = "redis"`
         - `redis_key_prefix`: key namespace prefix (default `"rl"`)
+        - `fail_mode`: `"open"` (default) or `"closed"` — handled by the
+          plugin shim, but accepted here so it doesn't trip the unknown-key
+          warning below.
+        
+        Any other key in the dict is logged at WARN so misspellings (e.g.
+        `redis_ur` instead of `redis_url`) surface visibly instead of being
+        silently ignored.
         """
-    def check(self, user: builtins.str, tenant: typing.Optional[builtins.str], tool: builtins.str, now_unix: builtins.int, include_retry_after: builtins.bool) -> tuple[builtins.bool, dict, dict]:
+    def check(self, user: builtins.str, tenant: typing.Optional[builtins.str], tool: builtins.str, now_unix: builtins.int, include_retry_after: builtins.bool, context_prefix: typing.Optional[builtins.str]) -> tuple[builtins.bool, dict, dict]:
         r"""
         High-level check: builds dimension keys internally, evaluates, and
         returns pre-built Python dicts for headers and metadata.
@@ -113,13 +120,18 @@ class RateLimiterEngine:
         
         Returns `(allowed, headers_dict, meta_dict)`.
         
+        When `context_prefix` is provided (e.g. a team/tenant ID), it is
+        prepended to every dimension key so that separate plugin instances
+        for different tenants use isolated Redis counters instead of sharing
+        a single key namespace.
+        
         **Note:** The Redis backend arm uses `block_on()` on a dedicated Tokio
         runtime, which would deadlock if called from within a Tokio context.
         The Python wrapper routes Redis to `check_async()` instead; this sync
         path is intended for the memory backend.  The `debug_assert` below
         guards against accidental misuse.
         """
-    def check_async(self, user: builtins.str, tenant: typing.Optional[builtins.str], tool: builtins.str, now_unix: builtins.int, include_retry_after: builtins.bool) -> typing.Any:
+    def check_async(self, user: builtins.str, tenant: typing.Optional[builtins.str], tool: builtins.str, now_unix: builtins.int, include_retry_after: builtins.bool, context_prefix: typing.Optional[builtins.str]) -> typing.Any:
         r"""
         Async variant of `check()` for Redis-backed deployments.
         
@@ -129,6 +141,12 @@ class RateLimiterEngine:
 @typing.final
 class RateLimiterPluginCore:
     def __new__(cls, config: dict) -> RateLimiterPluginCore: ...
+    def shutdown(self) -> None:
+        r"""
+        Release backend-held resources (e.g. the cached Redis multiplexed
+        connection). Called by the Python shim's `shutdown()` when the plugin
+        framework tears the plugin down.
+        """
     def prompt_pre_fetch(self, payload: typing.Any, context: typing.Any) -> typing.Any: ...
     def tool_pre_invoke(self, payload: typing.Any, context: typing.Any) -> typing.Any: ...
 
