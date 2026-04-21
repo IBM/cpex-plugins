@@ -122,6 +122,23 @@ class TestIsFailure:
     def test_non_dict_result_is_not_failure(self):
         assert _is_failure("error string", self.cfg) is False
 
+    def test_status_200_in_structured_content_is_not_failure(self):
+        """HTTP 200 status code should not be treated as a failure."""
+        assert _is_failure({"isError": False, "structuredContent": {"status_code": 200}}, self.cfg) is False
+
+    def test_empty_dict_is_not_failure(self):
+        """Empty result dict should not be treated as a failure."""
+        assert _is_failure({}, self.cfg) is False
+
+    def test_structured_content_without_status_code_is_not_failure(self):
+        """Structured content without status_code should not be treated as a failure."""
+        assert _is_failure({"isError": False, "structuredContent": {"result": "ok"}}, self.cfg) is False
+
+    def test_is_error_with_empty_structured_content_always_retries(self):
+        """isError=True with empty structured content should trigger retry."""
+        result = {"isError": True, "structuredContent": {}}
+        assert _is_failure(result, self.cfg) is True
+
 
 class TestCfgFor:
     def test_no_override_returns_same_object(self):
@@ -138,6 +155,13 @@ class TestCfgFor:
         cfg = RetryConfig(tool_overrides={"my_tool": {"max_retries": 1}})
         merged = _cfg_for(cfg, "my_tool")
         assert merged.tool_overrides == {}
+
+    def test_other_tool_not_affected_by_override(self):
+        """Tool-specific overrides should not affect other tools."""
+        cfg = RetryConfig(max_retries=3, tool_overrides={"tool_a": {"max_retries": 1}})
+        result = _cfg_for(cfg, "tool_b")
+        assert result is cfg
+        assert result.max_retries == 3
 
 
 class TestPluginInit:
@@ -214,6 +238,32 @@ class TestToolPostInvoke:
         ctx = make_context()
         result = await plugin.tool_post_invoke(make_payload("t", {"isError": True}), ctx)
         assert result.retry_delay_ms == 0
+
+    @pytest.mark.asyncio
+    async def test_exhaustion_resets_counter_for_next_call(self):
+        """After exhaustion the counter resets so the next independent call gets a fresh retry budget."""
+        plugin = make_plugin({"max_retries": 2, "jitter": False})
+        ctx = make_context()
+        payload = make_payload("tool_x", {"isError": True})
+        # Exhaust: 3 failures (original + 2 retries)
+        await plugin.tool_post_invoke(payload, ctx)
+        await plugin.tool_post_invoke(payload, ctx)
+        await plugin.tool_post_invoke(payload, ctx)  # exhausted, returns 0
+        # Counter must be reset — next independent call should retry again
+        r = await plugin.tool_post_invoke(payload, ctx)
+        assert r.retry_delay_ms > 0, "next independent call must get a fresh retry, not be blocked by previous exhaustion"
+
+    @pytest.mark.asyncio
+    async def test_different_tools_have_independent_state(self):
+        """Different tools maintain separate retry state."""
+        plugin = make_plugin({"max_retries": 1})
+        ctx = make_context()
+        # tool_a exhausts retries
+        await plugin.tool_post_invoke(make_payload("tool_a", {"isError": True}), ctx)
+        await plugin.tool_post_invoke(make_payload("tool_a", {"isError": True}), ctx)
+        # tool_b is unaffected
+        r = await plugin.tool_post_invoke(make_payload("tool_b", {"isError": True}), ctx)
+        assert r.retry_delay_ms > 0
 
 
 class TestGetState:
