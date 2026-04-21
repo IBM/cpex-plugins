@@ -460,6 +460,7 @@ fn sorted_detection_types(detections: &HashMap<PIIType, Vec<Detection>>) -> Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pyo3::types::{PyDict, PyModule};
 
     #[test]
     fn sorted_detection_types_are_stable() {
@@ -486,5 +487,75 @@ mod tests {
 
         assert_eq!(sorted_detection_types(&detections), vec!["email", "ssn"]);
         assert_eq!(count_detections(&detections), 2);
+    }
+
+    #[test]
+    fn clone_payload_with_attr_copies_non_pydantic_payload_without_mutating_original() {
+        Python::initialize();
+        Python::attach(|py| {
+            let payload_module = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    r#"
+class Payload:
+    def __init__(self):
+        self.prompt_id = "prompt-1"
+        self.args = {"user": {"email": "alice@example.com"}}
+"#
+                ),
+                pyo3::ffi::c_str!("test_payload.py"),
+                pyo3::ffi::c_str!("test_payload"),
+            )
+            .unwrap();
+            let payload = payload_module.getattr("Payload").unwrap().call0().unwrap();
+
+            let masked_args = PyDict::new(py);
+            let masked_user = PyDict::new(py);
+            masked_user.set_item("email", "[REDACTED]").unwrap();
+            masked_args.set_item("user", masked_user).unwrap();
+
+            let cloned =
+                clone_payload_with_attr(py, &payload, "args", &masked_args.into_any().unbind())
+                    .unwrap();
+            let cloned = cloned.bind(py);
+            let original_args = payload
+                .getattr("args")
+                .unwrap()
+                .cast_into::<PyDict>()
+                .unwrap();
+            let original_user = original_args
+                .get_item("user")
+                .unwrap()
+                .unwrap()
+                .cast_into::<PyDict>()
+                .unwrap();
+            let cloned_args = cloned.getattr("args").unwrap().cast_into::<PyDict>().unwrap();
+            let cloned_user = cloned_args
+                .get_item("user")
+                .unwrap()
+                .unwrap()
+                .cast_into::<PyDict>()
+                .unwrap();
+
+            assert_eq!(
+                original_user
+                    .get_item("email")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "alice@example.com"
+            );
+            assert_eq!(
+                cloned_user
+                    .get_item("email")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "[REDACTED]"
+            );
+            assert!(!original_args.is(&cloned_args));
+        });
     }
 }

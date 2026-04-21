@@ -5,7 +5,7 @@ High-performance PII detection and masking library for ContextForge.
 ## Features
 
 - Detects 12+ PII types (SSN, email, credit cards, phone numbers, and more)
-- Built-in detectors default to `redact` masking
+- Built-in detectors follow `default_mask_strategy` and default to `redact`
 - Multiple masking strategies (redact, partial, hash, tokenize, remove)
 - Parallel regex matching with RegexSet (5-10x faster than Python)
 - Zero-copy operations for nested JSON/dict traversal
@@ -31,6 +31,8 @@ Version `0.2.0` intentionally changes the built-in default masking policy from p
 Version `0.2.0` also changes custom-pattern inheritance: when `custom_patterns[].mask_strategy` is omitted or set to `null`/`None`, the pattern inherits `default_mask_strategy` instead of forcing `redact`.
 
 Version `0.2.0` also tightens the default privacy posture for observability: detection logging and detection-detail metadata are now disabled unless you opt in with `log_detections: true` or `include_detection_details: true`.
+
+Version `0.2.1` validates `default_mask_strategy` and `custom_patterns[].mask_strategy` strictly. Invalid values that older builds silently treated as `redact` now fail fast during plugin initialization.
 
 ## Detection Coverage
 
