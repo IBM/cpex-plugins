@@ -31,7 +31,9 @@ pub enum ConfigError {
     InvalidRateString(String),
     #[error("rate count must be > 0, got {0}")]
     ZeroCount(u64),
-    #[error("rate count {0} exceeds the sanity ceiling of {MAX_RATE_COUNT}; if you really need this, raise the limit deliberately")]
+    #[error(
+        "rate count {0} exceeds the sanity ceiling of {MAX_RATE_COUNT}; if you really need this, raise the limit deliberately"
+    )]
     CountAboveCeiling(u64),
     #[error("{field}: {message}")]
     FieldError { field: String, message: String },

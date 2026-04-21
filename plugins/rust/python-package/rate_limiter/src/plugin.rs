@@ -88,12 +88,11 @@ impl RateLimiterPluginCore {
                 )?
                 .into_bound(py)),
                 Err(_err) => {
-                    log_exception(
-                        py,
-                        error_log_message("prompt_pre_fetch", fail_closed),
-                    )?;
-                    Ok(backend_error_result(py, "PromptPrehookResult", fail_closed)?
-                        .into_bound(py))
+                    log_exception(py, error_log_message("prompt_pre_fetch", fail_closed))?;
+                    Ok(
+                        backend_error_result(py, "PromptPrehookResult", fail_closed)?
+                            .into_bound(py),
+                    )
                 }
             };
         }
@@ -158,12 +157,11 @@ impl RateLimiterPluginCore {
                 )?
                 .into_bound(py)),
                 Err(_err) => {
-                    log_exception(
-                        py,
-                        error_log_message("tool_pre_invoke", fail_closed),
-                    )?;
-                    Ok(backend_error_result(py, "ToolPreInvokeResult", fail_closed)?
-                        .into_bound(py))
+                    log_exception(py, error_log_message("tool_pre_invoke", fail_closed))?;
+                    Ok(
+                        backend_error_result(py, "ToolPreInvokeResult", fail_closed)?
+                            .into_bound(py),
+                    )
                 }
             };
         }
@@ -216,7 +214,11 @@ fn error_log_message(hook: &str, fail_closed: bool) -> &'static str {
     }
 }
 
-fn backend_error_result(py: Python<'_>, class_name: &str, fail_closed: bool) -> PyResult<Py<PyAny>> {
+fn backend_error_result(
+    py: Python<'_>,
+    class_name: &str,
+    fail_closed: bool,
+) -> PyResult<Py<PyAny>> {
     if fail_closed {
         build_backend_unavailable_result(py, class_name)
     } else {
@@ -363,10 +365,7 @@ fn build_backend_unavailable_result(py: Python<'_>, class_name: &str) -> PyResul
             ),
             (
                 "code",
-                "BACKEND_UNAVAILABLE"
-                    .into_pyobject(py)?
-                    .into_any()
-                    .unbind(),
+                "BACKEND_UNAVAILABLE".into_pyobject(py)?.into_any().unbind(),
             ),
             ("details", PyDict::new(py).into_any().unbind()),
             (
