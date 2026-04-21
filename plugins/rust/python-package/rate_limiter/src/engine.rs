@@ -404,10 +404,11 @@ fn warn_on_unknown_config_keys(config: &Bound<'_, PyDict>) {
     ];
     let mut unknown: Vec<String> = Vec::new();
     for (key, _) in config.iter() {
-        if let Ok(name) = key.extract::<String>() {
-            if !KNOWN.iter().any(|k| *k == name.as_str()) {
-                unknown.push(name);
-            }
+        let Ok(name) = key.extract::<String>() else {
+            continue;
+        };
+        if !KNOWN.contains(&name.as_str()) {
+            unknown.push(name);
         }
     }
     if !unknown.is_empty() {
