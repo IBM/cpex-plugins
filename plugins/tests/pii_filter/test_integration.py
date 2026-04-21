@@ -234,6 +234,22 @@ async def test_tool_pre_invoke_masks_nested_args_through_python_shim():
 
 
 @pytest.mark.asyncio
+async def test_tool_pre_invoke_returns_copied_payload_for_frozen_models():
+    plugin = PIIFilterPlugin(_make_config())
+    payload = ToolPreInvokePayload(
+        name="search",
+        args={"user": {"email": "alice@example.com"}},
+    )
+
+    result = await plugin.tool_pre_invoke(payload, _make_context())
+
+    assert result.modified_payload is not None
+    assert result.modified_payload is not payload
+    assert payload.args["user"]["email"] == "alice@example.com"
+    assert result.modified_payload.args["user"]["email"] == "[REDACTED]"
+
+
+@pytest.mark.asyncio
 async def test_tool_pre_invoke_propagates_nested_depth_errors():
     plugin = PIIFilterPlugin(_make_config(max_nested_depth=1))
     payload = ToolPreInvokePayload(
@@ -262,6 +278,22 @@ async def test_tool_post_invoke_masks_result_and_updates_context_through_python_
         "total_detections": 1,
         "total_masked": 1,
     }
+
+
+@pytest.mark.asyncio
+async def test_tool_post_invoke_returns_copied_payload_for_frozen_models():
+    plugin = PIIFilterPlugin(_make_config())
+    payload = ToolPostInvokePayload(
+        name="search",
+        result={"contact": "alice@example.com"},
+    )
+
+    result = await plugin.tool_post_invoke(payload, _make_context())
+
+    assert result.modified_payload is not None
+    assert result.modified_payload is not payload
+    assert payload.result["contact"] == "alice@example.com"
+    assert result.modified_payload.result["contact"] == "[REDACTED]"
 
 
 @pytest.mark.asyncio
