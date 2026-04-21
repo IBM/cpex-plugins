@@ -39,6 +39,11 @@ If any configured dimension is exceeded, the plugin returns a violation with HTT
     # Redis options (required when backend: redis)
     redis_url: "redis://redis:6379/0"
     redis_key_prefix: "rl"
+
+    # Backend failure policy (default: "open" — fail-open)
+    # "closed" — return HTTP 503 BACKEND_UNAVAILABLE violation when the
+    # backend can't be reached (correctness over availability)
+    fail_mode: "open"
 ```
 
 ### Configuration reference
@@ -52,8 +57,13 @@ If any configured dimension is exceeded, the plugin returns a violation with HTT
 | `backend` | string | `"memory"` | `"memory"` or `"redis"` |
 | `redis_url` | string | `null` | Redis connection URL (required when `backend: redis`) |
 | `redis_key_prefix` | string | `"rl"` | Prefix for all Redis keys |
+| `fail_mode` | string | `"open"` | Behaviour when the backend can't be reached: `"open"` allows the request through, `"closed"` blocks with a 503 `BACKEND_UNAVAILABLE` violation |
 
-**Rate string format:** `"<count>/<unit>"` where unit is `s`/`sec`/`second`, `m`/`min`/`minute`, or `h`/`hr`/`hour`. Malformed strings raise `ValueError` at startup.
+**Rate string format:** `"<count>/<unit>"` where unit is `s`/`sec`/`second`, `m`/`min`/`minute`, or `h`/`hr`/`hour`. Malformed strings raise `ValueError` at startup. Counts above `1_000_000` are rejected as a sanity ceiling — anything higher is almost certainly a misconfig or a denial-of-service vector against the memory backend.
+
+**Unknown config keys** (e.g. a typo like `redis_ur`) are logged at `WARN` at engine init alongside the accepted-key list, instead of being silently ignored.
+
+**Invalid `fail_mode` values** (e.g. `"clsoed"`) are logged at `WARN` and fall back to `"open"` so an operator's typo surfaces instead of silently disabling the hardening they asked for.
 
 **Omitting a dimension** (e.g. no `by_tenant`) means that dimension is unlimited — no counter is tracked for it.
 
@@ -107,9 +117,25 @@ Each identity (user, tenant, tool) has a bucket that holds up to `count` tokens.
 - `token_bucket`: atomic Lua script — reads `{tokens, last_refill}` hash, refills proportionally, consumes 1 token, writes back — one round-trip, no race condition
 - All gateway instances share the same counter — the configured limit is the true cluster-wide limit
 - Requires `redis_url` to be set
-- If Redis is unavailable, the plugin fails open — the request is allowed through without rate limiting. This is a deliberate design choice: an infrastructure failure must never block legitimate traffic. Operators should monitor for rate-limiter error logs and treat them as high-priority alerts
+- **Backend failure policy** is governed by `fail_mode`:
+  - `"open"` (default) — the request is allowed through without rate limiting. Availability over correctness; an infrastructure failure must never block legitimate traffic. Operators should monitor for rate-limiter error logs and treat them as high-priority alerts.
+  - `"closed"` — the request is blocked with a `PluginViolation` (code `BACKEND_UNAVAILABLE`, HTTP 503, `Retry-After: 1`). Correctness over availability; pick this when a failed rate-limit check is less acceptable than a brief outage.
 
 **Multi-instance deployment (important):** The `memory` backend is local to a single gateway instance — rate limit counters are not shared across replicas. For multi-instance deployments (e.g., behind nginx or on OpenShift with multiple gateway pods), always use `backend: redis` to ensure rate limits are enforced correctly across all instances.
+
+### Tenant-scoped Redis key layout
+
+When the plugin context carries a `tenant_id`, every dimension key is prefixed with it so counters are isolated per tenant:
+
+```
+rl:{tenant_id}:user:{email}:{window_seconds}
+rl:{tenant_id}:tenant:{tenant_id}:{window_seconds}
+rl:{tenant_id}:tool:{tool_name}:{window_seconds}
+```
+
+When `tenant_id` is absent (single-tenant deployments), the prefix is omitted and keys revert to the pre-tenant-scoping layout (`rl:user:{email}:{window}`), so single-tenant behaviour is unchanged.
+
+**Upgrade note:** the first deploy of the tenant-scoping change causes counters under `rl:user:*` / `rl:tool:*` to be orphaned while new writes land at `rl:{tenant}:user:*`. Counters effectively reset once for all in-flight windows — non-event for typical second/minute windows.
 
 ## Examples
 
@@ -169,6 +195,15 @@ config:
 ```
 
 In `permissive` mode the plugin records violations and emits `X-RateLimit-*` headers but does not block requests. Useful for baselining traffic before switching to `enforce`.
+
+## Lifecycle
+
+The plugin participates in the plugin manager's lifecycle contract:
+
+- `async def initialize(self)` — invoked once when the plugin manager constructs the plugin. Logs one `INFO` record naming the active backend (`memory` / `redis`).
+- `async def shutdown(self)` — invoked when the plugin manager tears the plugin down (runtime disable, re-instantiation after a config change). Releases backend-held resources — specifically, drops the Rust core's cached Redis multiplexed connection and the SCRIPT LOAD SHA cache. In-flight requests already hold their own clones of the connection and remain valid; the cached reference is replaced on the next request.
+
+Without `shutdown`, the cached Redis connection would leak across plugin re-instantiation, producing connection churn on the server.
 
 ## Limitations
 
