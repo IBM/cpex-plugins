@@ -256,7 +256,7 @@ class TestToolPostInvoke:
     @pytest.mark.asyncio
     async def test_different_tools_have_independent_state(self):
         """Different tools maintain separate retry state."""
-        plugin = make_plugin({"max_retries": 1})
+        plugin = make_plugin({"max_retries": 1, "jitter": False})
         ctx = make_context()
         # tool_a exhausts retries
         await plugin.tool_post_invoke(make_payload("tool_a", {"isError": True}), ctx)
