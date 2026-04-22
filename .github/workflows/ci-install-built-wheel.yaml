@@ -47,6 +47,6 @@ jobs:
     needs: test
     uses: ./.github/workflows/release-rust-python-package.yaml
     with:
-      tag: rate-limiter-v0.0.3
+      tag: retry-with-backoff-v0.1.1
       repository: testpypi
       publish_enabled: false

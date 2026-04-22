@@ -1210,7 +1210,7 @@ class PluginCatalogTests(unittest.TestCase):
             self.assertEqual(payload["plugins"], ["pii_filter", "rate_limiter"])
 
     def test_release_info_accepts_canonical_tag(self) -> None:
-        result = run_catalog("release-info", str(REPO_ROOT), "rate-limiter-v0.0.3")
+        result = run_catalog("release-info", str(REPO_ROOT), "rate-limiter-v0.0.4")
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["slug"], "rate_limiter")
@@ -1248,7 +1248,7 @@ class PluginCatalogTests(unittest.TestCase):
         )
 
     def test_release_info_rejects_noncanonical_tag(self) -> None:
-        result = run_catalog("release-info", str(REPO_ROOT), "rate_limiter-v0.0.3")
+        result = run_catalog("release-info", str(REPO_ROOT), "rate_limiter-v0.0.4")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("canonical", result.stderr.lower())
 
@@ -1682,7 +1682,7 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("working-directory: plugins/rust/python-package/${{ matrix.plugin }}", workflow)
         self.assertIn("release-validation:", workflow)
         self.assertIn("uses: ./.github/workflows/release-rust-python-package.yaml", workflow)
-        self.assertIn("tag: rate-limiter-v0.0.3", workflow)
+        self.assertIn("tag: retry-with-backoff-v0.1.1", workflow)
         self.assertIn("repository: testpypi", workflow)
         self.assertIn("publish_enabled: false", workflow)
         self.assertNotIn("tools/plugin_catalog.py ci-selection-field", workflow)
