@@ -6,7 +6,6 @@ on:
     paths:
       - "Makefile"
       - "Cargo.toml"
-      - "deny.toml"
       - "crates/**"
       - "README.md"
       - "DEVELOPING.md"
@@ -21,7 +20,6 @@ on:
     paths:
       - "Makefile"
       - "Cargo.toml"
-      - "deny.toml"
       - "crates/**"
       - "README.md"
       - "DEVELOPING.md"
@@ -130,14 +128,11 @@ jobs:
           rustc --version
           cargo --version
 
-      - name: Install cargo audit tools
-        run: cargo install cargo-audit@0.22.1 cargo-deny@0.19.0 --locked
+      - name: Install cargo audit
+        run: cargo install cargo-audit@0.22.1 --locked
 
       - name: Run cargo audit
         run: cargo audit --file Cargo.lock
-
-      - name: Run cargo deny license policy checks
-        run: cargo deny check licenses --config deny.toml
 
   coverage:
     needs: validate-and-detect

@@ -20,7 +20,6 @@ SHARED_PATH_PREFIXES = (
     "Makefile",
     ".github/workflows/",
     "Cargo.toml",
-    "deny.toml",
     "crates/",
     "README.md",
     "DEVELOPING.md",

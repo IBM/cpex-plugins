@@ -1765,7 +1765,6 @@ class PluginCatalogTests(unittest.TestCase):
         expected_paths = {
             "Makefile",
             "Cargo.toml",
-            "deny.toml",
             "crates/**",
             "README.md",
             "DEVELOPING.md",
@@ -2015,13 +2014,12 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("if: needs.validate-and-detect.outputs.has_plugins == 'true'", security_section)
         self.assertIn("if: needs.validate-and-detect.outputs.has_plugins == 'true'", coverage_section)
         self.assertIn("if: needs.validate-and-detect.outputs.has_plugins == 'true'", documentation_section)
-        self.assertIn("cargo install cargo-audit@0.22.1 cargo-deny@0.19.0 --locked", security_section)
+        self.assertIn("cargo install cargo-audit@0.22.1 --locked", security_section)
         self.assertIn("cargo audit --file Cargo.lock", security_section)
-        self.assertIn("cargo deny check licenses --config deny.toml", security_section)
+        self.assertNotIn("cargo-deny", security_section)
+        self.assertNotIn("cargo deny", security_section)
         self.assertNotIn("--workspace", security_section)
         self.assertNotIn("--manifest-path", security_section)
-        self.assertIn("--config deny.toml", security_section)
-        self.assertNotIn("/deny.toml", security_section.replace("--config deny.toml", ""))
         self.assertNotIn("matrix:", security_section)
         self.assertIn("cargo install cargo-llvm-cov --version 0.8.4 --locked", coverage_section)
         self.assertIn("package='${{ needs.validate-and-detect.outputs.single_cargo_package }}'", coverage_section)
