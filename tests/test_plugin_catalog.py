@@ -185,13 +185,34 @@ class PluginCatalogTests(unittest.TestCase):
             workspace_deps["criterion"],
             {"version": "0.8", "features": ["html_reports"]},
         )
+        self.assertEqual(workspace_deps["log"], "0.4")
+        self.assertEqual(
+            workspace_deps["pyo3-async-runtimes"],
+            {"version": "0.28", "features": ["tokio-runtime"]},
+        )
+        self.assertEqual(
+            workspace_deps["pyo3"],
+            {"version": "0.28.2", "features": ["abi3-py311"]},
+        )
+        self.assertEqual(workspace_deps["pyo3-log"], "0.13")
+        self.assertEqual(workspace_deps["pyo3-stub-gen"], "0.20.0")
+        self.assertEqual(workspace_deps["rand"], "0.8")
         self.assertEqual(workspace_deps["regex"], "1.12")
         self.assertEqual(workspace_deps["serde_json"], "1.0")
+        self.assertEqual(workspace_deps["thiserror"], "2.0")
+        self.assertEqual(
+            workspace_deps["tokio"],
+            {"version": "1", "features": ["full"]},
+        )
 
         expected_plugin_deps = {
             "encoded_exfil_detection": {
                 "dependencies": {
                     "cpex_framework_bridge": {"workspace": True},
+                    "log": {"workspace": True},
+                    "pyo3": {"workspace": True},
+                    "pyo3-log": {"workspace": True},
+                    "pyo3-stub-gen": {"workspace": True},
                     "regex": {"workspace": True},
                     "serde_json": {"workspace": True},
                 },
@@ -202,8 +223,13 @@ class PluginCatalogTests(unittest.TestCase):
             "pii_filter": {
                 "dependencies": {
                     "cpex_framework_bridge": {"workspace": True},
+                    "log": {"workspace": True},
+                    "pyo3": {"workspace": True},
+                    "pyo3-log": {"workspace": True},
+                    "pyo3-stub-gen": {"workspace": True},
                     "regex": {"workspace": True},
                     "serde_json": {"workspace": True},
+                    "thiserror": {"workspace": True},
                 },
                 "dev-dependencies": {
                     "criterion": {"workspace": True},
@@ -212,27 +238,52 @@ class PluginCatalogTests(unittest.TestCase):
             "rate_limiter": {
                 "dependencies": {
                     "cpex_framework_bridge": {"workspace": True},
+                    "log": {"workspace": True},
+                    "pyo3": {"workspace": True},
+                    "pyo3-async-runtimes": {"workspace": True},
+                    "pyo3-log": {"workspace": True},
+                    "pyo3-stub-gen": {"workspace": True},
+                    "thiserror": {"workspace": True},
+                    "tokio": {"workspace": True},
                 },
                 "dev-dependencies": {
                     "criterion": {"workspace": True},
                 },
             },
             "retry_with_backoff": {
-                "dependencies": {},
+                "dependencies": {
+                    "log": {"workspace": True},
+                    "pyo3": {"workspace": True},
+                    "pyo3-log": {"workspace": True},
+                    "pyo3-stub-gen": {"workspace": True},
+                    "rand": {"workspace": True},
+                },
                 "dev-dependencies": {},
             },
             "secrets_detection": {
                 "dependencies": {
                     "cpex_framework_bridge": {"workspace": True},
+                    "log": {"workspace": True},
+                    "pyo3": {"workspace": True},
+                    "pyo3-log": {"workspace": True},
+                    "pyo3-stub-gen": {"workspace": True},
                     "regex": {"workspace": True},
+                    "serde_json": {"workspace": True},
                 },
                 "dev-dependencies": {
                     "criterion": {"workspace": True},
                 },
             },
             "url_reputation": {
-                "dependencies": {},
-                "dev-dependencies": {},
+                "dependencies": {
+                    "log": {"workspace": True},
+                    "pyo3": {"workspace": True},
+                    "pyo3-log": {"workspace": True},
+                    "regex": {"workspace": True},
+                },
+                "dev-dependencies": {
+                    "criterion": {"workspace": True},
+                },
             },
         }
 

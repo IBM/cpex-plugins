@@ -36,33 +36,75 @@ MANIFEST_KIND_PATTERN = re.compile(
 REQUIRED_WORKSPACE_DEPENDENCIES = {
     "cpex_framework_bridge": {"path": "crates/framework_bridge"},
     "criterion": {"version": "0.8", "features": ["html_reports"]},
+    "log": "0.4",
+    "pyo3-async-runtimes": {"version": "0.28", "features": ["tokio-runtime"]},
+    "pyo3": {"version": "0.28.2", "features": ["abi3-py311"]},
+    "pyo3-log": "0.13",
+    "pyo3-stub-gen": "0.20.0",
+    "rand": "0.8",
     "regex": "1.12",
     "serde_json": "1.0",
+    "thiserror": "2.0",
+    "tokio": {"version": "1", "features": ["full"]},
 }
 REQUIRED_PLUGIN_WORKSPACE_DEPENDENCIES = {
     "encoded_exfil_detection": {
-        "dependencies": ("cpex_framework_bridge", "regex", "serde_json"),
+        "dependencies": (
+            "cpex_framework_bridge",
+            "log",
+            "pyo3",
+            "pyo3-log",
+            "pyo3-stub-gen",
+            "regex",
+            "serde_json",
+        ),
         "dev-dependencies": ("criterion",),
     },
     "pii_filter": {
-        "dependencies": ("cpex_framework_bridge", "regex", "serde_json"),
+        "dependencies": (
+            "cpex_framework_bridge",
+            "log",
+            "pyo3",
+            "pyo3-log",
+            "pyo3-stub-gen",
+            "regex",
+            "serde_json",
+            "thiserror",
+        ),
         "dev-dependencies": ("criterion",),
     },
     "rate_limiter": {
-        "dependencies": ("cpex_framework_bridge",),
+        "dependencies": (
+            "cpex_framework_bridge",
+            "log",
+            "pyo3",
+            "pyo3-async-runtimes",
+            "pyo3-stub-gen",
+            "pyo3-log",
+            "thiserror",
+            "tokio",
+        ),
         "dev-dependencies": ("criterion",),
     },
     "retry_with_backoff": {
-        "dependencies": (),
+        "dependencies": ("log", "pyo3", "pyo3-log", "pyo3-stub-gen", "rand"),
         "dev-dependencies": (),
     },
     "secrets_detection": {
-        "dependencies": ("cpex_framework_bridge", "regex"),
+        "dependencies": (
+            "cpex_framework_bridge",
+            "log",
+            "pyo3",
+            "pyo3-log",
+            "pyo3-stub-gen",
+            "regex",
+            "serde_json",
+        ),
         "dev-dependencies": ("criterion",),
     },
     "url_reputation": {
-        "dependencies": (),
-        "dev-dependencies": (),
+        "dependencies": ("log", "pyo3", "pyo3-log", "regex"),
+        "dev-dependencies": ("criterion",),
     },
 }
 
