@@ -16,16 +16,16 @@ name = "stub_gen"
 path = "src/bin/stub_gen.rs"
 
 [dependencies]
-cpex_framework_bridge = { path = "../../../../crates/framework_bridge" }
+cpex_framework_bridge = { workspace = true }
 log = { workspace = true }
 pyo3 = { workspace = true }
 pyo3-log = { workspace = true }
 pyo3-stub-gen = { workspace = true }
-regex = "1.12"
-serde_json = "1.0"
+regex = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
-criterion = { version = "0.8", features = ["html_reports"] }
+criterion = { workspace = true }
 
 [[bench]]
 name = "secrets_detection"
