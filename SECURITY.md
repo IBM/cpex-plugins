@@ -26,7 +26,7 @@ When reporting, please include:
 
 ### Supply Chain
 
-- Rust dependencies are audited with [`cargo deny`](https://github.com/EmbarkStudios/cargo-deny). Each Rust+Python plugin includes a `deny.toml` configuration.
+- Rust dependencies are audited with [`cargo deny`](https://github.com/EmbarkStudios/cargo-deny). Rust+Python plugins share the workspace-level `deny.toml` configuration.
 - Python dependencies are managed with `uv` and locked via `uv.lock`.
 - GitHub Actions workflows use pinned action versions.
 

@@ -195,7 +195,7 @@ class PluginCatalogTests(unittest.TestCase):
             {"version": "0.28.2", "features": ["abi3-py311"]},
         )
         self.assertEqual(workspace_deps["pyo3-log"], "0.13")
-        self.assertEqual(workspace_deps["pyo3-stub-gen"], "0.20.0")
+        self.assertEqual(workspace_deps["pyo3-stub-gen"], "0.22.1")
         self.assertEqual(workspace_deps["rand"], "0.8")
         self.assertEqual(workspace_deps["regex"], "1.12")
         self.assertEqual(workspace_deps["serde_json"], "1.0")
@@ -1429,6 +1429,7 @@ class PluginCatalogTests(unittest.TestCase):
                     "has_plugins": True,
                     "plugin_count": 2,
                     "single_cargo_package": "",
+                    "cargo_packages": ["pii_filter", "rate_limiter"],
                 },
             )
 
@@ -1470,6 +1471,7 @@ class PluginCatalogTests(unittest.TestCase):
                     "has_plugins": False,
                     "plugin_count": 0,
                     "single_cargo_package": "",
+                    "cargo_packages": [],
                 },
             )
 
@@ -1511,6 +1513,7 @@ class PluginCatalogTests(unittest.TestCase):
                     "has_plugins": True,
                     "plugin_count": 2,
                     "single_cargo_package": "",
+                    "cargo_packages": ["pii_filter", "rate_limiter"],
                 },
             )
 
@@ -1551,6 +1554,7 @@ class PluginCatalogTests(unittest.TestCase):
                     "has_plugins": False,
                     "plugin_count": 0,
                     "single_cargo_package": "",
+                    "cargo_packages": [],
                 },
             )
 
@@ -1593,6 +1597,7 @@ class PluginCatalogTests(unittest.TestCase):
                     "has_plugins": True,
                     "plugin_count": 1,
                     "single_cargo_package": "pii_filter",
+                    "cargo_packages": ["pii_filter"],
                 },
             )
 
@@ -1635,6 +1640,7 @@ class PluginCatalogTests(unittest.TestCase):
                     "has_plugins": True,
                     "plugin_count": 2,
                     "single_cargo_package": "",
+                    "cargo_packages": ["pii_filter", "rate_limiter"],
                 },
             )
 
@@ -1676,6 +1682,7 @@ class PluginCatalogTests(unittest.TestCase):
                     "has_plugins": True,
                     "plugin_count": 1,
                     "single_cargo_package": "rate_limiter",
+                    "cargo_packages": ["rate_limiter"],
                 },
             )
 
@@ -1707,6 +1714,20 @@ class PluginCatalogTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "")
+
+        result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "cargo_packages")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout),
+            [
+                "encoded_exfil_detection",
+                "pii_filter",
+                "rate_limiter",
+                "retry_with_backoff",
+                "secrets_detection",
+                "url_reputation",
+            ],
+        )
 
     def test_ci_selection_field_supports_diff_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2005,8 +2026,11 @@ class PluginCatalogTests(unittest.TestCase):
         )
 
         self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn('elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then', workflow)
+        self.assertIn("ci-selection . all '' ''", workflow)
         self.assertIn("plugin_count: ${{ steps.detect.outputs.plugin_count }}", workflow)
         self.assertIn("single_cargo_package: ${{ steps.detect.outputs.single_cargo_package }}", workflow)
+        self.assertIn("cargo_packages: ${{ steps.detect.outputs.cargo_packages }}", workflow)
         self.assertIn("security-policy:", workflow)
         self.assertIn("coverage:", workflow)
         self.assertIn("documentation:", workflow)
@@ -2017,27 +2041,35 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertNotIn("cargo-audit", security_section)
         self.assertNotIn("cargo audit", security_section)
         self.assertIn("cargo install cargo-deny", security_section)
-        self.assertIn("cargo deny check", security_section)
+        self.assertIn("cargo deny check --config deny.toml -A unmaintained", security_section)
         self.assertNotIn("--workspace", security_section)
         self.assertNotIn("--manifest-path", security_section)
         self.assertNotIn("matrix:", security_section)
         self.assertIn("cargo install cargo-llvm-cov --version 0.8.4 --locked", coverage_section)
-        self.assertIn("package='${{ needs.validate-and-detect.outputs.single_cargo_package }}'", coverage_section)
-        self.assertIn('cargo llvm-cov -p "${package}" --cobertura --output-path coverage/cobertura.xml', coverage_section)
-        self.assertIn("cargo llvm-cov --workspace --cobertura --output-path coverage/cobertura.xml", coverage_section)
+        self.assertIn("needs.validate-and-detect.outputs.cargo_packages", coverage_section)
+        self.assertIn('cargo_args+=("-p" "${package}")', coverage_section)
+        self.assertIn('cargo llvm-cov "${cargo_args[@]}" --cobertura --output-path coverage/cobertura.xml', coverage_section)
+        self.assertNotIn("cargo llvm-cov --workspace", coverage_section)
         self.assertIn("python3 tools/plugin_catalog.py coverage-check . coverage/cobertura.xml 50.00", coverage_section)
+        self.assertIn("needs.validate-and-detect.outputs.plugins", coverage_section)
         self.assertIn("cobertura.xml", coverage_section)
         self.assertIn("codecov/codecov-action@", coverage_section)
         self.assertNotIn("matrix:", coverage_section)
-        self.assertIn("package='${{ needs.validate-and-detect.outputs.single_cargo_package }}'", documentation_section)
+        self.assertIn("needs.validate-and-detect.outputs.cargo_packages", documentation_section)
         self.assertIn('cargo doc -p "${package}" --lib --no-deps --document-private-items', documentation_section)
-        self.assertIn("cargo doc --workspace --lib --no-deps --document-private-items", documentation_section)
+        self.assertNotIn("cargo doc --workspace", documentation_section)
         self.assertNotIn("matrix:", documentation_section)
         self.assertNotIn("upload-artifact", documentation_section)
 
     def test_coverage_check_reports_per_plugin_percentages(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/alpha", "plugins/rust/python-package/beta"]\n'
+                '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n'
+            )
+            self._create_plugin(root, "alpha")
+            self._create_plugin(root, "beta")
             report = root / "coverage.xml"
             report.write_text(
                 textwrap.dedent(
@@ -2080,7 +2112,9 @@ class PluginCatalogTests(unittest.TestCase):
                 ).strip()
             )
 
-            result = run_catalog("coverage-check", str(root), str(report), "50.0")
+            result = run_catalog(
+                "coverage-check", str(root), str(report), "50.0", '["alpha", "beta"]'
+            )
 
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = json.loads(result.stdout)
@@ -2092,6 +2126,11 @@ class PluginCatalogTests(unittest.TestCase):
     def test_coverage_check_fails_below_threshold(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/alpha"]\n'
+                '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n'
+            )
+            self._create_plugin(root, "alpha")
             report = root / "coverage.xml"
             report.write_text(
                 textwrap.dedent(
@@ -2114,10 +2153,77 @@ class PluginCatalogTests(unittest.TestCase):
                 ).strip()
             )
 
-            result = run_catalog("coverage-check", str(root), str(report), "50.1")
+            result = run_catalog("coverage-check", str(root), str(report), "50.1", '["alpha"]')
 
             self.assertEqual(result.returncode, 1)
             self.assertIn("alpha line coverage 50.00% is below 50.10%", result.stderr)
+
+    def test_coverage_check_rejects_unmanaged_plugin_coverage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/alpha"]\n'
+                '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n'
+            )
+            self._create_plugin(root, "alpha")
+            report = root / "coverage.xml"
+            report.write_text(
+                textwrap.dedent(
+                    """
+                    <coverage>
+                      <packages>
+                        <package name="plugins.rust.python-package.ghost.src">
+                          <classes>
+                            <class filename="plugins/rust/python-package/ghost/src/lib.rs">
+                              <lines><line number="1" hits="1"/></lines>
+                            </class>
+                          </classes>
+                        </package>
+                      </packages>
+                    </coverage>
+                    """
+                ).strip()
+            )
+
+            result = run_catalog("coverage-check", str(root), str(report), "50.0", '["alpha"]')
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("unknown plugin coverage entries: ['ghost']", result.stderr)
+
+    def test_coverage_check_requires_expected_plugins(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/alpha", "plugins/rust/python-package/beta"]\n'
+                '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n'
+            )
+            self._create_plugin(root, "alpha")
+            self._create_plugin(root, "beta")
+            report = root / "coverage.xml"
+            report.write_text(
+                textwrap.dedent(
+                    """
+                    <coverage>
+                      <packages>
+                        <package name="plugins.rust.python-package.alpha.src">
+                          <classes>
+                            <class filename="plugins/rust/python-package/alpha/src/lib.rs">
+                              <lines><line number="1" hits="1"/></lines>
+                            </class>
+                          </classes>
+                        </package>
+                      </packages>
+                    </coverage>
+                    """
+                ).strip()
+            )
+
+            result = run_catalog(
+                "coverage-check", str(root), str(report), "50.0", '["alpha", "beta"]'
+            )
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("missing plugin coverage entries: ['beta']", result.stderr)
 
     def test_workspace_has_single_cargo_deny_config(self) -> None:
         root_deny = REPO_ROOT / "deny.toml"

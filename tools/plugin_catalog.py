@@ -41,7 +41,7 @@ REQUIRED_WORKSPACE_DEPENDENCIES = {
     "pyo3-async-runtimes": {"version": "0.28", "features": ["tokio-runtime"]},
     "pyo3": {"version": "0.28.2", "features": ["abi3-py311"]},
     "pyo3-log": "0.13",
-    "pyo3-stub-gen": "0.20.0",
+    "pyo3-stub-gen": "0.22.1",
     "rand": "0.8",
     "regex": "1.12",
     "serde_json": "1.0",
@@ -526,18 +526,23 @@ def ci_selection(root: Path, mode: str, base: str | None = None, head: str | Non
         if base is None or head is None:
             raise CatalogError("ci-selection diff mode requires base and head revisions")
         selected = _changed_plugins_for_records(root, plugins, base, head)
-    single_cargo_package = (
-        plugin_lookup[selected[0]].cargo_package_name if len(selected) == 1 else ""
-    )
+    cargo_packages = [plugin_lookup[slug].cargo_package_name for slug in selected]
+    single_cargo_package = cargo_packages[0] if len(cargo_packages) == 1 else ""
     return {
         "plugins": selected,
         "has_plugins": bool(selected),
         "plugin_count": len(selected),
         "single_cargo_package": single_cargo_package,
+        "cargo_packages": cargo_packages,
     }
 
 
-def coverage_check(root: Path, report_path: Path, minimum_line_rate: float) -> dict:
+def coverage_check(
+    root: Path,
+    report_path: Path,
+    minimum_line_rate: float,
+    expected_plugins: list[str] | None = None,
+) -> dict:
     if not report_path.is_absolute():
         report_path = root / report_path
     if not report_path.exists():
@@ -547,6 +552,12 @@ def coverage_check(root: Path, report_path: Path, minimum_line_rate: float) -> d
         coverage = ET.parse(report_path).getroot()
     except ET.ParseError as exc:
         raise CatalogError(f"Invalid coverage XML in {report_path}: {exc}") from exc
+
+    known_plugins = {plugin.slug for plugin in discover_plugins(root)}
+    expected_plugin_set = set(expected_plugins) if expected_plugins is not None else known_plugins
+    unknown_expected = sorted(expected_plugin_set - known_plugins)
+    if unknown_expected:
+        raise CatalogError(f"Unknown expected coverage plugins: {unknown_expected}")
 
     plugin_lines: dict[str, dict[str, int]] = {}
     prefix = MANAGED_ROOT.as_posix() + "/"
@@ -564,6 +575,14 @@ def coverage_check(root: Path, report_path: Path, minimum_line_rate: float) -> d
 
     if not plugin_lines:
         raise CatalogError(f"No plugin coverage found in {report_path}")
+
+    covered_plugin_set = set(plugin_lines)
+    unknown_covered = sorted(covered_plugin_set - known_plugins)
+    if unknown_covered:
+        raise CatalogError(f"unknown plugin coverage entries: {unknown_covered}")
+    missing_expected = sorted(expected_plugin_set - covered_plugin_set)
+    if missing_expected:
+        raise CatalogError(f"missing plugin coverage entries: {missing_expected}")
 
     plugins: dict[str, dict[str, float | int]] = {}
     minimum_plugin = ""
@@ -669,9 +688,23 @@ def _command_ci_selection_field(
 
 
 def _command_coverage_check(
-    root: Path, report_path: Path, minimum_line_rate: float
+    root: Path,
+    report_path: Path,
+    minimum_line_rate: float,
+    expected_plugins: str | None,
 ) -> int:
-    payload = coverage_check(root, report_path, minimum_line_rate)
+    parsed_expected: list[str] | None = None
+    if expected_plugins is not None:
+        try:
+            candidate = json.loads(expected_plugins)
+        except json.JSONDecodeError as exc:
+            raise CatalogError(f"Invalid expected plugin JSON: {exc}") from exc
+        if not isinstance(candidate, list) or any(
+            not isinstance(plugin, str) for plugin in candidate
+        ):
+            raise CatalogError("Expected plugin coverage list must be a JSON string array")
+        parsed_expected = candidate
+    payload = coverage_check(root, report_path, minimum_line_rate, parsed_expected)
     print(json.dumps(payload, indent=2))
     return 0
 
@@ -725,13 +758,20 @@ def build_parser() -> argparse.ArgumentParser:
     ci_field_parser.add_argument("head", nargs="?")
     ci_field_parser.add_argument(
         "field",
-        choices=("plugins", "has_plugins", "plugin_count", "single_cargo_package"),
+        choices=(
+            "plugins",
+            "has_plugins",
+            "plugin_count",
+            "single_cargo_package",
+            "cargo_packages",
+        ),
     )
 
     coverage_parser = subparsers.add_parser("coverage-check")
     coverage_parser.add_argument("root", nargs="?", default=".")
     coverage_parser.add_argument("report")
     coverage_parser.add_argument("minimum_line_rate", type=float)
+    coverage_parser.add_argument("expected_plugins", nargs="?")
 
     return parser
 
@@ -756,7 +796,12 @@ def main() -> int:
         if args.command == "ci-selection-field":
             return _command_ci_selection_field(root, args.mode, args.base, args.head, args.field)
         if args.command == "coverage-check":
-            return _command_coverage_check(root, Path(args.report), args.minimum_line_rate)
+            return _command_coverage_check(
+                root,
+                Path(args.report),
+                args.minimum_line_rate,
+                args.expected_plugins,
+            )
     except CatalogError as exc:
         print(str(exc), file=sys.stderr)
         return 1
