@@ -10,6 +10,11 @@ Current plugins:
 
 - `rate_limiter`
 - `pii_filter`
+- `encoded_exfil_detection`
+- `regex_filter`
+- `retry_with_backoff`
+- `secrets_detection`
+- `url_reputation`
 
 Each managed plugin must include:
 

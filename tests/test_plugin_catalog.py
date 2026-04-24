@@ -1,7 +1,9 @@
 import json
 import os
 import ast
+import importlib.util
 import subprocess
+import sys
 import tempfile
 import textwrap
 import tomllib
@@ -12,6 +14,12 @@ import re
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "tools" / "plugin_catalog.py"
+PLUGIN_CATALOG_SPEC = importlib.util.spec_from_file_location("plugin_catalog", SCRIPT)
+assert PLUGIN_CATALOG_SPEC is not None
+plugin_catalog = importlib.util.module_from_spec(PLUGIN_CATALOG_SPEC)
+assert PLUGIN_CATALOG_SPEC.loader is not None
+sys.modules[PLUGIN_CATALOG_SPEC.name] = plugin_catalog
+PLUGIN_CATALOG_SPEC.loader.exec_module(plugin_catalog)
 
 
 def run_catalog(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -150,6 +158,17 @@ class PluginCatalogTests(unittest.TestCase):
         )
         return plugin_dir
 
+    def _plugin_record(self, slug: str) -> object:
+        return plugin_catalog.PluginRecord(
+            slug=slug,
+            path=f"plugins/rust/python-package/{slug}",
+            package_name=f"cpex-{slug.replace('_', '-')}",
+            module_name=f"cpex_{slug}",
+            kind=f"cpex_{slug}.{slug}:DemoPlugin",
+            version="0.0.1",
+            release_wheel_matrix=[],
+        )
+
     def _parse_manifest_defaults(self, manifest_path: Path) -> dict[str, object]:
         defaults: dict[str, object] = {}
         in_defaults = False
@@ -172,6 +191,84 @@ class PluginCatalogTests(unittest.TestCase):
             else:
                 defaults[key] = int(value)
         return defaults
+
+    def test_workspace_dependency_policy_fails_closed_for_known_plugin_subset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Cargo.toml").write_text(
+                "[workspace]\n"
+                'members = ["plugins/rust/python-package/rate_limiter"]\n'
+                "[workspace.dependencies]\n"
+            )
+            with self.assertRaisesRegex(
+                plugin_catalog.CatalogError,
+                "Workspace dependency policy must list every managed plugin",
+            ):
+                plugin_catalog._validate_workspace_dependency_ownership(
+                    root, [self._plugin_record("rate_limiter")]
+                )
+
+    def test_workspace_dependency_policy_requires_workspace_dependencies_for_known_plugin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            members = [
+                f"plugins/rust/python-package/{slug}"
+                for slug in sorted(plugin_catalog.REQUIRED_PLUGIN_WORKSPACE_DEPENDENCIES)
+            ]
+            (root / "Cargo.toml").write_text(
+                "[workspace]\n"
+                f"members = {members!r}\n"
+            )
+            with self.assertRaisesRegex(
+                plugin_catalog.CatalogError,
+                r"Workspace Cargo.toml must define \[workspace.dependencies\]",
+            ):
+                plugin_catalog._validate_workspace_dependency_ownership(
+                    root,
+                    [
+                        self._plugin_record(slug)
+                        for slug in plugin_catalog.REQUIRED_PLUGIN_WORKSPACE_DEPENDENCIES
+                    ],
+                )
+
+    def test_workspace_dependency_policy_rejects_direct_managed_dependency(self) -> None:
+        original_required = plugin_catalog.REQUIRED_WORKSPACE_DEPENDENCIES
+        original_plugin_required = plugin_catalog.REQUIRED_PLUGIN_WORKSPACE_DEPENDENCIES
+        plugin_catalog.REQUIRED_WORKSPACE_DEPENDENCIES = {
+            "regex": "1.12",
+            "serde_json": "1.0",
+        }
+        plugin_catalog.REQUIRED_PLUGIN_WORKSPACE_DEPENDENCIES = {
+            "demo_plugin": {"dependencies": ("regex",)}
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                root = Path(tmpdir)
+                plugin_dir = root / "plugins" / "rust" / "python-package" / "demo_plugin"
+                plugin_dir.mkdir(parents=True)
+                (root / "Cargo.toml").write_text(
+                    '[workspace]\n'
+                    'members = ["plugins/rust/python-package/demo_plugin"]\n'
+                    '[workspace.dependencies]\n'
+                    'regex = "1.12"\n'
+                    'serde_json = "1.0"\n'
+                )
+                (plugin_dir / "Cargo.toml").write_text(
+                    "[dependencies]\n"
+                    "regex = { workspace = true }\n"
+                    'serde_json = "1.0"\n'
+                )
+
+                with self.assertRaisesRegex(
+                    plugin_catalog.CatalogError,
+                    "unexpected workspace dependencies",
+                ):
+                    plugin_catalog._validate_workspace_dependency_ownership(
+                        root, [self._plugin_record("demo_plugin")]
+                    )
+        finally:
+            plugin_catalog.REQUIRED_WORKSPACE_DEPENDENCIES = original_required
+            plugin_catalog.REQUIRED_PLUGIN_WORKSPACE_DEPENDENCIES = original_plugin_required
 
     def _extract_pii_runtime_defaults(self) -> dict[str, object]:
         config_text = (
@@ -318,6 +415,19 @@ class PluginCatalogTests(unittest.TestCase):
                     "criterion": {"workspace": True},
                 },
             },
+            "regex_filter": {
+                "dependencies": {
+                    "cpex_framework_bridge": {"workspace": True},
+                    "log": {"workspace": True},
+                    "pyo3": {"workspace": True},
+                    "pyo3-log": {"workspace": True},
+                    "pyo3-stub-gen": {"workspace": True},
+                    "regex": {"workspace": True},
+                },
+                "dev-dependencies": {
+                    "criterion": {"workspace": True},
+                },
+            },
             "retry_with_backoff": {
                 "dependencies": {
                     "log": {"workspace": True},
@@ -369,6 +479,17 @@ class PluginCatalogTests(unittest.TestCase):
             for section_name, expected_deps in expected_sections.items():
                 actual_section = plugin_cargo.get(section_name, {})
                 self.assertIsInstance(actual_section, dict)
+                self.assertEqual(
+                    {
+                        dependency_name
+                        for dependency_name, value in actual_section.items()
+                        if dependency_name in workspace_deps
+                        and isinstance(value, dict)
+                        and value.get("workspace") is True
+                    },
+                    set(expected_deps),
+                    f"{slug} should not add untracked workspace dependencies in {section_name}",
+                )
                 for dependency_name, expected_value in expected_deps.items():
                     self.assertEqual(
                         actual_section.get(dependency_name),
@@ -387,6 +508,7 @@ class PluginCatalogTests(unittest.TestCase):
                 "encoded_exfil_detection",
                 "pii_filter",
                 "rate_limiter",
+                "regex_filter",
                 "retry_with_backoff",
                 "secrets_detection",
                 "url_reputation",
@@ -399,6 +521,7 @@ class PluginCatalogTests(unittest.TestCase):
                 "encoded_exfil_detection": "cpex_encoded_exfil_detection",
                 "pii_filter": "cpex_pii_filter",
                 "rate_limiter": "cpex_rate_limiter",
+                "regex_filter": "cpex_regex_filter",
                 "retry_with_backoff": "cpex_retry_with_backoff",
                 "secrets_detection": "cpex_secrets_detection",
                 "url_reputation": "cpex_url_reputation",
@@ -410,6 +533,7 @@ class PluginCatalogTests(unittest.TestCase):
                 "encoded_exfil_detection": "cpex_encoded_exfil_detection.encoded_exfil_detection.EncodedExfilDetectorPlugin",
                 "pii_filter": "cpex_pii_filter.pii_filter.PIIFilterPlugin",
                 "rate_limiter": "cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
+                "regex_filter": "cpex_regex_filter.regex_filter.SearchReplacePlugin",
                 "retry_with_backoff": "cpex_retry_with_backoff.retry_with_backoff.RetryWithBackoffPlugin",
                 "secrets_detection": "cpex_secrets_detection.secrets_detection.SecretsDetectionPlugin",
                 "url_reputation": "cpex_url_reputation.url_reputation.URLReputationPlugin",
@@ -1832,6 +1956,7 @@ class PluginCatalogTests(unittest.TestCase):
                 "encoded_exfil_detection",
                 "pii_filter",
                 "rate_limiter",
+                "regex_filter",
                 "retry_with_backoff",
                 "secrets_detection",
                 "url_reputation",
@@ -2026,6 +2151,7 @@ class PluginCatalogTests(unittest.TestCase):
             "encoded_exfil_detection",
             "pii_filter",
             "rate_limiter",
+            "regex_filter",
             "retry_with_backoff",
             "secrets_detection",
             "url_reputation",
@@ -2532,8 +2658,18 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("publish_enabled:", workflow)
         self.assertIn('default: false', workflow)
         self.assertIn('git fetch --force origin "refs/heads/main:refs/remotes/origin/main"', workflow)
-        self.assertIn('if git merge-base --is-ancestor "${tag_ref}" "refs/remotes/origin/main"; then', workflow)
+        self.assertIn('tag_commit="$(git rev-list -n 1 "${tag_ref}")"', workflow)
+        self.assertIn('if git merge-base --is-ancestor "${tag_commit}" "refs/remotes/origin/main"; then', workflow)
+        self.assertIn('git checkout --detach "${checkout_ref}"', workflow)
         self.assertIn("tag_on_main: ${{ steps.resolve.outputs.tag_on_main }}", workflow)
+        self.assertLess(
+            workflow.index('git checkout --detach "${checkout_ref}"'),
+            workflow.index("python3 tools/plugin_catalog.py validate ."),
+        )
+        self.assertLess(
+            workflow.index("python3 tools/plugin_catalog.py validate ."),
+            workflow.index('release_info="$(python3 tools/plugin_catalog.py release-info . "${tag}")'),
+        )
         self.assertIn(
             'wheel_matrix="$(python3 -c \'import json; print(json.dumps([{',
             workflow,
@@ -2555,9 +2691,12 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("runs-on: ${{ matrix.runner }}", workflow)
         self.assertIn("name: wheel-${{ matrix.platform }}", workflow)
         self.assertIn(
-            "if: ${{ (github.event_name != 'workflow_call' || inputs.publish_enabled) && (needs.resolve.outputs.publish_env != 'pypi' || needs.resolve.outputs.tag_on_main == 'true') }}",
+            "if: ${{ github.event_name != 'workflow_call' || inputs.publish_enabled }}",
             workflow,
         )
+        self.assertIn("Verify PyPI tag is on main", workflow)
+        self.assertIn("needs.resolve.outputs.tag_on_main != 'true'", workflow)
+        self.assertIn("needs.resolve.outputs.tag_on_main == 'true'", workflow)
         self.assertNotIn("matrix.", preflight_section)
         self.assertIn(
             "matrix.runner != 'ubuntu-24.04-s390x' && matrix.runner != 'ubuntu-24.04-ppc64le'",

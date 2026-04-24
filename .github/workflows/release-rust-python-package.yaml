@@ -54,9 +54,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Validate plugin catalog
-        run: python3 tools/plugin_catalog.py validate .
-
       - id: resolve
         shell: bash
         env:
@@ -79,12 +76,15 @@ jobs:
             tag_ref="${GITHUB_REF}"
           fi
 
-          if git merge-base --is-ancestor "${tag_ref}" "refs/remotes/origin/main"; then
+          tag_commit="$(git rev-list -n 1 "${tag_ref}")"
+          if git merge-base --is-ancestor "${tag_commit}" "refs/remotes/origin/main"; then
             tag_on_main=true
           else
             tag_on_main=false
           fi
 
+          git checkout --detach "${checkout_ref}"
+          python3 tools/plugin_catalog.py validate .
           release_info="$(python3 tools/plugin_catalog.py release-info . "${tag}")"
           plugin="$(printf '%s' "${release_info}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["slug"])')"
           plugin_path="$(printf '%s' "${release_info}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["path"])')"
@@ -255,7 +255,7 @@ jobs:
           fi
 
   publish:
-    if: ${{ (github.event_name != 'workflow_call' || inputs.publish_enabled) && (needs.resolve.outputs.publish_env != 'pypi' || needs.resolve.outputs.tag_on_main == 'true') }}
+    if: ${{ github.event_name != 'workflow_call' || inputs.publish_enabled }}
     needs: [resolve, build-wheel, build-sdist]
     runs-on: ubuntu-latest
     environment: ${{ needs.resolve.outputs.publish_env }}
@@ -276,8 +276,14 @@ jobs:
           repository-url: https://test.pypi.org/legacy/
           skip-existing: true
 
+      - name: Verify PyPI tag is on main
+        if: needs.resolve.outputs.publish_env == 'pypi' && needs.resolve.outputs.tag_on_main != 'true'
+        run: |
+          echo "Refusing to publish to PyPI because the release tag is not reachable from origin/main" >&2
+          exit 1
+
       - name: Publish distributions to PyPI
-        if: needs.resolve.outputs.publish_env == 'pypi'
+        if: needs.resolve.outputs.publish_env == 'pypi' && needs.resolve.outputs.tag_on_main == 'true'
         uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e
         with:
           packages-dir: dist/

@@ -20,12 +20,18 @@ fn bench_apply_patterns(c: &mut Criterion) {
             },
         ],
         pattern_set: RegexSet::new([r"\bsecret\b", r"\d{3}-\d{2}-\d{4}"]).ok(),
+        max_text_bytes: 10 * 1024 * 1024,
+        max_total_text_bytes: 10 * 1024 * 1024,
+        max_nested_depth: 64,
+        max_collection_items: 4096,
+        max_total_items: 65_536,
+        max_output_bytes: 10 * 1024 * 1024,
     };
     let plugin = SearchReplacePluginRust { config };
     let text = "The secret number is 123-45-6789";
 
     c.bench_function("regex_filter_apply_patterns", |b| {
-        b.iter(|| plugin.apply_patterns(text))
+        b.iter(|| plugin.apply_patterns(text).unwrap())
     });
 }
 

@@ -18,6 +18,9 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 
+[project.entry-points."cpex.plugins"]
+regex_filter = "cpex_regex_filter.regex_filter:SearchReplacePlugin"
+
 [tool.maturin]
 module-name = "cpex_regex_filter.regex_filter_rust"
 python-source = "."
