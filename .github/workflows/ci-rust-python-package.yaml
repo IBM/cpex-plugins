@@ -116,7 +116,7 @@ jobs:
         working-directory: plugins/rust/python-package/${{ matrix.plugin }}
         run: make ci
 
-  security-audit:
+  security-policy:
     needs: validate-and-detect
     if: needs.validate-and-detect.outputs.has_plugins == 'true'
     runs-on: ubuntu-latest
@@ -128,11 +128,11 @@ jobs:
           rustc --version
           cargo --version
 
-      - name: Install cargo audit
-        run: cargo install cargo-audit@0.22.1 --locked
+      - name: Install cargo deny
+        run: cargo install cargo-deny@0.19.0 --locked
 
-      - name: Run cargo audit
-        run: cargo audit --file Cargo.lock
+      - name: Run cargo deny
+        run: cargo deny check --config deny.toml
 
   coverage:
     needs: validate-and-detect

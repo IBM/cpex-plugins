@@ -1998,7 +1998,7 @@ class PluginCatalogTests(unittest.TestCase):
         workflow = (
             REPO_ROOT / ".github" / "workflows" / "ci-rust-python-package.yaml"
         ).read_text()
-        security_section = self._extract_workflow_job_section(workflow, "security-audit")
+        security_section = self._extract_workflow_job_section(workflow, "security-policy")
         coverage_section = self._extract_workflow_job_section(workflow, "coverage")
         documentation_section = self._extract_workflow_job_section(
             workflow, "documentation"
@@ -2007,17 +2007,17 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("workflow_dispatch:", workflow)
         self.assertIn("plugin_count: ${{ steps.detect.outputs.plugin_count }}", workflow)
         self.assertIn("single_cargo_package: ${{ steps.detect.outputs.single_cargo_package }}", workflow)
-        self.assertIn("security-audit:", workflow)
+        self.assertIn("security-policy:", workflow)
         self.assertIn("coverage:", workflow)
         self.assertIn("documentation:", workflow)
         self.assertNotIn("benchmark-build-verification:", workflow)
         self.assertIn("if: needs.validate-and-detect.outputs.has_plugins == 'true'", security_section)
         self.assertIn("if: needs.validate-and-detect.outputs.has_plugins == 'true'", coverage_section)
         self.assertIn("if: needs.validate-and-detect.outputs.has_plugins == 'true'", documentation_section)
-        self.assertIn("cargo install cargo-audit@0.22.1 --locked", security_section)
-        self.assertIn("cargo audit --file Cargo.lock", security_section)
-        self.assertNotIn("cargo-deny", security_section)
-        self.assertNotIn("cargo deny", security_section)
+        self.assertNotIn("cargo-audit", security_section)
+        self.assertNotIn("cargo audit", security_section)
+        self.assertIn("cargo install cargo-deny", security_section)
+        self.assertIn("cargo deny check", security_section)
         self.assertNotIn("--workspace", security_section)
         self.assertNotIn("--manifest-path", security_section)
         self.assertNotIn("matrix:", security_section)
