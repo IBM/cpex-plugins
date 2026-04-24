@@ -2025,6 +2025,7 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("package='${{ needs.validate-and-detect.outputs.single_cargo_package }}'", coverage_section)
         self.assertIn('cargo llvm-cov -p "${package}" --cobertura --output-path coverage/cobertura.xml', coverage_section)
         self.assertIn("cargo llvm-cov --workspace --cobertura --output-path coverage/cobertura.xml", coverage_section)
+        self.assertIn("python3 tools/plugin_catalog.py coverage-check . coverage/cobertura.xml 50.07", coverage_section)
         self.assertIn("cobertura.xml", coverage_section)
         self.assertIn("codecov/codecov-action@", coverage_section)
         self.assertNotIn("matrix:", coverage_section)
@@ -2033,6 +2034,90 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("cargo doc --workspace --lib --no-deps --document-private-items", documentation_section)
         self.assertNotIn("matrix:", documentation_section)
         self.assertNotIn("upload-artifact", documentation_section)
+
+    def test_coverage_check_reports_per_plugin_percentages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            report = root / "coverage.xml"
+            report.write_text(
+                textwrap.dedent(
+                    """
+                    <?xml version="1.0" ?>
+                    <coverage>
+                      <packages>
+                        <package name="plugins.rust.python-package.alpha.src">
+                          <classes>
+                            <class filename="plugins/rust/python-package/alpha/src/lib.rs">
+                              <lines>
+                                <line number="1" hits="1"/>
+                                <line number="2" hits="0"/>
+                              </lines>
+                            </class>
+                          </classes>
+                        </package>
+                        <package name="plugins.rust.python-package.beta.src">
+                          <classes>
+                            <class filename="plugins/rust/python-package/beta/src/lib.rs">
+                              <lines>
+                                <line number="1" hits="1"/>
+                                <line number="2" hits="1"/>
+                                <line number="3" hits="1"/>
+                                <line number="4" hits="0"/>
+                              </lines>
+                            </class>
+                          </classes>
+                        </package>
+                        <package name="crates.framework_bridge.src">
+                          <classes>
+                            <class filename="crates/framework_bridge/src/lib.rs">
+                              <lines><line number="1" hits="0"/></lines>
+                            </class>
+                          </classes>
+                        </package>
+                      </packages>
+                    </coverage>
+                    """
+                ).strip()
+            )
+
+            result = run_catalog("coverage-check", str(root), str(report), "50.0")
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["minimum_plugin"], "alpha")
+            self.assertEqual(payload["minimum_line_rate"], 50.0)
+            self.assertEqual(payload["plugins"]["alpha"]["line_rate"], 50.0)
+            self.assertEqual(payload["plugins"]["beta"]["line_rate"], 75.0)
+
+    def test_coverage_check_fails_below_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            report = root / "coverage.xml"
+            report.write_text(
+                textwrap.dedent(
+                    """
+                    <coverage>
+                      <packages>
+                        <package name="plugins.rust.python-package.alpha.src">
+                          <classes>
+                            <class filename="plugins/rust/python-package/alpha/src/lib.rs">
+                              <lines>
+                                <line number="1" hits="1"/>
+                                <line number="2" hits="0"/>
+                              </lines>
+                            </class>
+                          </classes>
+                        </package>
+                      </packages>
+                    </coverage>
+                    """
+                ).strip()
+            )
+
+            result = run_catalog("coverage-check", str(root), str(report), "50.1")
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("alpha line coverage 50.00% is below 50.10%", result.stderr)
 
     def test_workspace_has_single_cargo_deny_config(self) -> None:
         root_deny = REPO_ROOT / "deny.toml"

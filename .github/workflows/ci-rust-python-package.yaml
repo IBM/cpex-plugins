@@ -163,6 +163,9 @@ jobs:
             cargo llvm-cov --workspace --cobertura --output-path coverage/cobertura.xml
           fi
 
+      - name: Enforce per-plugin coverage floor
+        run: python3 tools/plugin_catalog.py coverage-check . coverage/cobertura.xml 50.07
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238
         with:

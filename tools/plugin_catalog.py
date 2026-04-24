@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import tomllib
+import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -536,6 +537,64 @@ def ci_selection(root: Path, mode: str, base: str | None = None, head: str | Non
     }
 
 
+def coverage_check(root: Path, report_path: Path, minimum_line_rate: float) -> dict:
+    if not report_path.is_absolute():
+        report_path = root / report_path
+    if not report_path.exists():
+        raise CatalogError(f"Coverage report not found: {report_path}")
+
+    try:
+        coverage = ET.parse(report_path).getroot()
+    except ET.ParseError as exc:
+        raise CatalogError(f"Invalid coverage XML in {report_path}: {exc}") from exc
+
+    plugin_lines: dict[str, dict[str, int]] = {}
+    prefix = MANAGED_ROOT.as_posix() + "/"
+    for class_node in coverage.findall(".//class"):
+        filename = class_node.attrib.get("filename", "")
+        if not filename.startswith(prefix):
+            continue
+        relative = filename[len(prefix) :]
+        slug = relative.split("/", maxsplit=1)[0]
+        counts = plugin_lines.setdefault(slug, {"covered_lines": 0, "valid_lines": 0})
+        for line_node in class_node.findall("./lines/line"):
+            counts["valid_lines"] += 1
+            if int(line_node.attrib.get("hits", "0")) > 0:
+                counts["covered_lines"] += 1
+
+    if not plugin_lines:
+        raise CatalogError(f"No plugin coverage found in {report_path}")
+
+    plugins: dict[str, dict[str, float | int]] = {}
+    minimum_plugin = ""
+    minimum_rate = 101.0
+    for slug, counts in sorted(plugin_lines.items()):
+        valid_lines = counts["valid_lines"]
+        line_rate = (
+            counts["covered_lines"] / valid_lines * 100.0 if valid_lines else 100.0
+        )
+        plugins[slug] = {
+            "covered_lines": counts["covered_lines"],
+            "valid_lines": valid_lines,
+            "line_rate": round(line_rate, 2),
+        }
+        if line_rate < minimum_rate:
+            minimum_plugin = slug
+            minimum_rate = line_rate
+
+    payload = {
+        "minimum_plugin": minimum_plugin,
+        "minimum_line_rate": round(minimum_rate, 2),
+        "threshold": minimum_line_rate,
+        "plugins": plugins,
+    }
+    if minimum_rate + 1e-9 < minimum_line_rate:
+        raise CatalogError(
+            f"{minimum_plugin} line coverage {minimum_rate:.2f}% is below {minimum_line_rate:.2f}%"
+        )
+    return payload
+
+
 def release_info(root: Path, tag: str) -> PluginRecord:
     if "-v" not in tag:
         raise CatalogError(f"Release tag must match <slug>-v<version>, got {tag}")
@@ -609,6 +668,14 @@ def _command_ci_selection_field(
     return _print_field(payload[field])
 
 
+def _command_coverage_check(
+    root: Path, report_path: Path, minimum_line_rate: float
+) -> int:
+    payload = coverage_check(root, report_path, minimum_line_rate)
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -661,6 +728,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("plugins", "has_plugins", "plugin_count", "single_cargo_package"),
     )
 
+    coverage_parser = subparsers.add_parser("coverage-check")
+    coverage_parser.add_argument("root", nargs="?", default=".")
+    coverage_parser.add_argument("report")
+    coverage_parser.add_argument("minimum_line_rate", type=float)
+
     return parser
 
 
@@ -683,6 +755,8 @@ def main() -> int:
             return _command_ci_selection(root, args.mode, args.base, args.head)
         if args.command == "ci-selection-field":
             return _command_ci_selection_field(root, args.mode, args.base, args.head, args.field)
+        if args.command == "coverage-check":
+            return _command_coverage_check(root, Path(args.report), args.minimum_line_rate)
     except CatalogError as exc:
         print(str(exc), file=sys.stderr)
         return 1
