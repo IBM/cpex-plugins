@@ -23,12 +23,47 @@ Each managed plugin must include:
 
 Rust crates are owned by the top-level workspace in `Cargo.toml`. Python package names follow `cpex-<slug>`, Python modules follow `cpex_<slug>`, plugin manifests must declare a top-level `kind` in `module.object` form, and `pyproject.toml` must publish the matching `module:object` reference under `[project.entry-points."cpex.plugins"]`. Release tags use the hyphenated slug form `<slug-with-hyphens>-v<version>`, for example `rate-limiter-v0.0.2`.
 
+## Creating a New Plugin
+
+Use the plugin scaffold generator to create a new plugin with all required files and structure:
+
+```bash
+make plugin-scaffold
+```
+
+This interactive tool will:
+- Prompt for plugin name, description, author, and version
+- Let you select from 12 available hooks across 5 categories:
+  - **Prompt hooks**: `prompt_pre_fetch`, `prompt_post_fetch`
+  - **Tool hooks**: `tool_pre_invoke`, `tool_post_invoke`
+  - **Resource hooks**: `resource_pre_fetch`, `resource_post_fetch`
+  - **Agent hooks**: `agent_pre_invoke`, `agent_post_invoke`
+  - **HTTP hooks**: `http_pre_request`, `http_post_request`, `http_auth_resolve_user`, `http_auth_check_permission`
+- Generate complete plugin structure with:
+  - Rust source files (`lib.rs`, `engine.rs`, `stub_gen.rs`)
+  - Python package files (`__init__.py`, `plugin.py`)
+  - Build configuration (`Cargo.toml`, `pyproject.toml`, `Makefile`)
+  - Documentation (`README.md`)
+  - Comprehensive unit tests (Python and Rust)
+  - Benchmark scaffolding
+
+For non-interactive mode:
+
+```bash
+python3 tools/scaffold_plugin.py --non-interactive \
+  --name my_plugin \
+  --description "My plugin description" \
+  --author "Your Name" \
+  --hooks prompt_pre_fetch tool_pre_invoke
+```
+
 ## Helper Commands
 
 ```bash
-make plugins-list
-make plugins-validate
-make plugin-test PLUGIN=rate_limiter
+make plugins-list              # List all plugins
+make plugins-validate          # Validate plugin structure
+make plugin-test PLUGIN=rate_limiter  # Test specific plugin
+make plugin-scaffold           # Create new plugin (interactive)
 ```
 
 The catalog and validator used by CI live in `tools/plugin_catalog.py`.
