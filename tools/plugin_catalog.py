@@ -21,6 +21,8 @@ SHARED_PATH_PREFIXES = (
     "Makefile",
     ".github/workflows/",
     "Cargo.toml",
+    "Cargo.lock",
+    "deny.toml",
     "crates/",
     "README.md",
     "DEVELOPING.md",
@@ -527,12 +529,10 @@ def ci_selection(root: Path, mode: str, base: str | None = None, head: str | Non
             raise CatalogError("ci-selection diff mode requires base and head revisions")
         selected = _changed_plugins_for_records(root, plugins, base, head)
     cargo_packages = [plugin_lookup[slug].cargo_package_name for slug in selected]
-    single_cargo_package = cargo_packages[0] if len(cargo_packages) == 1 else ""
     return {
         "plugins": selected,
         "has_plugins": bool(selected),
         "plugin_count": len(selected),
-        "single_cargo_package": single_cargo_package,
         "cargo_packages": cargo_packages,
     }
 
@@ -570,7 +570,14 @@ def coverage_check(
         counts = plugin_lines.setdefault(slug, {"covered_lines": 0, "valid_lines": 0})
         for line_node in class_node.findall("./lines/line"):
             counts["valid_lines"] += 1
-            if int(line_node.attrib.get("hits", "0")) > 0:
+            raw_hits = line_node.attrib.get("hits", "0")
+            try:
+                hits = int(raw_hits)
+            except ValueError as exc:
+                raise CatalogError(
+                    f"Invalid coverage hit count {raw_hits!r} in {filename}"
+                ) from exc
+            if hits > 0:
                 counts["covered_lines"] += 1
 
     if not plugin_lines:
@@ -580,6 +587,12 @@ def coverage_check(
     unknown_covered = sorted(covered_plugin_set - known_plugins)
     if unknown_covered:
         raise CatalogError(f"unknown plugin coverage entries: {unknown_covered}")
+    if expected_plugins is not None:
+        unexpected_covered = sorted(covered_plugin_set - expected_plugin_set)
+        if unexpected_covered:
+            raise CatalogError(
+                f"unexpected plugin coverage entries: {unexpected_covered}"
+            )
     missing_expected = sorted(expected_plugin_set - covered_plugin_set)
     if missing_expected:
         raise CatalogError(f"missing plugin coverage entries: {missing_expected}")
@@ -762,7 +775,6 @@ def build_parser() -> argparse.ArgumentParser:
             "plugins",
             "has_plugins",
             "plugin_count",
-            "single_cargo_package",
             "cargo_packages",
         ),
     )

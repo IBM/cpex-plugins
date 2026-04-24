@@ -6,6 +6,8 @@ on:
     paths:
       - "Makefile"
       - "Cargo.toml"
+      - "Cargo.lock"
+      - "deny.toml"
       - "crates/**"
       - "README.md"
       - "DEVELOPING.md"
@@ -20,6 +22,8 @@ on:
     paths:
       - "Makefile"
       - "Cargo.toml"
+      - "Cargo.lock"
+      - "deny.toml"
       - "crates/**"
       - "README.md"
       - "DEVELOPING.md"
@@ -46,7 +50,6 @@ jobs:
       plugins: ${{ steps.detect.outputs.plugins }}
       has_plugins: ${{ steps.detect.outputs.has_plugins }}
       plugin_count: ${{ steps.detect.outputs.plugin_count }}
-      single_cargo_package: ${{ steps.detect.outputs.single_cargo_package }}
       cargo_packages: ${{ steps.detect.outputs.cargo_packages }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -71,20 +74,22 @@ jobs:
             selection="$(python3 tools/plugin_catalog.py ci-selection . diff "${{ github.event.before }}" "${{ github.sha }}")"
           fi
 
+          selection="$(printf '%s' "${selection}" | python3 -c 'import json, re, sys; payload = json.load(sys.stdin); slug_re = re.compile(r"^[a-z0-9_]+$"); plugins = payload.get("plugins"); cargo_packages = payload.get("cargo_packages"); has_plugins = payload.get("has_plugins"); plugin_count = payload.get("plugin_count"); assert isinstance(plugins, list) and all(isinstance(item, str) and slug_re.fullmatch(item) for item in plugins); assert isinstance(cargo_packages, list) and all(isinstance(item, str) and slug_re.fullmatch(item) for item in cargo_packages); assert isinstance(has_plugins, bool); assert isinstance(plugin_count, int) and plugin_count == len(plugins); print(json.dumps({"plugins": plugins, "has_plugins": has_plugins, "plugin_count": plugin_count, "cargo_packages": cargo_packages}))')"
           plugins="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["plugins"]))')"
           has_plugins="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(str(json.load(sys.stdin)["has_plugins"]).lower())')"
-          plugin_count="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(len(json.load(sys.stdin)["plugins"]))')"
-          single_cargo_package="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["single_cargo_package"])')"
+          plugin_count="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["plugin_count"])')"
           cargo_packages="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["cargo_packages"]))')"
-          echo "plugins=${plugins}" >> "$GITHUB_OUTPUT"
-          echo "plugin_count=${plugin_count}" >> "$GITHUB_OUTPUT"
-          echo "single_cargo_package=${single_cargo_package}" >> "$GITHUB_OUTPUT"
-          echo "cargo_packages=${cargo_packages}" >> "$GITHUB_OUTPUT"
           if [[ "${has_plugins}" == "false" ]]; then
-            echo "has_plugins=false" >> "$GITHUB_OUTPUT"
+            has_plugins_output="false"
           else
-            echo "has_plugins=true" >> "$GITHUB_OUTPUT"
+            has_plugins_output="true"
           fi
+          {
+            echo "plugins=${plugins}"
+            echo "plugin_count=${plugin_count}"
+            echo "cargo_packages=${cargo_packages}"
+            echo "has_plugins=${has_plugins_output}"
+          } >> "$GITHUB_OUTPUT"
 
   build-test:
     needs: validate-and-detect
@@ -137,9 +142,7 @@ jobs:
         run: cargo install cargo-deny@0.19.0 --locked
 
       - name: Run cargo deny
-        run: |
-          # pyo3-stub-gen still pulls rustpython-parser's unmaintained unic-* parser dependencies.
-          cargo deny check --config deny.toml -A unmaintained
+        run: cargo deny check --config deny.toml
 
   coverage:
     needs: validate-and-detect
@@ -161,9 +164,11 @@ jobs:
           cargo install cargo-llvm-cov --version 0.8.4 --locked
 
       - name: Generate Rust coverage report
+        env:
+          CARGO_PACKAGES: ${{ needs.validate-and-detect.outputs.cargo_packages }}
         run: |
           mkdir -p coverage
-          mapfile -t cargo_packages < <(python3 -c 'import json, sys; [print(package) for package in json.loads(sys.argv[1])]' '${{ needs.validate-and-detect.outputs.cargo_packages }}')
+          mapfile -t cargo_packages < <(python3 -c 'import json, os; [print(package) for package in json.loads(os.environ["CARGO_PACKAGES"])]')
           cargo_args=()
           for package in "${cargo_packages[@]}"; do
             cargo_args+=("-p" "${package}")
@@ -171,7 +176,9 @@ jobs:
           cargo llvm-cov "${cargo_args[@]}" --cobertura --output-path coverage/cobertura.xml
 
       - name: Enforce per-plugin coverage floor
-        run: python3 tools/plugin_catalog.py coverage-check . coverage/cobertura.xml 50.00 '${{ needs.validate-and-detect.outputs.plugins }}'
+        env:
+          PLUGINS: ${{ needs.validate-and-detect.outputs.plugins }}
+        run: python3 tools/plugin_catalog.py coverage-check . coverage/cobertura.xml 50.00 "${PLUGINS}"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238
@@ -196,11 +203,15 @@ jobs:
           cargo --version
 
       - name: Build Rust documentation
+        env:
+          CARGO_PACKAGES: ${{ needs.validate-and-detect.outputs.cargo_packages }}
         run: |
-          mapfile -t cargo_packages < <(python3 -c 'import json, sys; [print(package) for package in json.loads(sys.argv[1])]' '${{ needs.validate-and-detect.outputs.cargo_packages }}')
+          mapfile -t cargo_packages < <(python3 -c 'import json, os; [print(package) for package in json.loads(os.environ["CARGO_PACKAGES"])]')
+          cargo_args=()
           for package in "${cargo_packages[@]}"; do
-            cargo doc -p "${package}" --lib --no-deps --document-private-items
+            cargo_args+=("-p" "${package}")
           done
+          cargo doc "${cargo_args[@]}" --lib --no-deps --document-private-items
 
   release-validation:
     if: github.event_name == 'pull_request'

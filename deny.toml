@@ -1,6 +1,18 @@
 # Workspace-level cargo-deny config: applies to all crates in the workspace.
 # See https://embarkstudios.github.io/cargo-deny/
 
+[advisories]
+# pyo3-stub-gen 0.22.1 still pulls rustpython-parser's unmaintained unic-* parser crates.
+# Keep this scoped to the known transitive advisories so new unmaintained dependencies fail CI.
+ignore = [
+    "RUSTSEC-2025-0075", # unic-char-range via rustpython-parser
+    "RUSTSEC-2025-0080", # unic-common via rustpython-parser
+    "RUSTSEC-2025-0081", # unic-char-property via rustpython-parser
+    "RUSTSEC-2025-0090", # unic-emoji-char via rustpython-parser
+    "RUSTSEC-2025-0098", # unic-ucd-version via rustpython-parser
+    "RUSTSEC-2025-0100", # unic-ucd-ident via rustpython-parser
+]
+
 [licenses]
 # Listed licenses are allowed even if not encountered in the dependency tree.
 unused-allowed-license = "allow"
