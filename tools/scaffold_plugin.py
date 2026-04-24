@@ -34,12 +34,23 @@ except ImportError:
 PLUGIN_ROOT = Path("plugins/rust/python-package")
 TEMPLATE_DIR = Path("tools/templates/plugin")
 VALID_HOOKS = [
+    # Prompt hooks
     "prompt_pre_fetch",
     "prompt_post_fetch",
+    # Tool hooks
     "tool_pre_invoke",
     "tool_post_invoke",
+    # Resource hooks
     "resource_pre_fetch",
     "resource_post_fetch",
+    # Agent hooks
+    "agent_pre_invoke",
+    "agent_post_invoke",
+    # HTTP hooks
+    "http_pre_request",
+    "http_post_request",
+    "http_auth_resolve_user",
+    "http_auth_check_permission",
 ]
 
 # ANSI color codes
