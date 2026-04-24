@@ -2025,7 +2025,7 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("package='${{ needs.validate-and-detect.outputs.single_cargo_package }}'", coverage_section)
         self.assertIn('cargo llvm-cov -p "${package}" --cobertura --output-path coverage/cobertura.xml', coverage_section)
         self.assertIn("cargo llvm-cov --workspace --cobertura --output-path coverage/cobertura.xml", coverage_section)
-        self.assertIn("python3 tools/plugin_catalog.py coverage-check . coverage/cobertura.xml 50.07", coverage_section)
+        self.assertIn("python3 tools/plugin_catalog.py coverage-check . coverage/cobertura.xml 50.00", coverage_section)
         self.assertIn("cobertura.xml", coverage_section)
         self.assertIn("codecov/codecov-action@", coverage_section)
         self.assertNotIn("matrix:", coverage_section)
