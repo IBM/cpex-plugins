@@ -89,6 +89,17 @@ REQUIRED_PLUGIN_WORKSPACE_DEPENDENCIES = {
         ),
         "dev-dependencies": ("criterion",),
     },
+    "regex_filter": {
+        "dependencies": (
+            "cpex_framework_bridge",
+            "log",
+            "pyo3",
+            "pyo3-log",
+            "pyo3-stub-gen",
+            "regex",
+        ),
+        "dev-dependencies": ("criterion",),
+    },
     "retry_with_backoff": {
         "dependencies": ("log", "pyo3", "pyo3-log", "pyo3-stub-gen", "rand"),
         "dev-dependencies": (),
@@ -315,16 +326,27 @@ def _validate_workspace_dependency_ownership(
     root: Path, plugins: list[PluginRecord]
 ) -> None:
     plugin_records = {plugin.slug: plugin for plugin in plugins}
-    if set(plugin_records) != set(REQUIRED_PLUGIN_WORKSPACE_DEPENDENCIES):
-        return
-
     cargo = _parse_cargo(root / "Cargo.toml")
     workspace = cargo.get("workspace", {})
     if not isinstance(workspace, dict):
         raise CatalogError("Workspace Cargo.toml must define [workspace] metadata as a table")
+    discovered_slugs = set(plugin_records)
+    policy_slugs = set(REQUIRED_PLUGIN_WORKSPACE_DEPENDENCIES)
     workspace_dependencies = workspace.get("dependencies")
     if not isinstance(workspace_dependencies, dict):
-        raise CatalogError("Workspace Cargo.toml must define [workspace.dependencies]")
+        if discovered_slugs == policy_slugs:
+            raise CatalogError("Workspace Cargo.toml must define [workspace.dependencies]")
+        return
+
+    if discovered_slugs != policy_slugs:
+        if not discovered_slugs.intersection(policy_slugs):
+            return
+        missing_policy = sorted(discovered_slugs - policy_slugs)
+        missing_plugins = sorted(policy_slugs - discovered_slugs)
+        raise CatalogError(
+            "Workspace dependency policy must list every managed plugin; "
+            f"missing policy entries: {missing_policy}; missing plugins: {missing_plugins}"
+        )
 
     for dependency_name, expected_value in REQUIRED_WORKSPACE_DEPENDENCIES.items():
         actual_value = workspace_dependencies.get(dependency_name)
@@ -341,6 +363,16 @@ def _validate_workspace_dependency_ownership(
             section = plugin_cargo.get(section_name, {})
             if not isinstance(section, dict):
                 raise CatalogError(f"{cargo_path}: [{section_name}] must be a table")
+            unexpected_workspace_deps = sorted(
+                dependency_name
+                for dependency_name, value in section.items()
+                if dependency_name in REQUIRED_WORKSPACE_DEPENDENCIES
+                and dependency_name not in dependency_names
+            )
+            if unexpected_workspace_deps:
+                raise CatalogError(
+                    f"{cargo_path}: unexpected workspace dependencies in [{section_name}]: {unexpected_workspace_deps}"
+                )
             for dependency_name in dependency_names:
                 if section.get(dependency_name) != {"workspace": True}:
                     raise CatalogError(

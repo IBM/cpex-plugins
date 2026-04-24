@@ -2,6 +2,7 @@
 members = [
     "plugins/rust/python-package/encoded_exfil_detection",
     "plugins/rust/python-package/pii_filter",
+    "plugins/rust/python-package/regex_filter",
     "plugins/rust/python-package/rate_limiter",
     "plugins/rust/python-package/retry_with_backoff",
     "plugins/rust/python-package/url_reputation",
