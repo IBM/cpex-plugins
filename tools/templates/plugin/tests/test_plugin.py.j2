@@ -1,0 +1,93 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2024 ContextForge Contributors
+"""Tests for {{ plugin_name_title }} plugin."""
+
+import pytest
+
+from {{ module_name }} import {{ config_class }}, {{ engine_class }}, {{ plugin_class }}
+
+
+class Test{{ engine_class }}:
+    """Tests for {{ engine_class }}."""
+
+    def test_engine_creation(self):
+        """Test engine can be created with default config."""
+        config = {{ config_class }}()
+        engine = {{ engine_class }}(config.model_dump())
+        assert engine is not None
+
+    def test_engine_with_custom_config(self):
+        """Test engine can be created with custom config."""
+        config = {{ config_class }}(example_option="custom_value")
+        engine = {{ engine_class }}(config.model_dump())
+        assert engine is not None
+
+    {% for hook in hooks -%}
+    {% if hook == "tool_pre_invoke" -%}
+    def test_tool_pre_invoke_allows_by_default(self):
+        """Test tool_pre_invoke allows execution by default."""
+        config = {{ config_class }}()
+        engine = {{ engine_class }}(config.model_dump())
+        
+        # TODO: Create proper test payload and context
+        # For now, this is a placeholder
+        # result = engine.tool_pre_invoke(payload, context)
+        # assert result.continue_processing is True
+        pass
+
+    {% elif hook == "resource_pre_fetch" -%}
+    def test_resource_pre_fetch_allows_by_default(self):
+        """Test resource_pre_fetch allows fetch by default."""
+        config = {{ config_class }}()
+        engine = {{ engine_class }}(config.model_dump())
+        
+        # TODO: Create proper test payload and context
+        # result = engine.resource_pre_fetch(payload, context)
+        # assert result.continue_processing is True
+        pass
+
+    {% endif -%}
+    {% endfor -%}
+
+
+class Test{{ plugin_class }}:
+    """Tests for {{ plugin_class }}."""
+
+    def test_plugin_requires_rust_module(self):
+        """Test plugin raises error if Rust module not available."""
+        # This test assumes the module is installed
+        # In a real scenario, you'd mock the import
+        pass
+
+    def test_plugin_creation_with_config(self):
+        """Test plugin can be created with configuration."""
+        # TODO: Create proper plugin config object
+        # plugin = {{ plugin_class }}(config)
+        # assert plugin is not None
+        pass
+
+
+class Test{{ config_class }}:
+    """Tests for {{ config_class }}."""
+
+    def test_config_defaults(self):
+        """Test configuration has correct defaults."""
+        config = {{ config_class }}()
+        assert config.example_option == "default_value"
+
+    def test_config_validation(self):
+        """Test configuration validation."""
+        config = {{ config_class }}(example_option="test")
+        assert config.example_option == "test"
+
+    def test_config_serialization(self):
+        """Test configuration can be serialized."""
+        config = {{ config_class }}(example_option="test")
+        data = config.model_dump()
+        assert isinstance(data, dict)
+        assert data["example_option"] == "test"
+
+
+# TODO: Add integration tests
+# TODO: Add performance tests
+# TODO: Add edge case tests

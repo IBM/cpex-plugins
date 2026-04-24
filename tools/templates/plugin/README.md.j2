@@ -1,0 +1,123 @@
+# {{ plugin_name_title }} (Rust)
+> Author: {{ author }}
+> Version: {{ version }}
+
+{{ description }}
+
+## Hooks
+{% for hook in hooks -%}
+- `{{ hook }}` – TODO: Add description
+{% endfor %}
+
+## Config
+```yaml
+config:
+    # TODO: Add configuration options
+    example_option: "value"
+```
+
+## Config Description
+
+* **example_option**
+  - TODO: Document this configuration option
+
+## Architecture
+
+TODO: Add architecture diagram (use Mermaid)
+
+```mermaid
+flowchart LR
+    Start([Input]) --> Process[Process]
+    Process --> End([Output])
+```
+
+## Logic Workflow
+
+1. **Initialization**
+   - Plugin is initialized with configuration
+   - TODO: Document initialization steps
+
+2. **Hook Execution**
+{% for hook in hooks -%}
+   - `{{ hook }}`: TODO: Document hook behavior
+{% endfor %}
+
+3. **Result**
+   - TODO: Document expected outcomes
+
+## Features
+
+- ✅ High-performance Rust implementation
+- ✅ Python integration via PyO3
+- ✅ Type-safe configuration with Pydantic
+- TODO: Add more features
+
+## Limitations
+
+- TODO: Document known limitations
+- TODO: Document edge cases
+
+## TODOs
+
+- [ ] Implement core functionality in `src/engine.rs`
+- [ ] Add comprehensive unit tests
+- [ ] Add integration tests
+{% if include_benchmarks -%}
+- [ ] Add performance benchmarks
+{% endif -%}
+- [ ] Document configuration options
+- [ ] Add architecture diagrams
+- [ ] Add usage examples
+
+## Development
+
+### Building
+
+```bash
+make sync          # Install dependencies
+make install       # Build and install
+make test-all      # Run all tests
+```
+
+### Testing
+
+```bash
+make test          # Rust tests
+make test-python   # Python tests
+make test-all      # Both
+```
+
+### CI Verification
+
+```bash
+make ci            # Full CI verification
+```
+
+## Tests
+
+TODO: Add test coverage information
+
+**Run tests:**
+```bash
+cargo test --lib              # Run Rust unit tests
+pytest tests/                 # Run Python tests
+```
+
+## Performance
+
+{% if include_benchmarks -%}
+TODO: Add benchmark results
+
+**Run benchmarks:**
+```bash
+cargo bench
+```
+{% else -%}
+TODO: Add performance characteristics
+{% endif -%}
+
+## References
+
+- [CPEX Plugin Framework](../../../../README.md)
+- [Development Guide](../../../../DEVELOPING.md)
+- [Testing Guide](../../../../TESTING.md)

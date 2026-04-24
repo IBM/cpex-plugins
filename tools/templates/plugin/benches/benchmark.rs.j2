@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2024 ContextForge Contributors
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+
+// TODO: Add benchmark functions
+
+fn benchmark_example(c: &mut Criterion) {
+    c.bench_function("{{ plugin_name }}_example", |b| {
+        b.iter(|| {
+            // TODO: Add benchmark code
+            black_box(42)
+        });
+    });
+}
+
+criterion_group!(benches, benchmark_example);
+criterion_main!(benches);

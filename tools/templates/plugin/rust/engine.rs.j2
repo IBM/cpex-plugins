@@ -1,0 +1,205 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2024 ContextForge Contributors
+use pyo3::prelude::*;
+use pyo3::types::PyDict;
+use log::{debug, info, warn};
+
+/// {{ plugin_name_title }} engine implementation.
+#[pyclass]
+pub struct {{ engine_class }} {
+    // TODO: Add engine state fields
+    example_option: String,
+}
+
+#[pymethods]
+impl {{ engine_class }} {
+    /// Create a new {{ engine_class }} instance.
+    ///
+    /// # Arguments
+    /// * `config` - Configuration dictionary
+    #[new]
+    pub fn new(config: &Bound<'_, PyDict>) -> PyResult<Self> {
+        info!("Initializing {{ plugin_name_title }} engine");
+        
+        // Extract configuration
+        let example_option = config
+            .get_item("example_option")?
+            .and_then(|v| v.extract::<String>().ok())
+            .unwrap_or_else(|| "default_value".to_string());
+
+        debug!("Configuration: example_option={}", example_option);
+
+        Ok(Self {
+            example_option,
+        })
+    }
+
+    {% for hook in hooks -%}
+    {% if hook == "prompt_pre_fetch" -%}
+    /// Hook called before prompt is fetched.
+    ///
+    /// # Arguments
+    /// * `payload` - Prompt payload
+    /// * `context` - Plugin context
+    ///
+    /// # Returns
+    /// PromptPreFetchResult
+    pub fn prompt_pre_fetch(
+        &self,
+        payload: &Bound<'_, PyAny>,
+        context: &Bound<'_, PyAny>,
+    ) -> PyResult<PyObject> {
+        debug!("{{ plugin_name_title }}: prompt_pre_fetch called");
+
+        // TODO: Implement prompt pre-fetch logic
+        // Example: Extract and validate prompt data
+        
+        // Return success result
+        let py = payload.py();
+        let result_class = py.import_bound("mcpgateway.plugins.framework")?
+            .getattr("PromptPreFetchResult")?;
+        
+        result_class.call1((true,))?.extract()
+    }
+
+    {% elif hook == "prompt_post_fetch" -%}
+    /// Hook called after prompt is fetched.
+    ///
+    /// # Arguments
+    /// * `result` - Prompt result
+    /// * `context` - Plugin context
+    ///
+    /// # Returns
+    /// PromptPostFetchResult
+    pub fn prompt_post_fetch(
+        &self,
+        result: &Bound<'_, PyAny>,
+        context: &Bound<'_, PyAny>,
+    ) -> PyResult<PyObject> {
+        debug!("{{ plugin_name_title }}: prompt_post_fetch called");
+
+        // TODO: Implement prompt post-fetch logic
+        
+        let py = result.py();
+        let result_class = py.import_bound("mcpgateway.plugins.framework")?
+            .getattr("PromptPostFetchResult")?;
+        
+        result_class.call1((true,))?.extract()
+    }
+
+    {% elif hook == "tool_pre_invoke" -%}
+    /// Hook called before tool is invoked.
+    ///
+    /// # Arguments
+    /// * `payload` - Tool payload
+    /// * `context` - Plugin context
+    ///
+    /// # Returns
+    /// ToolPreInvokeResult
+    pub fn tool_pre_invoke(
+        &self,
+        payload: &Bound<'_, PyAny>,
+        context: &Bound<'_, PyAny>,
+    ) -> PyResult<PyObject> {
+        debug!("{{ plugin_name_title }}: tool_pre_invoke called");
+
+        // TODO: Implement tool pre-invoke logic
+        // Example: Validate tool arguments, check permissions, etc.
+        
+        let py = payload.py();
+        let result_class = py.import_bound("mcpgateway.plugins.framework")?
+            .getattr("ToolPreInvokeResult")?;
+        
+        result_class.call1((true,))?.extract()
+    }
+
+    {% elif hook == "tool_post_invoke" -%}
+    /// Hook called after tool is invoked.
+    ///
+    /// # Arguments
+    /// * `result` - Tool result
+    /// * `context` - Plugin context
+    ///
+    /// # Returns
+    /// ToolPostInvokeResult
+    pub fn tool_post_invoke(
+        &self,
+        result: &Bound<'_, PyAny>,
+        context: &Bound<'_, PyAny>,
+    ) -> PyResult<PyObject> {
+        debug!("{{ plugin_name_title }}: tool_post_invoke called");
+
+        // TODO: Implement tool post-invoke logic
+        
+        let py = result.py();
+        let result_class = py.import_bound("mcpgateway.plugins.framework")?
+            .getattr("ToolPostInvokeResult")?;
+        
+        result_class.call1((true,))?.extract()
+    }
+
+    {% elif hook == "resource_pre_fetch" -%}
+    /// Hook called before resource is fetched.
+    ///
+    /// # Arguments
+    /// * `payload` - Resource payload
+    /// * `context` - Plugin context
+    ///
+    /// # Returns
+    /// ResourcePreFetchResult
+    pub fn resource_pre_fetch(
+        &self,
+        payload: &Bound<'_, PyAny>,
+        context: &Bound<'_, PyAny>,
+    ) -> PyResult<PyObject> {
+        debug!("{{ plugin_name_title }}: resource_pre_fetch called");
+
+        // TODO: Implement resource pre-fetch logic
+        // Example: Validate URI, check access permissions, etc.
+        
+        let py = payload.py();
+        let result_class = py.import_bound("mcpgateway.plugins.framework")?
+            .getattr("ResourcePreFetchResult")?;
+        
+        result_class.call1((true,))?.extract()
+    }
+
+    {% elif hook == "resource_post_fetch" -%}
+    /// Hook called after resource is fetched.
+    ///
+    /// # Arguments
+    /// * `result` - Resource result
+    /// * `context` - Plugin context
+    ///
+    /// # Returns
+    /// ResourcePostFetchResult
+    pub fn resource_post_fetch(
+        &self,
+        result: &Bound<'_, PyAny>,
+        context: &Bound<'_, PyAny>,
+    ) -> PyResult<PyObject> {
+        debug!("{{ plugin_name_title }}: resource_post_fetch called");
+
+        // TODO: Implement resource post-fetch logic
+        
+        let py = result.py();
+        let result_class = py.import_bound("mcpgateway.plugins.framework")?
+            .getattr("ResourcePostFetchResult")?;
+        
+        result_class.call1((true,))?.extract()
+    }
+
+    {% endif -%}
+    {% endfor -%}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_engine_creation() {
+        // TODO: Add unit tests
+        assert!(true);
+    }
+}

@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2024 ContextForge Contributors
+use pyo3::prelude::*;
+
+pub mod engine;
+
+#[pymodule]
+fn {{ rust_lib_name }}(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    pyo3_log::init();
+    m.add_class::<engine::{{ engine_class }}>()?;
+    Ok(())
+}
