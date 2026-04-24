@@ -49,6 +49,74 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertTrue(section_lines, f"expected to find workflow job {job_name!r}")
         return "\n".join(section_lines) + "\n"
 
+    def _extract_workflow_step_section(
+        self,
+        workflow: str,
+        job_name: str,
+        *,
+        step_id: str | None = None,
+        step_name: str | None = None,
+    ) -> str:
+        job_section = self._extract_workflow_job_section(workflow, job_name)
+        lines = job_section.splitlines()
+        step_header = None
+        if step_id is not None:
+            step_header = f"      - id: {step_id}"
+        elif step_name is not None:
+            step_header = f"      - name: {step_name}"
+        else:
+            raise AssertionError("step_id or step_name is required")
+
+        section_lines: list[str] = []
+        for line in lines:
+            if line.startswith("      - ") and section_lines:
+                break
+            if line == step_header:
+                section_lines.append(line)
+                continue
+            if section_lines:
+                section_lines.append(line)
+
+        self.assertTrue(
+            section_lines,
+            f"expected to find workflow step {step_id or step_name!r} in {job_name!r}",
+        )
+        return "\n".join(section_lines) + "\n"
+
+    def _extract_workflow_step_run(
+        self,
+        workflow: str,
+        job_name: str,
+        *,
+        step_id: str | None = None,
+        step_name: str | None = None,
+    ) -> str:
+        step_section = self._extract_workflow_step_section(
+            workflow, job_name, step_id=step_id, step_name=step_name
+        )
+        lines = step_section.splitlines()
+        run_lines: list[str] = []
+        in_run = False
+        for line in lines:
+            if line == "        run: |":
+                in_run = True
+                continue
+            if line.startswith("        run: "):
+                return line.removeprefix("        run: ") + "\n"
+            if in_run:
+                if line == "":
+                    run_lines.append("")
+                    continue
+                if not line.startswith("          "):
+                    break
+                run_lines.append(line.removeprefix("          "))
+
+        self.assertTrue(
+            run_lines,
+            f"expected workflow step {step_id or step_name!r} in {job_name!r} to have a run script",
+        )
+        return "\n".join(run_lines) + "\n"
+
     def _source_tree_has_extension(self, package_dir: Path, module_name: str) -> bool:
         return any(package_dir.glob(f"{module_name}*.so")) or any(
             package_dir.glob(f"{module_name}*.pyd")
@@ -2024,10 +2092,25 @@ class PluginCatalogTests(unittest.TestCase):
         documentation_section = self._extract_workflow_job_section(
             workflow, "documentation"
         )
+        detect_run = self._extract_workflow_step_run(
+            workflow, "validate-and-detect", step_id="detect"
+        )
+        deny_run = self._extract_workflow_step_run(
+            workflow, "security-policy", step_name="Run cargo deny"
+        )
+        coverage_run = self._extract_workflow_step_run(
+            workflow, "coverage", step_name="Generate Rust coverage report"
+        )
+        coverage_check_run = self._extract_workflow_step_run(
+            workflow, "coverage", step_name="Enforce per-plugin coverage floor"
+        )
+        documentation_run = self._extract_workflow_step_run(
+            workflow, "documentation", step_name="Build Rust documentation"
+        )
 
         self.assertIn("workflow_dispatch:", workflow)
-        self.assertIn('elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then', workflow)
-        self.assertIn("ci-selection . all '' ''", workflow)
+        self.assertIn('elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then', detect_run)
+        self.assertIn("ci-selection . all '' ''", detect_run)
         self.assertIn("plugin_count: ${{ steps.detect.outputs.plugin_count }}", workflow)
         self.assertIn("single_cargo_package: ${{ steps.detect.outputs.single_cargo_package }}", workflow)
         self.assertIn("cargo_packages: ${{ steps.detect.outputs.cargo_packages }}", workflow)
@@ -2041,25 +2124,67 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertNotIn("cargo-audit", security_section)
         self.assertNotIn("cargo audit", security_section)
         self.assertIn("cargo install cargo-deny", security_section)
-        self.assertIn("cargo deny check --config deny.toml -A unmaintained", security_section)
+        self.assertIn("cargo deny check --config deny.toml -A unmaintained", deny_run)
         self.assertNotIn("--workspace", security_section)
         self.assertNotIn("--manifest-path", security_section)
         self.assertNotIn("matrix:", security_section)
         self.assertIn("cargo install cargo-llvm-cov --version 0.8.4 --locked", coverage_section)
-        self.assertIn("needs.validate-and-detect.outputs.cargo_packages", coverage_section)
-        self.assertIn('cargo_args+=("-p" "${package}")', coverage_section)
-        self.assertIn('cargo llvm-cov "${cargo_args[@]}" --cobertura --output-path coverage/cobertura.xml', coverage_section)
-        self.assertNotIn("cargo llvm-cov --workspace", coverage_section)
-        self.assertIn("python3 tools/plugin_catalog.py coverage-check . coverage/cobertura.xml 50.00", coverage_section)
-        self.assertIn("needs.validate-and-detect.outputs.plugins", coverage_section)
+        self.assertIn("needs.validate-and-detect.outputs.cargo_packages", coverage_run)
+        self.assertIn('cargo_args+=("-p" "${package}")', coverage_run)
+        self.assertIn('cargo llvm-cov "${cargo_args[@]}" --cobertura --output-path coverage/cobertura.xml', coverage_run)
+        self.assertNotIn("cargo llvm-cov --workspace", coverage_run)
+        self.assertIn("python3 tools/plugin_catalog.py coverage-check . coverage/cobertura.xml 50.00", coverage_check_run)
+        self.assertIn("needs.validate-and-detect.outputs.plugins", coverage_check_run)
         self.assertIn("cobertura.xml", coverage_section)
         self.assertIn("codecov/codecov-action@", coverage_section)
         self.assertNotIn("matrix:", coverage_section)
-        self.assertIn("needs.validate-and-detect.outputs.cargo_packages", documentation_section)
-        self.assertIn('cargo doc -p "${package}" --lib --no-deps --document-private-items', documentation_section)
-        self.assertNotIn("cargo doc --workspace", documentation_section)
+        self.assertIn("needs.validate-and-detect.outputs.cargo_packages", documentation_run)
+        self.assertIn('cargo doc -p "${package}" --lib --no-deps --document-private-items', documentation_run)
+        self.assertNotIn("cargo doc --workspace", documentation_run)
         self.assertNotIn("matrix:", documentation_section)
         self.assertNotIn("upload-artifact", documentation_section)
+
+    def test_ci_workflow_dispatch_detect_step_selects_all_plugins(self) -> None:
+        workflow = (
+            REPO_ROOT / ".github" / "workflows" / "ci-rust-python-package.yaml"
+        ).read_text()
+        detect_run = self._extract_workflow_step_run(
+            workflow, "validate-and-detect", step_id="detect"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "github_output"
+            result = subprocess.run(
+                ["bash", "-c", detect_run],
+                cwd=REPO_ROOT,
+                env={
+                    **os.environ,
+                    "GITHUB_EVENT_NAME": "workflow_dispatch",
+                    "GITHUB_OUTPUT": str(output_path),
+                },
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            outputs = dict(
+                line.split("=", maxsplit=1)
+                for line in output_path.read_text().splitlines()
+                if "=" in line
+            )
+            self.assertEqual(outputs["has_plugins"], "true")
+            self.assertEqual(outputs["plugin_count"], "6")
+            self.assertEqual(
+                json.loads(outputs["plugins"]),
+                [
+                    "encoded_exfil_detection",
+                    "pii_filter",
+                    "rate_limiter",
+                    "retry_with_backoff",
+                    "secrets_detection",
+                    "url_reputation",
+                ],
+            )
 
     def test_coverage_check_reports_per_plugin_percentages(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
