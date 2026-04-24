@@ -46,6 +46,10 @@ fn curate_extension_stub_content(content: &str) -> String {
         "curated extension stub is missing SearchReplacePluginRust class definition",
     );
 
+    while curated.ends_with("\n\n") {
+        curated.pop();
+    }
+
     curated
 }
 
@@ -89,5 +93,6 @@ mod tests {
         assert!(curated.contains("\"RegexFilterPluginCore\""));
         assert!(curated.contains("\"SearchReplacePluginRust\""));
         assert!(curated.contains(PLUGIN_CORE_CLASS_MARKER));
+        assert!(!curated.ends_with("\n\n"));
     }
 }

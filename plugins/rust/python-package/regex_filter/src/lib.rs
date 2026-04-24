@@ -836,4 +836,182 @@ mod tests {
             assert!(error.to_string().contains("[invalid("));
         });
     }
+
+    #[test]
+    fn test_config_limits_report_validation_errors() {
+        Python::initialize();
+        Python::attach(|py| {
+            let dict = PyDict::new(py);
+            let words = PyList::empty(py);
+            let word = PyDict::new(py);
+            word.set_item("search", "secret").unwrap();
+            word.set_item("replace", "redacted").unwrap();
+            words.append(word).unwrap();
+            dict.set_item("words", words).unwrap();
+            dict.set_item("max_search_bytes", 2).unwrap();
+            dict.set_item("max_replace_bytes", 3).unwrap();
+
+            let error = SearchReplacePluginRust::new(&dict).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("search exceeds max_search_bytes")
+            );
+        });
+    }
+
+    #[test]
+    fn test_config_rejects_too_many_patterns_and_non_list_words() {
+        Python::initialize();
+        Python::attach(|py| {
+            let dict = PyDict::new(py);
+            let words = PyList::empty(py);
+            for search in ["a", "b"] {
+                let word = PyDict::new(py);
+                word.set_item("search", search).unwrap();
+                word.set_item("replace", "x").unwrap();
+                words.append(word).unwrap();
+            }
+            dict.set_item("words", words).unwrap();
+            dict.set_item("max_patterns", 1).unwrap();
+            let error = SearchReplacePluginRust::new(&dict).unwrap_err();
+            assert!(error.to_string().contains("'words' contains 2 patterns"));
+
+            let dict = PyDict::new(py);
+            dict.set_item("words", "not-a-list").unwrap();
+            let error = SearchReplacePluginRust::new(&dict).unwrap_err();
+            assert!(error.to_string().contains("'words' must be a list"));
+        });
+    }
+
+    #[test]
+    fn test_process_nested_rewrites_dict_list_tuple_and_set() {
+        let plugin = plugin_with_words(vec![("bad", "good")]);
+        Python::initialize();
+        Python::attach(|py| {
+            let nested = PyDict::new(py);
+            nested.set_item("value", "bad").unwrap();
+            let list = PyList::new(py, ["bad", "fine"]).unwrap();
+            let tuple = PyTuple::new(py, ["bad"]).unwrap();
+            let set = PySet::new(py, ["bad", "fine"]).unwrap();
+            let payload = PyDict::new(py);
+            payload.set_item("nested", nested).unwrap();
+            payload.set_item("list", list).unwrap();
+            payload.set_item("tuple", tuple).unwrap();
+            payload.set_item("set", set).unwrap();
+
+            let (modified, result) = plugin.process_nested(py, payload.as_any()).unwrap();
+            assert!(modified);
+            let result = result.bind(py).cast::<PyDict>().unwrap();
+            let nested_obj = result.get_item("nested").unwrap().unwrap();
+            let nested = nested_obj.cast::<PyDict>().unwrap();
+            let nested_value: String = nested
+                .get_item("value")
+                .unwrap()
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(nested_value, "good");
+            let list_obj = result.get_item("list").unwrap().unwrap();
+            let list = list_obj.cast::<PyList>().unwrap();
+            let list_value: String = list.get_item(0).unwrap().extract().unwrap();
+            assert_eq!(list_value, "good");
+            let tuple_obj = result.get_item("tuple").unwrap().unwrap();
+            let tuple = tuple_obj.cast::<PyTuple>().unwrap();
+            let tuple_value: String = tuple.get_item(0).unwrap().extract().unwrap();
+            assert_eq!(tuple_value, "good");
+            let set_obj = result.get_item("set").unwrap().unwrap();
+            let set = set_obj.cast::<PySet>().unwrap();
+            assert!(set.contains("good").unwrap());
+        });
+    }
+
+    #[test]
+    fn test_process_nested_returns_original_on_no_change() {
+        let plugin = plugin_with_words(vec![("missing", "found")]);
+        Python::initialize();
+        Python::attach(|py| {
+            let payload = PyList::new(py, ["clean"]).unwrap();
+            let original_ptr = payload.as_ptr();
+            let (modified, result) = plugin.process_nested(py, payload.as_any()).unwrap();
+            assert!(!modified);
+            assert_eq!(result.bind(py).as_ptr(), original_ptr);
+        });
+    }
+
+    #[test]
+    fn test_process_nested_enforces_runtime_budgets() {
+        let mut plugin = plugin_with_words(vec![("a", "bbbb")]);
+        plugin.config.max_text_bytes = 2;
+        Python::initialize();
+        Python::attach(|py| {
+            let error = plugin
+                .process_nested(py, PyString::new(py, "aaa").as_any())
+                .unwrap_err();
+            assert!(error.to_string().contains("Text exceeds max_text_bytes"));
+        });
+
+        let mut plugin = plugin_with_words(vec![("missing", "found")]);
+        plugin.config.max_total_text_bytes = 5;
+        Python::attach(|py| {
+            let payload = PyList::new(py, ["aaa", "aaa"]).unwrap();
+            let error = plugin.process_nested(py, payload.as_any()).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("Input exceeds max_total_text_bytes")
+            );
+        });
+
+        let mut plugin = plugin_with_words(vec![("missing", "found")]);
+        plugin.config.max_output_bytes = 5;
+        Python::attach(|py| {
+            let payload = PyList::new(py, ["aaa", "aaa"]).unwrap();
+            let error = plugin.process_nested(py, payload.as_any()).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("Output exceeds max_output_bytes")
+            );
+        });
+    }
+
+    #[test]
+    fn test_process_nested_enforces_shape_limits_and_cycles() {
+        let mut plugin = plugin_with_words(vec![("bad", "good")]);
+        plugin.config.max_collection_items = 1;
+        Python::initialize();
+        Python::attach(|py| {
+            let payload = PyList::new(py, ["bad", "bad"]).unwrap();
+            let error = plugin.process_nested(py, payload.as_any()).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("Collection exceeds max_collection_items")
+            );
+        });
+
+        let mut plugin = plugin_with_words(vec![("bad", "good")]);
+        plugin.config.max_total_items = 2;
+        Python::attach(|py| {
+            let inner_one = PyList::new(py, ["bad"]).unwrap();
+            let inner_two = PyList::new(py, ["bad"]).unwrap();
+            let outer = PyList::new(py, [inner_one.as_any(), inner_two.as_any()]).unwrap();
+            let error = plugin.process_nested(py, outer.as_any()).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("Traversal exceeds max_total_items")
+            );
+        });
+
+        let mut plugin = plugin_with_words(vec![("bad", "good")]);
+        plugin.config.max_nested_depth = 1;
+        Python::attach(|py| {
+            let inner = PyList::new(py, ["bad"]).unwrap();
+            let outer = PyList::new(py, [inner.as_any()]).unwrap();
+            let error = plugin.process_nested(py, outer.as_any()).unwrap_err();
+            assert!(error.to_string().contains("Maximum nested depth"));
+        });
+    }
 }

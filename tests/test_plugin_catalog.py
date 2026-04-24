@@ -163,6 +163,7 @@ class PluginCatalogTests(unittest.TestCase):
             slug=slug,
             path=f"plugins/rust/python-package/{slug}",
             package_name=f"cpex-{slug.replace('_', '-')}",
+            cargo_package_name=slug,
             module_name=f"cpex_{slug}",
             kind=f"cpex_{slug}.{slug}:DemoPlugin",
             version="0.0.1",
@@ -1969,7 +1970,7 @@ class PluginCatalogTests(unittest.TestCase):
 
         result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "plugin_count")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "6")
+        self.assertEqual(result.stdout.strip(), "7")
 
         result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "cargo_packages")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -1979,6 +1980,7 @@ class PluginCatalogTests(unittest.TestCase):
                 "encoded_exfil_detection",
                 "pii_filter",
                 "rate_limiter",
+                "regex_filter",
                 "retry_with_backoff",
                 "secrets_detection",
                 "url_reputation",
@@ -2369,11 +2371,12 @@ class PluginCatalogTests(unittest.TestCase):
                 if "=" in line
             )
             self.assertEqual(outputs["has_plugins"], "true")
-            self.assertEqual(outputs["plugin_count"], "6")
+            self.assertEqual(outputs["plugin_count"], "7")
             expected_plugins = [
                 "encoded_exfil_detection",
                 "pii_filter",
                 "rate_limiter",
+                "regex_filter",
                 "retry_with_backoff",
                 "secrets_detection",
                 "url_reputation",
