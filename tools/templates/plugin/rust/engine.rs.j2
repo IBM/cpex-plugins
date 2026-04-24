@@ -196,10 +196,30 @@ impl {{ engine_class }} {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pyo3::types::PyDict;
 
     #[test]
-    fn test_engine_creation() {
-        // TODO: Add unit tests
-        assert!(true);
+    fn test_engine_creation_with_defaults() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let config = PyDict::new_bound(py);
+            let engine = {{ engine_class }}::new(&config);
+            assert!(engine.is_ok());
+            let engine = engine.unwrap();
+            assert_eq!(engine.example_option, "default_value");
+        });
+    }
+
+    #[test]
+    fn test_engine_creation_with_custom_config() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let config = PyDict::new_bound(py);
+            config.set_item("example_option", "custom_value").unwrap();
+            let engine = {{ engine_class }}::new(&config);
+            assert!(engine.is_ok());
+            let engine = engine.unwrap();
+            assert_eq!(engine.example_option, "custom_value");
+        });
     }
 }
