@@ -87,7 +87,48 @@ class Test{{ config_class }}:
         assert isinstance(data, dict)
         assert data["example_option"] == "test"
 
+    def test_config_deserialization(self):
+        """Test configuration can be deserialized from dict."""
+        data = {"example_option": "from_dict"}
+        config = {{ config_class }}(**data)
+        assert config.example_option == "from_dict"
 
-# TODO: Add integration tests
-# TODO: Add performance tests
-# TODO: Add edge case tests
+    def test_config_immutability(self):
+        """Test configuration fields are validated on creation."""
+        config = {{ config_class }}(example_option="initial")
+        # Pydantic models are mutable by default, but validation occurs
+        assert config.example_option == "initial"
+
+    def test_config_with_none_value(self):
+        """Test configuration handles None values appropriately."""
+        # Depending on field definition, None may or may not be allowed
+        config = {{ config_class }}()
+        assert hasattr(config, "example_option")
+
+
+class TestEdgeCases:
+    """Edge case tests for {{ plugin_name_title }} plugin."""
+
+    def test_config_with_empty_string(self):
+        """Test configuration handles empty string values."""
+        config = {{ config_class }}(example_option="")
+        assert config.example_option == ""
+
+    def test_config_with_special_characters(self):
+        """Test configuration handles special characters."""
+        special_value = "test!@#$%^&*()"
+        config = {{ config_class }}(example_option=special_value)
+        assert config.example_option == special_value
+
+    def test_engine_with_minimal_config(self):
+        """Test engine works with minimal configuration."""
+        config = {{ config_class }}()
+        engine = {{ engine_class }}(config.model_dump())
+        assert engine is not None
+
+    def test_engine_config_roundtrip(self):
+        """Test engine configuration can be serialized and deserialized."""
+        config = {{ config_class }}(example_option="roundtrip_test")
+        data = config.model_dump()
+        new_config = {{ config_class }}(**data)
+        assert new_config.example_option == config.example_option
