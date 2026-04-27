@@ -42,9 +42,11 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       plugin: ${{ steps.resolve.outputs.plugin }}
+      slug: ${{ steps.resolve.outputs.plugin }}
       plugin_path: ${{ steps.resolve.outputs.plugin_path }}
       wheel_matrix: ${{ steps.resolve.outputs.wheel_matrix }}
       publish_env: ${{ steps.resolve.outputs.publish_env }}
+      publish_enabled: ${{ steps.resolve.outputs.publish_enabled }}
       checkout_ref: ${{ steps.resolve.outputs.checkout_ref }}
       tag_on_main: ${{ steps.resolve.outputs.tag_on_main }}
     steps:
@@ -62,16 +64,25 @@ jobs:
         env:
           TAG_INPUT: ${{ inputs.tag }}
           REPOSITORY_INPUT: ${{ inputs.repository }}
+          PUBLISH_ENABLED: ${{ inputs.publish_enabled }}
         run: |
           set -euo pipefail
           git fetch --force origin "refs/heads/main:refs/remotes/origin/main"
           if [[ -n "${TAG_INPUT}" ]]; then
             tag="${TAG_INPUT}"
             repository="${REPOSITORY_INPUT}"
-            git fetch --force origin "refs/tags/${tag}:refs/tags/${tag}"
-            git show-ref --verify --quiet "refs/tags/${tag}"
-            checkout_ref="refs/tags/${tag}"
-            tag_ref="refs/tags/${tag}"
+            if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+              git fetch --force origin "refs/tags/${tag}:refs/tags/${tag}"
+              git show-ref --verify --quiet "refs/tags/${tag}"
+              checkout_ref="refs/tags/${tag}"
+              tag_ref="refs/tags/${tag}"
+            elif [[ "${GITHUB_EVENT_NAME}" == "pull_request" && "${PUBLISH_ENABLED}" == "false" ]]; then
+              checkout_ref="${GITHUB_SHA}"
+              tag_ref="${GITHUB_SHA}"
+            else
+              echo "Release tag ${tag} does not exist" >&2
+              exit 1
+            fi
           else
             tag="${GITHUB_REF_NAME}"
             repository="pypi"
@@ -100,6 +111,11 @@ jobs:
             echo "wheel_matrix=${wheel_matrix}"
             echo "checkout_ref=${checkout_ref}"
             echo "tag_on_main=${tag_on_main}"
+            if [[ "${PUBLISH_ENABLED}" == "false" ]]; then
+              echo "publish_enabled=false"
+            else
+              echo "publish_enabled=true"
+            fi
             if [[ "${repository}" == "testpypi" ]]; then
               echo "publish_env=testpypi"
             else
@@ -265,7 +281,7 @@ jobs:
           fi
 
   publish:
-    if: ${{ (github.event_name != 'workflow_call' || inputs.publish_enabled) && (needs.resolve.outputs.publish_env != 'pypi' || needs.resolve.outputs.tag_on_main == 'true') }}
+    if: ${{ needs.resolve.outputs.publish_enabled == 'true' && (needs.resolve.outputs.publish_env != 'pypi' || needs.resolve.outputs.tag_on_main == 'true') }}
     needs: [resolve, build-wheel, build-sdist]
     runs-on: ubuntu-latest
     environment: ${{ needs.resolve.outputs.publish_env }}

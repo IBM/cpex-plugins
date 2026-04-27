@@ -389,7 +389,7 @@ def validate_plugin_dir(
     package = cargo.get("package", {})
     if not isinstance(package, dict):
         raise CatalogError(f"{plugin_dir}: Cargo.toml [package] must be a table")
-    relative_plugin_path = str(plugin_dir.relative_to(root))
+    relative_plugin_path = plugin_dir.relative_to(root).as_posix()
 
     if relative_plugin_path not in workspace_members:
         raise CatalogError(
@@ -565,10 +565,13 @@ def coverage_check(
     plugin_lines: dict[str, dict[str, int]] = {}
     prefix = MANAGED_ROOT.as_posix() + "/"
     for class_node in coverage.findall(".//class"):
-        filename = class_node.attrib.get("filename", "")
-        if not filename.startswith(prefix):
+        filename = class_node.attrib.get("filename", "").replace("\\", "/")
+        if filename.startswith(prefix):
+            relative = filename[len(prefix) :]
+        elif f"/{prefix}" in filename:
+            relative = filename.split(f"/{prefix}", maxsplit=1)[1]
+        else:
             continue
-        relative = filename[len(prefix) :]
         slug = relative.split("/", maxsplit=1)[0]
         counts = plugin_lines.setdefault(slug, {"covered_lines": 0, "valid_lines": 0})
         for line_node in class_node.findall("./lines/line"):

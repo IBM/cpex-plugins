@@ -47,6 +47,6 @@ jobs:
     needs: test
     uses: ./.github/workflows/release-rust-python-package.yaml
     with:
-      tag: retry-with-backoff-v0.1.1
+      tag: retry-with-backoff-v0.2.0
       repository: testpypi
       publish_enabled: false

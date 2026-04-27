@@ -2127,7 +2127,7 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("working-directory: plugins/rust/python-package/${{ matrix.plugin }}", workflow)
         self.assertIn("release-validation:", workflow)
         self.assertIn("uses: ./.github/workflows/release-rust-python-package.yaml", workflow)
-        self.assertIn("tag: retry-with-backoff-v0.1.1", workflow)
+        self.assertIn("tag: retry-with-backoff-v0.2.0", workflow)
         self.assertIn("repository: testpypi", workflow)
         self.assertIn("publish_enabled: false", workflow)
         self.assertNotIn("tools/plugin_catalog.py ci-selection-field", workflow)
@@ -2438,6 +2438,42 @@ class PluginCatalogTests(unittest.TestCase):
             self.assertEqual(payload["plugins"]["alpha"]["line_rate"], 50.0)
             self.assertEqual(payload["plugins"]["beta"]["line_rate"], 75.0)
 
+    def test_coverage_check_accepts_windows_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/alpha"]\n'
+                '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n'
+            )
+            self._create_plugin(root, "alpha")
+            report = root / "coverage.xml"
+            report.write_text(
+                textwrap.dedent(
+                    r"""
+                    <coverage>
+                      <packages>
+                        <package name="plugins.rust.python-package.alpha.src">
+                          <classes>
+                            <class filename="D:\a\cpex-plugins\cpex-plugins\plugins\rust\python-package\alpha\src\lib.rs">
+                              <lines>
+                                <line number="1" hits="1"/>
+                                <line number="2" hits="0"/>
+                              </lines>
+                            </class>
+                          </classes>
+                        </package>
+                      </packages>
+                    </coverage>
+                    """
+                ).strip()
+            )
+
+            result = run_catalog("coverage-check", str(root), str(report), "50.0", '["alpha"]')
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["plugins"]["alpha"]["line_rate"], 50.0)
+
     def test_coverage_check_rejects_plugin_with_no_counted_lines(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -2683,7 +2719,10 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn('"${tmpdir}/tests/${{ needs.resolve.outputs.slug }}" -v', workflow)
         self.assertNotIn('PYTHONPATH="${GITHUB_WORKSPACE}/${{ needs.resolve.outputs.plugin_path }}/tests"', workflow)
         self.assertEqual(workflow.count("cargo run --bin stub_gen"), 1)
-        self.assertIn('git show-ref --verify --quiet "refs/tags/${tag}"', workflow)
+        self.assertIn('git ls-remote --exit-code --tags origin "refs/tags/${tag}"', workflow)
+        self.assertIn('elif [[ "${GITHUB_EVENT_NAME}" == "pull_request" && "${PUBLISH_ENABLED}" == "false" ]]; then', workflow)
+        self.assertIn('checkout_ref="${GITHUB_SHA}"', workflow)
+        self.assertIn('echo "Release tag ${tag} does not exist" >&2', workflow)
         self.assertIn("python3 tools/plugin_catalog.py release-info .", workflow)
         self.assertIn('if [[ -n "${TAG_INPUT}" ]]; then', workflow)
         self.assertIn("workflow_call:", workflow)
@@ -2692,6 +2731,10 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn('git fetch --force origin "refs/heads/main:refs/remotes/origin/main"', workflow)
         self.assertIn('if git merge-base --is-ancestor "${tag_ref}" "refs/remotes/origin/main"; then', workflow)
         self.assertIn("tag_on_main: ${{ steps.resolve.outputs.tag_on_main }}", workflow)
+        self.assertIn("slug: ${{ steps.resolve.outputs.plugin }}", workflow)
+        self.assertIn("publish_enabled: ${{ steps.resolve.outputs.publish_enabled }}", workflow)
+        self.assertIn('echo "publish_enabled=false"', workflow)
+        self.assertIn('echo "publish_enabled=true"', workflow)
         self.assertIn(
             'wheel_matrix="$(python3 -c \'import json; print(json.dumps([{',
             workflow,
@@ -2713,7 +2756,7 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("runs-on: ${{ matrix.runner }}", workflow)
         self.assertIn("name: wheel-${{ matrix.platform }}", workflow)
         self.assertIn(
-            "if: ${{ (github.event_name != 'workflow_call' || inputs.publish_enabled) && (needs.resolve.outputs.publish_env != 'pypi' || needs.resolve.outputs.tag_on_main == 'true') }}",
+            "if: ${{ needs.resolve.outputs.publish_enabled == 'true' && (needs.resolve.outputs.publish_env != 'pypi' || needs.resolve.outputs.tag_on_main == 'true') }}",
             workflow,
         )
         self.assertNotIn("matrix.", preflight_section)
@@ -2949,6 +2992,19 @@ class PluginCatalogTests(unittest.TestCase):
         makefile = (REPO_ROOT / "Makefile").read_text()
         self.assertIn("make ci", makefile)
         self.assertNotIn("make install && make test-all", makefile)
+
+    def test_retry_make_ci_enforces_local_coverage_floor(self) -> None:
+        plugin_dir = REPO_ROOT / "plugins" / "rust" / "python-package" / "retry_with_backoff"
+        makefile = (plugin_dir / "Makefile").read_text()
+        self.assertIn("ci: ci-build test-integration coverage", makefile)
+        self.assertIn("rustup component add llvm-tools-preview", makefile)
+        self.assertIn("cargo install cargo-llvm-cov --version $(CARGO_LLVM_COV_VERSION) --locked", makefile)
+        self.assertIn("cargo llvm-cov clean --workspace", makefile)
+        self.assertIn("cargo llvm-cov report -p $(CARGO_PACKAGE)", makefile)
+        self.assertIn(
+            "python3 $(REPO_ROOT)/tools/plugin_catalog.py coverage-check $(REPO_ROOT) $(COVERAGE_REPORT) $(COVERAGE_MIN)",
+            makefile,
+        )
 
     def test_secrets_detection_keeps_scanner_module_internal(self) -> None:
         lib_rs = (

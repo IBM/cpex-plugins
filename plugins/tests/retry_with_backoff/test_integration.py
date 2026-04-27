@@ -164,6 +164,82 @@ class TestCfgFor:
         assert result.max_retries == 3
 
 
+class TestRustNativePolicy:
+    def test_simple_config_returns_wire_policy(self):
+        plugin = make_plugin(
+            {
+                "max_retries": 3,
+                "backoff_base_ms": 150,
+                "max_backoff_ms": 3000,
+                "retry_on_status": [500, 503],
+                "jitter": False,
+            }
+        )
+
+        assert plugin.to_rust_native_policy("tool_a", ceiling=10) == {
+            "kind": "retry_with_backoff",
+            "maxRetries": 3,
+            "backoffBaseMs": 150,
+            "maxBackoffMs": 3000,
+            "retryOnStatus": [500, 503],
+            "jitter": False,
+        }
+
+    def test_ceiling_clamps_max_retries(self):
+        plugin = make_plugin({"max_retries": 3})
+
+        policy = plugin.to_rust_native_policy("tool_a", ceiling=1)
+
+        assert policy is not None
+        assert policy["maxRetries"] == 1
+
+    def test_per_tool_override_is_merged(self):
+        plugin = make_plugin(
+            {
+                "max_retries": 3,
+                "backoff_base_ms": 200,
+                "max_backoff_ms": 5000,
+                "retry_on_status": [500],
+                "jitter": True,
+                "tool_overrides": {
+                    "slow_api": {
+                        "max_retries": 2,
+                        "backoff_base_ms": 750,
+                        "retry_on_status": [429, 503],
+                        "jitter": False,
+                    }
+                },
+            }
+        )
+
+        assert plugin.to_rust_native_policy("slow_api", ceiling=10) == {
+            "kind": "retry_with_backoff",
+            "maxRetries": 2,
+            "backoffBaseMs": 750,
+            "maxBackoffMs": 5000,
+            "retryOnStatus": [429, 503],
+            "jitter": False,
+        }
+
+    def test_per_tool_override_max_retries_is_clamped(self):
+        plugin = make_plugin(
+            {
+                "max_retries": 3,
+                "tool_overrides": {"slow_api": {"max_retries": 8}},
+            }
+        )
+
+        policy = plugin.to_rust_native_policy("slow_api", ceiling=2)
+
+        assert policy is not None
+        assert policy["maxRetries"] == 2
+
+    def test_check_text_content_returns_none(self):
+        plugin = make_plugin({"check_text_content": True})
+
+        assert plugin.to_rust_native_policy("tool_a", ceiling=10) is None
+
+
 class TestPluginInit:
     def test_max_retries_clamped_to_gateway_ceiling(self):
         with patch("cpex_retry_with_backoff.retry_with_backoff.get_settings") as mock_settings:
