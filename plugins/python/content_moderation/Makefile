@@ -58,7 +58,9 @@ test-all:
 # help: build                 - Build distribution wheel and source package
 # help: install               - Install package in editable mode (for development)
 # help: uninstall             - Uninstall the package
-.PHONY: build install uninstall
+# help: publish-test          - Upload distribution to TestPyPI
+# help: publish               - Upload distribution to PyPI
+.PHONY: build install uninstall publish-test publish
 
 build:
 	@echo "$(GREEN)Building $(PACKAGE_NAME)...$(NC)"
@@ -73,6 +75,16 @@ install:
 uninstall:
 	@echo "$(YELLOW)Uninstalling $(PACKAGE_NAME)...$(NC)"
 	uv pip uninstall -y $(PACKAGE_NAME) 2>/dev/null || true
+
+publish-test: build
+	@echo "$(GREEN)Uploading $(PACKAGE_NAME) to TestPyPI...$(NC)"
+	uv run twine upload --repository testpypi dist/*
+	@echo "$(GREEN)Upload to TestPyPI complete$(NC)"
+
+publish: build
+	@echo "$(GREEN)Uploading $(PACKAGE_NAME) to PyPI...$(NC)"
+	uv run twine upload dist/*
+	@echo "$(GREEN)Upload to PyPI complete$(NC)"
 
 .PHONY: clean clean-all
 
