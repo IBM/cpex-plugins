@@ -40,11 +40,46 @@ Equivalent repo-level helper:
 make plugin-test PLUGIN=rate_limiter
 ```
 
-`make plugin-test` runs the selected plugin's `make ci` target, including stub verification, build, bench compilation without execution, install, and Python tests.
+`make plugin-test` runs the selected plugin's `make ci` target, including stub verification, build, bench compilation where configured, install, and Python tests.
+
+## 3. Rust Coverage
+
+CI enforces at least 90% line coverage for each Rust plugin selected by the plugin catalog. The coverage job instruments Rust, runs Rust unit tests, then runs each plugin's repo-level Python integration tests so PyO3 paths are counted.
+
+To run the same coverage check locally for all managed Rust plugins:
+
+```bash
+rustup component add llvm-tools-preview
+cargo install cargo-llvm-cov --version 0.8.4 --locked
+mkdir -p coverage
+CARGO_PACKAGES="$(python3 tools/plugin_catalog.py ci-selection-field . all '' '' cargo_packages)"
+PLUGINS="$(python3 tools/plugin_catalog.py ci-selection-field . all '' '' plugins)"
+mapfile -t cargo_packages < <(python3 -c 'import json, os; [print(package) for package in json.loads(os.environ["CARGO_PACKAGES"])]')
+mapfile -t plugins < <(python3 -c 'import json, os; [print(plugin) for plugin in json.loads(os.environ["PLUGINS"])]')
+cargo_args=()
+for package in "${cargo_packages[@]}"; do
+  cargo_args+=("-p" "${package}")
+done
+cargo llvm-cov clean --workspace
+eval "$(cargo llvm-cov show-env --sh)"
+export CARGO_TARGET_DIR="${CARGO_LLVM_COV_TARGET_DIR}/llvm-cov-target"
+export CARGO_LLVM_COV_BUILD_DIR="${CARGO_TARGET_DIR}"
+export LLVM_PROFILE_FILE="${CARGO_TARGET_DIR}/cpex-plugins-%p-%10m.profraw"
+mkdir -p "${CARGO_TARGET_DIR}"
+for plugin in "${plugins[@]}"; do
+  (cd "plugins/rust/python-package/${plugin}" && make sync && uv run maturin develop)
+done
+cargo test "${cargo_args[@]}"
+for plugin in "${plugins[@]}"; do
+  (cd "plugins/rust/python-package/${plugin}" && make test-integration)
+done
+env -u CARGO_TARGET_DIR -u CARGO_LLVM_COV_BUILD_DIR -u CARGO_LLVM_COV_TARGET_DIR -u LLVM_PROFILE_FILE cargo llvm-cov report "${cargo_args[@]}" --cobertura --output-path coverage/cobertura.xml
+python3 tools/plugin_catalog.py coverage-check . coverage/cobertura.xml 90.00 "${PLUGINS}"
+```
 
 ## CI Behavior
 
-Whenever the Rust plugin CI workflow is triggered, it runs the repo contract tests before any plugin build jobs.
+Repo contract tests run in their own CI workflow. The Rust plugin CI workflow uses the same plugin catalog to select affected plugin build, integration, and coverage jobs.
 
 Per-plugin build/test jobs are then scoped by the plugin catalog:
 

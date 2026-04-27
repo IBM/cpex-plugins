@@ -27,18 +27,21 @@ clippy:
 	$(CARGO) clippy -- -D warnings
 
 # help: sync                  - Install plugin development dependencies
-# help: test                  - Run Rust unit tests
+# help: test                  - Run Rust unit tests and Python integration tests
+# help: test-unit             - Run Rust unit tests
 # help: test-verbose          - Run Rust tests with verbose output
 # help: test-integration      - Run repo-level integration tests for secrets_detection
-# help: test-all              - Run both Rust and Python tests
-.PHONY: sync test test-verbose test-integration test-all verify-stubs
+# help: test-all              - Alias for test
+.PHONY: sync test test-unit test-verbose test-integration test-all verify-stubs
 
 sync:
 	uv sync --dev
 
-test:
+test-unit:
 	@echo "$(GREEN)Running secrets_detection Rust tests...$(NC)"
 	$(CARGO) test
+
+test: test-unit test-integration
 
 test-verbose:
 	@echo "$(GREEN)Running secrets_detection Rust tests (verbose)...$(NC)"
@@ -46,9 +49,9 @@ test-verbose:
 
 test-integration:
 	@echo "$(GREEN)Running integration tests...$(NC)"
-	uv run pytest ../../../tests/secrets_detection -v --asyncio-mode=auto
+	CPEX_TEST_PLUGIN_HOOKS=1 uv run pytest ../../../tests/secrets_detection -v --asyncio-mode=auto
 
-test-all: test test-integration
+test-all: test
 
 verify-stubs: stub-gen
 	@git diff --exit-code -- $(STUB_FILES)
@@ -106,16 +109,19 @@ clean-all: clean
 
 # help: verify                - Verify plugin installation
 # help: check-all             - Run fmt-check + clippy + Rust tests
+# help: ci-build              - Run CI build/static verification without integration tests
 # help: ci                    - Run the full CI-equivalent plugin verification flow
-.PHONY: verify check-all ci pre-commit
+.PHONY: verify check-all ci-build ci pre-commit
 
 verify:
 	@uv run python -c "from cpex_secrets_detection import secrets_detection_rust; print('secrets_detection_rust available')" || echo "secrets_detection_rust not installed — run: make install"
 
-check-all: fmt-check clippy test
+check-all: fmt-check clippy test-unit
 	@echo "$(GREEN)All checks passed$(NC)"
 
-ci: check-all verify-stubs build bench-no-run install-wheel test-integration
+ci-build: check-all verify-stubs build bench-no-run install-wheel
+
+ci: ci-build test-integration
 	@echo "$(GREEN)CI verification passed$(NC)"
 
 pre-commit: check-all

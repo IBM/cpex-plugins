@@ -27,28 +27,34 @@ clippy:
 	$(CARGO) clippy -- -D warnings
 
 # help: sync                  - Install plugin development dependencies
-# help: test                  - Run Rust unit tests
+# help: test                  - Run Rust unit tests and Python integration tests
+# help: test-unit             - Run Rust unit tests
 # help: test-verbose          - Run Rust tests with verbose output
-# help: test-python           - Run Python tests
-# help: test-all              - Run both Rust and Python tests
-.PHONY: sync test test-verbose test-python test-all verify-stubs
+# help: test-integration      - Run repo-level integration tests for retry_with_backoff
+# help: test-all              - Alias for test
+.PHONY: sync test test-unit test-verbose test-python test-integration test-all verify-stubs
 
 sync:
 	uv sync --dev
 
-test:
+test-unit:
 	@echo "$(GREEN)Running retry_with_backoff Rust tests...$(NC)"
 	$(CARGO) test
+
+test: test-unit test-integration
 
 test-verbose:
 	@echo "$(GREEN)Running retry_with_backoff Rust tests (verbose)...$(NC)"
 	$(CARGO) test -- --nocapture
 
 test-python:
-	@echo "$(GREEN)Running Python tests...$(NC)"
-	uv run pytest tests/ -v
+	$(MAKE) test-integration
 
-test-all: test test-python
+test-integration:
+	@echo "$(GREEN)Running integration tests...$(NC)"
+	CPEX_TEST_PLUGIN_HOOKS=1 uv run pytest ../../../tests/retry_with_backoff -v --asyncio-mode=auto
+
+test-all: test
 
 verify-stubs: stub-gen
 	@git diff --exit-code -- $(STUB_FILES)
@@ -94,16 +100,19 @@ clean-all: clean
 
 # help: verify                - Verify plugin installation
 # help: check-all             - Run fmt-check + clippy + Rust tests
+# help: ci-build              - Run CI build/static verification without integration tests
 # help: ci                    - Run the full CI-equivalent plugin verification flow
-.PHONY: verify check-all ci pre-commit
+.PHONY: verify check-all ci-build ci pre-commit
 
 verify:
 	@uv run python -c "from cpex_retry_with_backoff import retry_with_backoff_rust; print('retry_with_backoff_rust available')" || echo "retry_with_backoff_rust not installed — run: make install"
 
-check-all: fmt-check clippy test
+check-all: fmt-check clippy test-unit
 	@echo "$(GREEN)All checks passed$(NC)"
 
-ci: check-all verify-stubs build install-wheel test-python
+ci-build: check-all verify-stubs build install-wheel
+
+ci: ci-build test-integration
 	@echo "$(GREEN)CI verification passed$(NC)"
 
 pre-commit: check-all

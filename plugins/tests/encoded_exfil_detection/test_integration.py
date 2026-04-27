@@ -11,7 +11,7 @@ from pydantic import ValidationError
 import pytest
 
 # First-Party
-from mcpgateway_mock.plugins.framework import (
+from mcpgateway.plugins.framework import (
     GlobalContext,
     PluginConfig,
     PluginContext,

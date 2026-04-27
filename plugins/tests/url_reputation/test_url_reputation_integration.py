@@ -341,5 +341,3 @@ async def test_config_normalize_domains_mixed_case():
     )
     assert cfg.whitelist_domains == {"example.com", "test.org"}
     assert cfg.blocked_domains == {"bad.com"}
-
-

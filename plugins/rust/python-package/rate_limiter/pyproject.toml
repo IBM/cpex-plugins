@@ -26,11 +26,6 @@ module-name = "cpex_rate_limiter.rate_limiter_rust"
 python-source = "."
 features = ["pyo3/extension-module"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["tests"]
-asyncio_mode = "auto"
-
 [dependency-groups]
 dev = [
     "maturin>=1.12.6",

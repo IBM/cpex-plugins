@@ -13,31 +13,16 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-try:
-    from mcpgateway.config import get_settings
-except ModuleNotFoundError:
-    from mcpgateway_mock.config import get_settings  # type: ignore[no-redef]
-
-try:
-    from mcpgateway.plugins.framework import (
-        Plugin,
-        PluginConfig,
-        PluginContext,
-        ResourcePostFetchPayload,
-        ResourcePostFetchResult,
-        ToolPostInvokePayload,
-        ToolPostInvokeResult,
-    )
-except ModuleNotFoundError:
-    from mcpgateway_mock.plugins.framework import (  # type: ignore[no-redef]
-        Plugin,
-        PluginConfig,
-        PluginContext,
-        ResourcePostFetchPayload,
-        ResourcePostFetchResult,
-        ToolPostInvokePayload,
-        ToolPostInvokeResult,
-    )
+from mcpgateway.config import get_settings
+from mcpgateway.plugins.framework import (
+    Plugin,
+    PluginConfig,
+    PluginContext,
+    ResourcePostFetchPayload,
+    ResourcePostFetchResult,
+    ToolPostInvokePayload,
+    ToolPostInvokeResult,
+)
 
 from cpex_retry_with_backoff.retry_with_backoff_rust import RetryStateManager
 

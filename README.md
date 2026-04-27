@@ -17,9 +17,10 @@ Each managed plugin must include:
 - `Cargo.toml`
 - `Makefile`
 - `README.md`
-- `tests/`
 - `cpex_<slug>/__init__.py`
 - `cpex_<slug>/plugin-manifest.yaml`
+
+Python integration tests live under `plugins/tests/<slug>/`; Rust unit tests live in the plugin crate.
 
 Rust crates are owned by the top-level workspace in `Cargo.toml`. Python package names follow `cpex-<slug>`, Python modules follow `cpex_<slug>`, plugin manifests must declare a top-level `kind` in `module.object` form, and `pyproject.toml` must publish the matching `module:object` reference under `[project.entry-points."cpex.plugins"]`. Release tags use the hyphenated slug form `<slug-with-hyphens>-v<version>`, for example `rate-limiter-v0.0.2`.
 

@@ -282,3 +282,214 @@ impl<'py> MappingStateAccumulator<'py> {
         self.state
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::CString;
+
+    use pyo3::types::{PyFrozenSet, PyList, PyModule, PySet, PyString, PyTuple};
+
+    use super::*;
+
+    #[test]
+    fn inspect_object_state_merges_model_dict_regular_dict_and_slots() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let code = CString::new(
+                r#"
+class StateObject:
+    __slots__ = ("slot_value", "__dict__")
+
+    def __init__(self):
+        self.dict_value = "dict"
+        self.slot_value = "slot"
+
+    def model_dump(self):
+        return {"model_value": "model"}
+"#,
+            )
+            .unwrap();
+            let module =
+                PyModule::from_code(py, code.as_c_str(), c"object_test.py", c"object_test")?;
+            let instance = module.getattr("StateObject")?.call0()?;
+
+            let inspected = inspect_object_state(py, &instance)?;
+            let state = inspected.rebuild_state.expect("state exists");
+
+            assert_eq!(
+                state
+                    .get_item("model_value")?
+                    .unwrap()
+                    .extract::<String>()?,
+                "model"
+            );
+            assert_eq!(
+                state.get_item("dict_value")?.unwrap().extract::<String>()?,
+                "dict"
+            );
+            assert_eq!(
+                state.get_item("slot_value")?.unwrap().extract::<String>()?,
+                "slot"
+            );
+            assert!(inspected.serialized_state.is_some());
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn inspect_root_model_uses_rebuild_state_only_when_root_matches_serialized_state() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let code = CString::new(
+                r#"
+class RootObject:
+    def __init__(self):
+        self.root = ["secret"]
+
+    def model_dump(self):
+        return self.root
+"#,
+            )
+            .unwrap();
+            let module = PyModule::from_code(py, code.as_c_str(), c"root_test.py", c"root_test")?;
+            let instance = module.getattr("RootObject")?.call0()?;
+
+            let inspected = inspect_object_state(py, &instance)?;
+
+            assert!(inspected.rebuild_state.is_some());
+            assert!(inspected.serialized_state.is_none());
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn rebuild_object_from_state_uses_model_copy_root_and_passthrough_branches() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let code = CString::new(
+                r#"
+class CopyObject:
+    def __init__(self, root=None, value=None):
+        self.root = root
+        self.value = value
+
+    def model_copy(self, update=None):
+        update = update or {}
+        return CopyObject(update.get("root", self.root), update.get("value", self.value))
+
+class CopyNoRoot:
+    def model_copy(self, update=None):
+        return self
+"#,
+            )
+            .unwrap();
+            let module = PyModule::from_code(py, code.as_c_str(), c"copy_test.py", c"copy_test")?;
+            let instance = module
+                .getattr("CopyObject")?
+                .call((), Some(&PyDict::new(py)))?;
+            instance.setattr("root", "old")?;
+
+            let root_copy =
+                rebuild_object_from_state(py, &instance, PyString::new(py, "new").as_any())?;
+            assert_eq!(root_copy.getattr("root")?.extract::<String>()?, "new");
+
+            let plain = module.getattr("CopyNoRoot")?.call0()?;
+            let passthrough =
+                rebuild_object_from_state(py, &plain, PyString::new(py, "raw").as_any())?;
+            assert_eq!(passthrough.extract::<String>()?, "raw");
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn copy_object_with_updates_rebuilds_existing_state_and_kwargs_only_objects() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let code = CString::new(
+                r#"
+class ExistingState:
+    def __init__(self, value):
+        self.value = value
+
+class KwargsOnly:
+    def __init__(self, value):
+        self.value = value
+
+    def __getattribute__(self, name):
+        if name == "__dict__":
+            raise AttributeError(name)
+        return object.__getattribute__(self, name)
+"#,
+            )
+            .unwrap();
+            let module =
+                PyModule::from_code(py, code.as_c_str(), c"copy_update_test.py", c"copy_update")?;
+            let updates = PyDict::new(py);
+            updates.set_item("value", "new")?;
+
+            let existing = module.getattr("ExistingState")?.call1(("old",))?;
+            let copied = copy_object_with_updates(py, &existing, &updates)?;
+            assert_eq!(
+                copied.bind(py).getattr("value")?.extract::<String>()?,
+                "new"
+            );
+
+            let kwargs_only = module.getattr("KwargsOnly")?.call1(("old",))?;
+            let copied = copy_object_with_updates(py, &kwargs_only, &updates)?;
+            assert_eq!(
+                copied.bind(py).getattr("value")?.extract::<String>()?,
+                "new"
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn append_slot_names_accepts_collection_shapes() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let code = CString::new(
+                r#"
+def names():
+    yield "iter_slot"
+"#,
+            )
+            .unwrap();
+            let module =
+                PyModule::from_code(py, code.as_c_str(), c"object_slots.py", c"object_slots")?;
+            let slot_names = PyList::empty(py);
+            let dict = PyDict::new(py);
+            dict.set_item("dict_slot", py.None())?;
+
+            append_slot_names(&slot_names, PyString::new(py, "one_slot").as_any())?;
+            append_slot_names(&slot_names, dict.as_any())?;
+            append_slot_names(
+                &slot_names,
+                PyTuple::new(py, [PyString::new(py, "tuple_slot").into_any().unbind()])?.as_any(),
+            )?;
+            append_slot_names(&slot_names, PyList::new(py, ["list_slot"])?.as_any())?;
+            append_slot_names(&slot_names, PySet::new(py, ["set_slot"])?.as_any())?;
+            append_slot_names(&slot_names, PyFrozenSet::new(py, ["frozen_slot"])?.as_any())?;
+            append_slot_names(&slot_names, module.getattr("names")?.call0()?.as_any())?;
+
+            let names = slot_names.extract::<Vec<String>>()?;
+            for expected in [
+                "one_slot",
+                "dict_slot",
+                "tuple_slot",
+                "list_slot",
+                "set_slot",
+                "frozen_slot",
+                "iter_slot",
+            ] {
+                assert!(names.iter().any(|name| name == expected), "{expected}");
+            }
+            Ok(())
+        })
+        .unwrap();
+    }
+}

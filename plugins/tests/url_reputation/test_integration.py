@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from mcpgateway_mock.plugins.framework import (
+from mcpgateway.plugins.framework import (
     PluginConfig,
     ResourceHookType,
     ResourcePreFetchPayload,
@@ -46,9 +46,9 @@ class TestRustEngine:
             [entry for entry in sys.path if Path(entry).resolve() != tests_dir],
         )
         for module_name in (
-            "mcpgateway_mock",
-            "mcpgateway_mock.plugins",
-            "mcpgateway_mock.plugins.framework",
+            "plugin_hooks",
+            "mcpgateway.plugins",
+            "mcpgateway.plugins.framework",
             "cpex_url_reputation.url_reputation_rust",
         ):
             sys.modules.pop(module_name, None)

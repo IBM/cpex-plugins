@@ -2,7 +2,6 @@ import subprocess
 import sys
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
 from pydantic import BaseModel, RootModel, model_serializer
 
 from mcpgateway.common.models import ResourceContent
@@ -19,7 +18,6 @@ from mcpgateway.plugins.framework import (
     ToolHookType,
 )
 from mcpgateway.plugins.framework.models import GlobalContext
-from mcpgateway.services.resource_service import ResourceService
 
 from cpex_secrets_detection.secrets_detection import SecretsDetectionPlugin
 from cpex_secrets_detection.secrets_detection_rust import py_scan_container
@@ -249,67 +247,23 @@ async def test_resource_post_fetch_rebuilds_frozen_payload_on_redaction():
 
 
 @pytest.mark.asyncio
-async def test_resource_post_fetch_receives_resolved_content():
-    captured = {}
-
-    class CaptureSecretsPlugin(SecretsDetectionPlugin):
-        async def resource_post_fetch(self, payload, context):
-            captured["text"] = payload.content.text
-            return await super().resource_post_fetch(payload, context)
-
-    plugin = CaptureSecretsPlugin(
-        PluginConfig(
-            name="secrets_detection",
-            kind="cpex_secrets_detection.secrets_detection.SecretsDetectionPlugin",
-            config={},
-        )
+async def test_resource_post_fetch_scans_resolved_content_not_uri():
+    plugin = SecretsDetectionPlugin(make_config())
+    payload = ResourcePostFetchPayload(
+        uri="file:///tmp/clean-name.txt",
+        content=ResourceContent(
+            type="resource",
+            id="res-1",
+            uri="file:///tmp/clean-name.txt",
+            text="AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE",
+        ),
     )
 
-    fake_resource = MagicMock()
-    fake_resource.id = "res1"
-    fake_resource.uri = "file:///data/x.txt"
-    fake_resource.enabled = True
-    fake_resource.content = ResourceContent(
-        type="resource",
-        id="res1",
-        uri="file:///data/x.txt",
-        text="file:///data/x.txt",
-    )
+    result = await plugin.resource_post_fetch(payload, make_context())
 
-    fake_db = MagicMock()
-    fake_db.get.return_value = fake_resource
-    fake_db.execute.return_value.scalar_one_or_none.return_value = fake_resource
-
-    service = ResourceService()
-    service.invoke_resource = AsyncMock(return_value="actual file content")
-
-    pm = MagicMock()
-    pm.has_hooks_for.return_value = True
-    pm._initialized = True
-
-    async def invoke_hook(
-        hook_type,
-        payload,
-        global_context,
-        local_contexts=None,
-        violations_as_exceptions=True,
-    ):
-        del local_contexts, violations_as_exceptions
-        if hook_type == ResourceHookType.RESOURCE_POST_FETCH:
-            await plugin.resource_post_fetch(payload, global_context)
-        return MagicMock(modified_payload=None), None
-
-    pm.invoke_hook = invoke_hook
-    service._get_plugin_manager = AsyncMock(return_value=pm)
-
-    result = await service.read_resource(
-        db=fake_db,
-        resource_id="res1",
-        resource_uri="file:///data/x.txt",
-    )
-
-    assert captured["text"] == "actual file content"
-    assert result.text == "actual file content"
+    assert result.continue_processing is True
+    assert result.modified_payload is not None
+    assert result.modified_payload.content.text == "AWS_ACCESS_KEY_ID=[REDACTED]"
 
 
 @pytest.mark.asyncio
@@ -324,10 +278,22 @@ class TestSecretsDetectionHookDispatch:
     def global_context() -> GlobalContext:
         return GlobalContext(request_id="req-secrets", server_id="srv-secrets")
 
-    async def manager(self, tmp_path, config: dict) -> PluginManager:
+    async def manager(
+        self,
+        tmp_path,
+        config: dict,
+        *,
+        hooks: list[str] | None = None,
+        mode: str = PluginMode.ENFORCE.value,
+    ) -> PluginManager:
         import yaml
 
         config_path = tmp_path / "secrets_detection.yaml"
+        configured_hooks = hooks or [
+            PromptHookType.PROMPT_PRE_FETCH.value,
+            ToolHookType.TOOL_POST_INVOKE.value,
+            ResourceHookType.RESOURCE_POST_FETCH.value,
+        ]
         config_path.write_text(
             yaml.safe_dump(
                 {
@@ -335,12 +301,8 @@ class TestSecretsDetectionHookDispatch:
                         {
                             "name": "SecretsDetection",
                             "kind": "cpex_secrets_detection.secrets_detection.SecretsDetectionPlugin",
-                            "hooks": [
-                                PromptHookType.PROMPT_PRE_FETCH.value,
-                                ToolHookType.TOOL_POST_INVOKE.value,
-                                ResourceHookType.RESOURCE_POST_FETCH.value,
-                            ],
-                            "mode": PluginMode.ENFORCE.value,
+                            "hooks": configured_hooks,
+                            "mode": mode,
                             "priority": 100,
                             "config": config,
                         }
@@ -360,6 +322,91 @@ class TestSecretsDetectionHookDispatch:
         manager = PluginManager(str(config_path))
         await manager.initialize()
         return manager
+
+    async def test_plugin_manager_skips_unconfigured_hooks(self, tmp_path):
+        manager = await self.manager(
+            tmp_path,
+            {"block_on_detection": True, "redact": False},
+            hooks=[PromptHookType.PROMPT_PRE_FETCH.value],
+        )
+        try:
+            payload = ToolPostInvokePayload(
+                name="writer",
+                result={"secret": "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"},
+            )
+            result, _ = await manager.invoke_hook(
+                ToolHookType.TOOL_POST_INVOKE,
+                payload,
+                global_context=self.global_context(),
+            )
+            assert result is None
+        finally:
+            await manager.shutdown()
+
+    async def test_permissive_plugin_manager_mode_continues_chain(self, tmp_path):
+        import yaml
+
+        config_path = tmp_path / "secrets_detection_chain.yaml"
+        plugin_kind = "cpex_secrets_detection.secrets_detection.SecretsDetectionPlugin"
+        config_path.write_text(
+            yaml.safe_dump(
+                {
+                    "plugins": [
+                        {
+                            "name": "PermissiveSecretsDetection",
+                            "kind": plugin_kind,
+                            "hooks": [ToolHookType.TOOL_POST_INVOKE.value],
+                            "mode": PluginMode.PERMISSIVE.value,
+                            "priority": 10,
+                            "config": {
+                                "block_on_detection": True,
+                                "redact": False,
+                            },
+                        },
+                        {
+                            "name": "EnforcingSecretsDetection",
+                            "kind": plugin_kind,
+                            "hooks": [ToolHookType.TOOL_POST_INVOKE.value],
+                            "mode": PluginMode.ENFORCE.value,
+                            "priority": 20,
+                            "config": {
+                                "block_on_detection": False,
+                                "redact": True,
+                                "redaction_text": "[REDACTED]",
+                            },
+                        },
+                    ],
+                    "plugin_dirs": [],
+                    "plugin_settings": {
+                        "parallel_execution_within_band": False,
+                        "plugin_timeout": 30,
+                        "fail_on_plugin_error": False,
+                        "enable_plugin_api": True,
+                        "plugin_health_check_interval": 60,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        manager = PluginManager(str(config_path))
+        await manager.initialize()
+        try:
+            payload = ToolPostInvokePayload(
+                name="writer",
+                result={"secret": "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"},
+            )
+            result, _ = await manager.invoke_hook(
+                ToolHookType.TOOL_POST_INVOKE,
+                payload,
+                global_context=self.global_context(),
+            )
+            assert result.continue_processing is True
+            assert (
+                result.modified_payload.result["secret"]
+                == "AWS_ACCESS_KEY_ID=[REDACTED]"
+            )
+        finally:
+            await manager.shutdown()
 
     async def test_prompt_pre_fetch_blocks_without_redaction_via_plugin_manager(
         self, tmp_path
@@ -431,6 +478,8 @@ class TestSecretsDetectionHookDispatch:
             assert result.modified_payload == payload
         finally:
             await manager.shutdown()
+
+
 class TestPluginHooks:
     @pytest.fixture
     def plugin(self):

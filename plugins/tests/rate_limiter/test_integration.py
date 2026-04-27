@@ -2,7 +2,7 @@
 
 import pytest
 
-from mcpgateway_mock.plugins.framework import (
+from mcpgateway.plugins.framework import (
     GlobalContext,
     PluginConfig,
     PluginContext,

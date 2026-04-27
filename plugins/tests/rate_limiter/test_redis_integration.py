@@ -17,7 +17,7 @@ PluginExecutor with inline trivial plugins.
 
 Note: these tests drive the PLUGIN directly — no MCP gateway is required.
 The plugin's `from mcpgateway.plugins.framework import ...` resolves
-through the mcpgateway_mock package (see conftest.py).
+through the plugin hook contracts (see conftest.py).
 """
 
 # Standard
@@ -30,8 +30,8 @@ import time
 # Third-Party
 import pytest
 
-# First-Party (mcpgateway framework surface, satisfied by mcpgateway_mock)
-from mcpgateway_mock.plugins.framework import (
+# First-Party (mcpgateway framework surface, satisfied by plugin hook contracts)
+from mcpgateway.plugins.framework import (
     GlobalContext,
     PluginConfig,
     PluginContext,

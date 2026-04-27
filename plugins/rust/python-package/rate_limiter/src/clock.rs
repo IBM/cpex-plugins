@@ -178,6 +178,14 @@ mod tests {
     }
 
     #[test]
+    fn fake_clock_handle_sets_wall_clock_without_moving_monotonic() {
+        let (clock, handle) = FakeClock::new(100);
+        handle.set_unix_secs(250);
+        assert_eq!(clock.now_unix_secs(), 250);
+        assert_eq!(handle.monotonic_nanos(), 100 * 1_000_000_000);
+    }
+
+    #[test]
     fn system_clock_monotonic_is_non_decreasing() {
         let c = SystemClock;
         let t1 = c.now_monotonic();

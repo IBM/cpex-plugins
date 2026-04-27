@@ -511,6 +511,9 @@ def _changed_plugins_for_records(
             if not path.startswith(integration_prefix):
                 continue
             relative = path[len(integration_prefix):]
+            slug = relative.split("/", maxsplit=1)[0]
+            if slug not in plugin_lookup:
+                return sorted(plugin_lookup)
         else:
             relative = path[len(managed_prefix):]
         slug = relative.split("/", maxsplit=1)[0]
@@ -602,9 +605,9 @@ def coverage_check(
     minimum_rate = 101.0
     for slug, counts in sorted(plugin_lines.items()):
         valid_lines = counts["valid_lines"]
-        line_rate = (
-            counts["covered_lines"] / valid_lines * 100.0 if valid_lines else 100.0
-        )
+        if valid_lines == 0:
+            raise CatalogError(f"{slug} has no counted coverage lines")
+        line_rate = counts["covered_lines"] / valid_lines * 100.0
         plugins[slug] = {
             "covered_lines": counts["covered_lines"],
             "valid_lines": valid_lines,

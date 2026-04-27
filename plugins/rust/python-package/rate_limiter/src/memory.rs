@@ -438,6 +438,12 @@ mod tests {
     // --- Fixed window ---
 
     #[test]
+    fn default_store_starts_empty() {
+        let store = MemoryStore::default();
+        assert_eq!(store.inner.read().len(), 0);
+    }
+
+    #[test]
     fn fixed_window_allows_up_to_limit() {
         let store = MemoryStore::new();
         for _ in 0..3 {

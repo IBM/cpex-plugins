@@ -29,11 +29,6 @@ module-name = "cpex_url_reputation.url_reputation_rust"
 python-source = "."
 features = ["pyo3/extension-module"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["tests"]
-asyncio_mode = "auto"
-
 [dependency-groups]
 dev = [
     "maturin>=1.12.6",

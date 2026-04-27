@@ -27,28 +27,29 @@ clippy:
 	$(CARGO) clippy -- -D warnings
 
 # help: sync                  - Install plugin development dependencies
-# help: test                  - Run Rust unit tests
-# help: test-python           - Run Python plugin tests
-# help: test-integration      - Run integration tests only
-# help: test-all              - Run both Rust and Python tests
-.PHONY: sync test test-python test-integration test-all verify-stubs
+# help: test                  - Run Rust unit tests and Python integration tests
+# help: test-unit             - Run Rust unit tests
+# help: test-integration      - Run repo-level integration tests for encoded_exfil_detection
+# help: test-all              - Alias for test
+.PHONY: sync test test-unit test-python test-integration test-all verify-stubs
 
 sync:
 	uv sync --dev
 
-test:
+test-unit:
 	@echo "$(GREEN)Running encoded_exfil_detection Rust tests...$(NC)"
 	$(CARGO) test
 
+test: test-unit test-integration
+
 test-python:
-	@echo "$(GREEN)Running Python tests...$(NC)"
-	uv run pytest tests/ -v
+	$(MAKE) test-integration
 
 test-integration:
 	@echo "$(GREEN)Running integration tests...$(NC)"
-	uv run pytest tests/integration/ -v
+	CPEX_TEST_PLUGIN_HOOKS=1 uv run pytest ../../../tests/encoded_exfil_detection -v --asyncio-mode=auto
 
-test-all: test test-python
+test-all: test
 
 verify-stubs: stub-gen
 	@git diff --exit-code -- $(STUB_FILES)
@@ -106,16 +107,19 @@ clean-all: clean
 
 # help: verify                - Verify plugin installation
 # help: check-all             - Run fmt-check + clippy + Rust tests
+# help: ci-build              - Run CI build/static verification without integration tests
 # help: ci                    - Run the full CI-equivalent plugin verification flow
-.PHONY: verify check-all ci
+.PHONY: verify check-all ci-build ci
 
 verify:
 	@uv run python -c "from cpex_encoded_exfil_detection import encoded_exfil_detection_rust; print('encoded_exfil_detection_rust available')" || echo "encoded_exfil_detection_rust not installed — run: make install"
 
-check-all: fmt-check clippy test
+check-all: fmt-check clippy test-unit
 	@echo "$(GREEN)All checks passed$(NC)"
 
-ci: check-all verify-stubs build bench-no-run install-wheel test-python
+ci-build: check-all verify-stubs build bench-no-run install-wheel
+
+ci: ci-build test-integration
 	@echo "$(GREEN)CI verification passed$(NC)"
 
 .DEFAULT_GOAL := help

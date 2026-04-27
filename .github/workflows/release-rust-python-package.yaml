@@ -197,14 +197,19 @@ jobs:
           if [[ ! -f "${venv_python}" ]]; then
             venv_python="${tmpdir}/venv/Scripts/python.exe"
           fi
-          "${venv_python}" -m pip install dist/*.whl pytest pytest-asyncio
-          if [[ -d "${GITHUB_WORKSPACE}/${{ needs.resolve.outputs.plugin_path }}/tests" ]]; then
-            cp -R "${GITHUB_WORKSPACE}/${{ needs.resolve.outputs.plugin_path }}/tests" "${tmpdir}/tests"
-            printf "[pytest]\npythonpath = tests\nasyncio_mode = auto\n" > "${tmpdir}/pytest.ini"
+          "${venv_python}" -m pip install dist/*.whl pytest pytest-asyncio PyYAML
+          if [[ -d "${GITHUB_WORKSPACE}/plugins/tests/${{ needs.resolve.outputs.slug }}" ]]; then
+            mkdir -p "${tmpdir}/tests"
+            cp -R "${GITHUB_WORKSPACE}/plugins/tests/${{ needs.resolve.outputs.slug }}" "${tmpdir}/tests/${{ needs.resolve.outputs.slug }}"
+            cp "${GITHUB_WORKSPACE}/plugins/tests/conftest.py" "${tmpdir}/tests/conftest.py"
+            cp "${GITHUB_WORKSPACE}/plugins/tests/plugin_hooks.py" "${tmpdir}/tests/plugin_hooks.py"
+            cp "${GITHUB_WORKSPACE}/plugins/tests/pytest.ini" "${tmpdir}/pytest.ini"
             cd "${tmpdir}"
+            export CPEX_TEST_PLUGIN_HOOKS=1
+            export PYTHONPATH="${tmpdir}/tests"
             "${venv_python}" -m pytest \
               -c "${tmpdir}/pytest.ini" \
-              "${tmpdir}/tests" -v
+              "${tmpdir}/tests/${{ needs.resolve.outputs.slug }}" -v
           fi
 
   build-sdist:
@@ -244,14 +249,19 @@ jobs:
           if [[ ! -f "${venv_python}" ]]; then
             venv_python="${tmpdir}/venv/Scripts/python.exe"
           fi
-          "${venv_python}" -m pip install dist/*.tar.gz pytest pytest-asyncio
-          if [[ -d "${GITHUB_WORKSPACE}/${{ needs.resolve.outputs.plugin_path }}/tests" ]]; then
-            cp -R "${GITHUB_WORKSPACE}/${{ needs.resolve.outputs.plugin_path }}/tests" "${tmpdir}/tests"
-            printf "[pytest]\npythonpath = tests\nasyncio_mode = auto\n" > "${tmpdir}/pytest.ini"
+          "${venv_python}" -m pip install dist/*.tar.gz pytest pytest-asyncio PyYAML
+          if [[ -d "${GITHUB_WORKSPACE}/plugins/tests/${{ needs.resolve.outputs.slug }}" ]]; then
+            mkdir -p "${tmpdir}/tests"
+            cp -R "${GITHUB_WORKSPACE}/plugins/tests/${{ needs.resolve.outputs.slug }}" "${tmpdir}/tests/${{ needs.resolve.outputs.slug }}"
+            cp "${GITHUB_WORKSPACE}/plugins/tests/conftest.py" "${tmpdir}/tests/conftest.py"
+            cp "${GITHUB_WORKSPACE}/plugins/tests/plugin_hooks.py" "${tmpdir}/tests/plugin_hooks.py"
+            cp "${GITHUB_WORKSPACE}/plugins/tests/pytest.ini" "${tmpdir}/pytest.ini"
             cd "${tmpdir}"
+            export CPEX_TEST_PLUGIN_HOOKS=1
+            export PYTHONPATH="${tmpdir}/tests"
             "${venv_python}" -m pytest \
               -c "${tmpdir}/pytest.ini" \
-              "${tmpdir}/tests" -v
+              "${tmpdir}/tests/${{ needs.resolve.outputs.slug }}" -v
           fi
 
   publish:

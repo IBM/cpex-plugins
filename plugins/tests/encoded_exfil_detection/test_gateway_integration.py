@@ -7,8 +7,8 @@ import base64
 # Third-Party
 import pytest
 
-# First-Party (mcpgateway framework surface, satisfied by mcpgateway_mock)
-from mcpgateway_mock.plugins.framework import (
+# First-Party (mcpgateway framework surface, satisfied by plugin hook contracts)
+from mcpgateway.plugins.framework import (
     GlobalContext,
     PluginConfig,
     PluginContext,

@@ -140,6 +140,10 @@ fn merge_enabled_map(overrides: HashMap<String, bool>) -> HashMap<String, bool> 
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::CString;
+
+    use pyo3::types::PyModule;
+
     use super::*;
 
     #[test]
@@ -148,5 +152,64 @@ mod tests {
         assert!(!config.is_enabled("generic_api_key_assignment"));
         assert!(!config.is_enabled("jwt_like"));
         assert!(config.is_enabled("aws_access_key_id"));
+    }
+
+    #[test]
+    fn from_py_dict_merges_overrides_with_defaults() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let dict = PyDict::new(py);
+            let enabled = PyDict::new(py);
+            enabled.set_item("jwt_like", true)?;
+            enabled.set_item("aws_access_key_id", false)?;
+            dict.set_item("enabled", enabled)?;
+            dict.set_item("redact", true)?;
+            dict.set_item("redaction_text", "[SECRET]")?;
+            dict.set_item("block_on_detection", false)?;
+            dict.set_item("min_findings_to_block", 3)?;
+
+            let config = SecretsDetectionConfig::from_py_dict(&dict)?;
+
+            assert!(config.is_enabled("jwt_like"));
+            assert!(!config.is_enabled("aws_access_key_id"));
+            assert!(config.is_enabled("github_token"));
+            assert!(config.redact);
+            assert_eq!(config.redaction_text, "[SECRET]");
+            assert!(!config.block_on_detection);
+            assert_eq!(config.min_findings_to_block, 3);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn from_py_any_reads_attribute_config() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let code = CString::new(
+                r#"
+class Config:
+    enabled = {"base64_24": True}
+    redact = True
+    redaction_text = "[MASKED]"
+    block_on_detection = False
+    min_findings_to_block = 2
+"#,
+            )
+            .unwrap();
+            let module =
+                PyModule::from_code(py, code.as_c_str(), c"config_test.py", c"config_test")?;
+            let config_obj = module.getattr("Config")?.call0()?;
+
+            let config = SecretsDetectionConfig::from_py_any(&config_obj)?;
+
+            assert!(config.is_enabled("base64_24"));
+            assert!(config.redact);
+            assert_eq!(config.redaction_text, "[MASKED]");
+            assert!(!config.block_on_detection);
+            assert_eq!(config.min_findings_to_block, 2);
+            Ok(())
+        })
+        .unwrap();
     }
 }

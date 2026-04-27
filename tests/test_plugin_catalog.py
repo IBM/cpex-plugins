@@ -1740,6 +1740,48 @@ class PluginCatalogTests(unittest.TestCase):
                 },
             )
 
+    def test_ci_selection_treats_shared_plugin_tests_change_as_all_plugins(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            git = lambda *args: subprocess.run(  # noqa: E731
+                ["git", *args],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            git("init")
+            git("config", "user.name", "Test User")
+            git("config", "user.email", "test@example.com")
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/rate_limiter", "plugins/rust/python-package/pii_filter"]\n'
+            )
+            self._create_plugin(root, "rate_limiter")
+            self._create_plugin(root, "pii_filter")
+            shared_tests = root / "plugins" / "tests"
+            shared_tests.mkdir(parents=True)
+            (shared_tests / "plugin_hooks.py").write_text("# seed\n")
+            git("add", ".")
+            git("commit", "--no-verify", "-m", "seed layout")
+            base_sha = git("rev-parse", "HEAD").stdout.strip()
+
+            (shared_tests / "plugin_hooks.py").write_text("# updated\n")
+            git("add", ".")
+            git("commit", "--no-verify", "-m", "shared plugin test harness change")
+
+            result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(
+                payload,
+                {
+                    "plugins": ["pii_filter", "rate_limiter"],
+                    "has_plugins": True,
+                    "plugin_count": 2,
+                    "cargo_packages": ["pii_filter", "rate_limiter"],
+                },
+            )
+
     def test_ci_selection_treats_shared_crate_changes_as_all_plugins(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -2042,9 +2084,11 @@ class PluginCatalogTests(unittest.TestCase):
             self.assertRegex(text, r"(?m)^\.PHONY:.*\binstall-wheel\b")
             self.assertRegex(text, r"(?m)^install-wheel:")
             self.assertRegex(text, r"(?m)^\.PHONY:.*\bci\b")
+            self.assertRegex(text, r"(?m)^\.PHONY:.*\bci-build\b")
+            self.assertRegex(text, r"(?m)^ci-build:.*\binstall-wheel\b")
             self.assertRegex(text, r"(?m)^ci:")
             self.assertNotRegex(text, r"(?m)^ci:.*(?:^|\s)install(?:\s|$)")
-            self.assertRegex(text, r"(?m)^ci:.*\binstall-wheel\b")
+            self.assertRegex(text, r"(?m)^ci:.*\btest-integration\b")
 
     def test_existing_benchmark_plugins_keep_bench_targets(self) -> None:
         for slug in ("pii_filter", "rate_limiter"):
@@ -2076,6 +2120,7 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertNotIn("tests/test_plugin_catalog.py", workflow)
         self.assertNotIn("tests/test_install_built_wheel.py", workflow)
         self.assertIn("python3 tools/plugin_catalog.py ci-selection . diff", workflow)
+        self.assertIn("run: make ci-build", workflow)
         self.assertIn("run: make ci", workflow)
         self.assertIn("shell: bash", workflow)
         self.assertIn("rustc --version", workflow)
@@ -2195,13 +2240,39 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertNotIn("--manifest-path", security_section)
         self.assertNotIn("matrix:", security_section)
         self.assertIn("cargo install cargo-llvm-cov --version 0.8.4 --locked", coverage_section)
+        self.assertIn("python -m pip install uv==0.9.30 maturin==1.12.6", coverage_section)
         self.assertIn("CARGO_PACKAGES: ${{ needs.validate-and-detect.outputs.cargo_packages }}", coverage_section)
-        self.assertIn('os.environ["CARGO_PACKAGES"]', coverage_run)
-        self.assertIn('cargo_args+=("-p" "${package}")', coverage_run)
-        self.assertIn('cargo llvm-cov "${cargo_args[@]}" --cobertura --output-path coverage/cobertura.xml', coverage_run)
-        self.assertNotIn("cargo llvm-cov --workspace", coverage_run)
-        self.assertIn("python3 tools/plugin_catalog.py coverage-check . coverage/cobertura.xml 50.00", coverage_check_run)
         self.assertIn("PLUGINS: ${{ needs.validate-and-detect.outputs.plugins }}", coverage_section)
+        self.assertIn('os.environ["CARGO_PACKAGES"]', coverage_run)
+        self.assertIn('os.environ["PLUGINS"]', coverage_run)
+        self.assertIn('cargo_args+=("-p" "${package}")', coverage_run)
+        self.assertIn("cargo llvm-cov clean --workspace", coverage_run)
+        self.assertIn('eval "$(cargo llvm-cov show-env --sh)"', coverage_run)
+        self.assertIn(
+            'CARGO_TARGET_DIR="${CARGO_LLVM_COV_TARGET_DIR}/llvm-cov-target"',
+            coverage_run,
+        )
+        self.assertIn(
+            'CARGO_LLVM_COV_BUILD_DIR="${CARGO_TARGET_DIR}"',
+            coverage_run,
+        )
+        self.assertIn(
+            'LLVM_PROFILE_FILE="${CARGO_TARGET_DIR}/cpex-plugins-%p-%10m.profraw"',
+            coverage_run,
+        )
+        self.assertIn(
+            'mkdir -p "${CARGO_TARGET_DIR}"',
+            coverage_run,
+        )
+        self.assertIn('cargo test "${cargo_args[@]}"', coverage_run)
+        self.assertIn('make sync && uv run maturin develop', coverage_run)
+        self.assertIn('make test-integration', coverage_run)
+        self.assertIn(
+            'env -u CARGO_TARGET_DIR -u CARGO_LLVM_COV_BUILD_DIR -u CARGO_LLVM_COV_TARGET_DIR -u LLVM_PROFILE_FILE cargo llvm-cov report "${cargo_args[@]}" --cobertura --output-path coverage/cobertura.xml',
+            coverage_run,
+        )
+        self.assertNotIn("cargo llvm-cov --workspace", coverage_run)
+        self.assertIn("python3 tools/plugin_catalog.py coverage-check . coverage/cobertura.xml 90.00", coverage_check_run)
         self.assertIn('"${PLUGINS}"', coverage_check_run)
         self.assertIn("cobertura.xml", coverage_section)
         self.assertIn("codecov/codecov-action@", coverage_section)
@@ -2254,6 +2325,56 @@ class PluginCatalogTests(unittest.TestCase):
             ]
             self.assertEqual(json.loads(outputs["plugins"]), expected_plugins)
             self.assertEqual(json.loads(outputs["cargo_packages"]), expected_plugins)
+
+    def test_testing_docs_include_local_rust_coverage_command(self) -> None:
+        testing_doc = (REPO_ROOT / "TESTING.md").read_text()
+
+        self.assertIn("cargo install cargo-llvm-cov --version 0.8.4 --locked", testing_doc)
+        self.assertIn("cargo llvm-cov clean --workspace", testing_doc)
+        self.assertIn('eval "$(cargo llvm-cov show-env --sh)"', testing_doc)
+        self.assertIn('export CARGO_TARGET_DIR="${CARGO_LLVM_COV_TARGET_DIR}/llvm-cov-target"', testing_doc)
+        self.assertIn("make sync && uv run maturin develop", testing_doc)
+        self.assertIn("cargo test", testing_doc)
+        self.assertIn("make test-integration", testing_doc)
+        self.assertIn("env -u CARGO_TARGET_DIR", testing_doc)
+        self.assertIn("coverage/cobertura.xml", testing_doc)
+        self.assertIn("python3 tools/plugin_catalog.py coverage-check . coverage/cobertura.xml 90.00", testing_doc)
+
+    def test_python_integration_tests_live_under_repo_plugins_tests(self) -> None:
+        plugin_root = REPO_ROOT / "plugins" / "rust" / "python-package"
+        integration_root = REPO_ROOT / "plugins" / "tests"
+        for slug in (
+            "encoded_exfil_detection",
+            "pii_filter",
+            "rate_limiter",
+            "retry_with_backoff",
+            "secrets_detection",
+            "url_reputation",
+        ):
+            self.assertTrue((integration_root / slug).exists(), slug)
+            self.assertFalse((plugin_root / slug / "tests").exists(), slug)
+
+            makefile = (plugin_root / slug / "Makefile").read_text()
+            pyproject = (plugin_root / slug / "pyproject.toml").read_text()
+            self.assertIn(f"../../../tests/{slug}", makefile)
+            self.assertIn("CPEX_TEST_PLUGIN_HOOKS=1", makefile)
+            self.assertIn("test-integration", makefile)
+            self.assertRegex(makefile, r"(?m)^test-unit:\n\t@echo")
+            self.assertIn("test: test-unit test-integration", makefile)
+            self.assertIn("test-all: test", makefile)
+            self.assertIn("check-all: fmt-check clippy test-unit", makefile)
+            self.assertNotIn("[tool.pytest.ini_options]", pyproject)
+
+            result = subprocess.run(
+                ["make", "-n", "test"],
+                cwd=plugin_root / slug,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("cargo test", result.stdout)
+            self.assertIn(f"../../../tests/{slug}", result.stdout)
 
     def test_coverage_check_reports_per_plugin_percentages(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2316,6 +2437,38 @@ class PluginCatalogTests(unittest.TestCase):
             self.assertEqual(payload["minimum_line_rate"], 50.0)
             self.assertEqual(payload["plugins"]["alpha"]["line_rate"], 50.0)
             self.assertEqual(payload["plugins"]["beta"]["line_rate"], 75.0)
+
+    def test_coverage_check_rejects_plugin_with_no_counted_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/alpha"]\n'
+                '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n'
+            )
+            self._create_plugin(root, "alpha")
+            report = root / "coverage.xml"
+            report.write_text(
+                textwrap.dedent(
+                    """
+                    <coverage>
+                      <packages>
+                        <package name="plugins.rust.python-package.alpha.src">
+                          <classes>
+                            <class filename="plugins/rust/python-package/alpha/src/lib.rs">
+                              <lines />
+                            </class>
+                          </classes>
+                        </package>
+                      </packages>
+                    </coverage>
+                    """
+                ).strip()
+            )
+
+            result = run_catalog("coverage-check", str(root), str(report), "50.0", '["alpha"]')
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("alpha has no counted coverage lines", result.stderr)
 
     def test_coverage_check_fails_below_threshold(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2514,15 +2667,20 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("rustc --version", workflow)
         self.assertIn("working-directory: ${{ needs.resolve.outputs.plugin_path }}", workflow)
         self.assertIn(
-            'if [[ -d "${GITHUB_WORKSPACE}/${{ needs.resolve.outputs.plugin_path }}/tests" ]]; then',
+            'if [[ -d "${GITHUB_WORKSPACE}/plugins/tests/${{ needs.resolve.outputs.slug }}" ]]; then',
             workflow,
         )
         self.assertIn(
-            'cp -R "${GITHUB_WORKSPACE}/${{ needs.resolve.outputs.plugin_path }}/tests"',
+            'cp -R "${GITHUB_WORKSPACE}/plugins/tests/${{ needs.resolve.outputs.slug }}" "${tmpdir}/tests/${{ needs.resolve.outputs.slug }}"',
             workflow,
         )
+        self.assertIn('cp "${GITHUB_WORKSPACE}/plugins/tests/conftest.py"', workflow)
+        self.assertIn('cp "${GITHUB_WORKSPACE}/plugins/tests/plugin_hooks.py"', workflow)
+        self.assertIn('cp "${GITHUB_WORKSPACE}/plugins/tests/pytest.ini"', workflow)
+        self.assertIn("CPEX_TEST_PLUGIN_HOOKS=1", workflow)
+        self.assertIn('PYTHONPATH="${tmpdir}/tests"', workflow)
         self.assertIn('cd "${tmpdir}"', workflow)
-        self.assertIn('printf "[pytest]\\npythonpath = tests\\nasyncio_mode = auto\\n" > "${tmpdir}/pytest.ini"', workflow)
+        self.assertIn('"${tmpdir}/tests/${{ needs.resolve.outputs.slug }}" -v', workflow)
         self.assertNotIn('PYTHONPATH="${GITHUB_WORKSPACE}/${{ needs.resolve.outputs.plugin_path }}/tests"', workflow)
         self.assertEqual(workflow.count("cargo run --bin stub_gen"), 1)
         self.assertIn('git show-ref --verify --quiet "refs/tags/${tag}"', workflow)

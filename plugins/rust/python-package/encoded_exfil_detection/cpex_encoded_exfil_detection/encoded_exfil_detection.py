@@ -28,32 +28,18 @@ from urllib.parse import unquote_to_bytes
 from pydantic import BaseModel, Field, field_validator
 
 # First-Party
-try:
-    from mcpgateway.plugins.framework import (
-        Plugin,
-        PluginConfig,
-        PluginContext,
-        PluginViolation,
-        PromptPrehookPayload,
-        PromptPrehookResult,
-        ResourcePostFetchPayload,
-        ResourcePostFetchResult,
-        ToolPostInvokePayload,
-        ToolPostInvokeResult,
-    )
-except ModuleNotFoundError:
-    from mcpgateway_mock.plugins.framework import (  # type: ignore[no-redef]
-        Plugin,
-        PluginConfig,
-        PluginContext,
-        PluginViolation,
-        PromptPrehookPayload,
-        PromptPrehookResult,
-        ResourcePostFetchPayload,
-        ResourcePostFetchResult,
-        ToolPostInvokePayload,
-        ToolPostInvokeResult,
-    )
+from mcpgateway.plugins.framework import (
+    Plugin,
+    PluginConfig,
+    PluginContext,
+    PluginViolation,
+    PromptPrehookPayload,
+    PromptPrehookResult,
+    ResourcePostFetchPayload,
+    ResourcePostFetchResult,
+    ToolPostInvokePayload,
+    ToolPostInvokeResult,
+)
 
 logger = logging.getLogger(__name__)
 

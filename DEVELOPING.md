@@ -40,7 +40,7 @@ make plugins-validate
 make plugin-test PLUGIN=pii_filter
 ```
 
-`make plugins-validate` runs the same convention checks that CI uses before the per-plugin build jobs run.
+`make plugins-validate` runs the same convention checks that the repo contract CI workflow runs.
 It runs the catalog validator plus the shared repo contract test modules:
 `tests/test_plugin_catalog.py` and `tests/test_install_built_wheel.py`.
 

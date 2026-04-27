@@ -122,7 +122,13 @@ jobs:
         working-directory: plugins/rust/python-package/${{ matrix.plugin }}
         run: make sync
 
+      - name: Plugin CI build verification
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: plugins/rust/python-package/${{ matrix.plugin }}
+        run: make ci-build
+
       - name: Plugin CI verification
+        if: matrix.os != 'ubuntu-latest'
         working-directory: plugins/rust/python-package/${{ matrix.plugin }}
         run: make ci
 
@@ -163,22 +169,41 @@ jobs:
           rustup component add llvm-tools-preview
           cargo install cargo-llvm-cov --version 0.8.4 --locked
 
+      - name: Install Python build tooling
+        run: python -m pip install uv==0.9.30 maturin==1.12.6
+
       - name: Generate Rust coverage report
         env:
           CARGO_PACKAGES: ${{ needs.validate-and-detect.outputs.cargo_packages }}
+          PLUGINS: ${{ needs.validate-and-detect.outputs.plugins }}
+          PYO3_PYTHON: python
         run: |
           mkdir -p coverage
           mapfile -t cargo_packages < <(python3 -c 'import json, os; [print(package) for package in json.loads(os.environ["CARGO_PACKAGES"])]')
+          mapfile -t plugins < <(python3 -c 'import json, os; [print(plugin) for plugin in json.loads(os.environ["PLUGINS"])]')
           cargo_args=()
           for package in "${cargo_packages[@]}"; do
             cargo_args+=("-p" "${package}")
           done
-          cargo llvm-cov "${cargo_args[@]}" --cobertura --output-path coverage/cobertura.xml
+          cargo llvm-cov clean --workspace
+          eval "$(cargo llvm-cov show-env --sh)"
+          export CARGO_TARGET_DIR="${CARGO_LLVM_COV_TARGET_DIR}/llvm-cov-target"
+          export CARGO_LLVM_COV_BUILD_DIR="${CARGO_TARGET_DIR}"
+          export LLVM_PROFILE_FILE="${CARGO_TARGET_DIR}/cpex-plugins-%p-%10m.profraw"
+          mkdir -p "${CARGO_TARGET_DIR}"
+          for plugin in "${plugins[@]}"; do
+            (cd "plugins/rust/python-package/${plugin}" && make sync && uv run maturin develop)
+          done
+          cargo test "${cargo_args[@]}"
+          for plugin in "${plugins[@]}"; do
+            (cd "plugins/rust/python-package/${plugin}" && make test-integration)
+          done
+          env -u CARGO_TARGET_DIR -u CARGO_LLVM_COV_BUILD_DIR -u CARGO_LLVM_COV_TARGET_DIR -u LLVM_PROFILE_FILE cargo llvm-cov report "${cargo_args[@]}" --cobertura --output-path coverage/cobertura.xml
 
       - name: Enforce per-plugin coverage floor
         env:
           PLUGINS: ${{ needs.validate-and-detect.outputs.plugins }}
-        run: python3 tools/plugin_catalog.py coverage-check . coverage/cobertura.xml 50.00 "${PLUGINS}"
+        run: python3 tools/plugin_catalog.py coverage-check . coverage/cobertura.xml 90.00 "${PLUGINS}"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238
