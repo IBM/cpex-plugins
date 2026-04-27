@@ -8,6 +8,10 @@ dist/
 build/
 *.whl
 .venv/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
 
 # Rust
 target/
