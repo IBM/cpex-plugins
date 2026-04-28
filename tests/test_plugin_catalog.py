@@ -2140,11 +2140,11 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("uv==0.9.30", workflow)
         self.assertIn("maturin==1.12.6", workflow)
         self.assertIn(
-            "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+            "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
             workflow,
         )
         self.assertIn(
-            "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+            "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405",
             workflow,
         )
         self.assertNotIn("actions/checkout@v4", workflow)
@@ -2165,11 +2165,11 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertNotIn("tests/test_install_built_wheel.py", workflow)
         self.assertNotIn("python3 tools/plugin_catalog.py ci-selection", workflow)
         self.assertIn(
-            "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+            "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
             workflow,
         )
         self.assertIn(
-            "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+            "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405",
             workflow,
         )
 
@@ -2185,11 +2185,11 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("uses: ./.github/workflows/release-rust-python-package.yaml", workflow)
         self.assertIn("publish_enabled: false", workflow)
         self.assertIn(
-            "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+            "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
             workflow,
         )
         self.assertIn(
-            "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+            "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405",
             workflow,
         )
 
@@ -2794,19 +2794,19 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn('"${venv_python}" -m pip install', workflow)
         self.assertIn('"${venv_python}" -m pytest', workflow)
         self.assertIn(
-            "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+            "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
             workflow,
         )
         self.assertIn(
-            "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+            "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405",
             workflow,
         )
         self.assertIn(
-            "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+            "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f",
             workflow,
         )
         self.assertIn(
-            "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
+            "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131",
             workflow,
         )
         self.assertLess(
