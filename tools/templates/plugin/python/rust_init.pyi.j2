@@ -1,0 +1,98 @@
+"""Type stubs for {{ rust_lib_name }} Rust module."""
+
+from typing import Any
+
+class {{ engine_class }}:
+    """Rust-backed engine for {{ plugin_name_title }}."""
+
+    def __init__(self, config: dict[str, Any]) -> None:
+        """Initialize the engine with configuration.
+        
+        Args:
+            config: Configuration dictionary
+        """
+        ...
+
+    {% for hook in hooks -%}
+    {% if hook == "prompt_pre_fetch" -%}
+    def prompt_pre_fetch(self, payload: Any, context: Any) -> Any:
+        """Process prompt before fetch.
+        
+        Args:
+            payload: Prompt payload
+            context: Plugin context
+            
+        Returns:
+            PromptPreFetchResult
+        """
+        ...
+
+    {% elif hook == "prompt_post_fetch" -%}
+    def prompt_post_fetch(self, result: Any, context: Any) -> Any:
+        """Process prompt after fetch.
+        
+        Args:
+            result: Prompt result
+            context: Plugin context
+            
+        Returns:
+            PromptPostFetchResult
+        """
+        ...
+
+    {% elif hook == "tool_pre_invoke" -%}
+    def tool_pre_invoke(self, payload: Any, context: Any) -> Any:
+        """Process tool before invocation.
+        
+        Args:
+            payload: Tool payload
+            context: Plugin context
+            
+        Returns:
+            ToolPreInvokeResult
+        """
+        ...
+
+    {% elif hook == "tool_post_invoke" -%}
+    def tool_post_invoke(self, result: Any, context: Any) -> Any:
+        """Process tool after invocation.
+        
+        Args:
+            result: Tool result
+            context: Plugin context
+            
+        Returns:
+            ToolPostInvokeResult
+        """
+        ...
+
+    {% elif hook == "resource_pre_fetch" -%}
+    def resource_pre_fetch(self, payload: Any, context: Any) -> Any:
+        """Process resource before fetch.
+        
+        Args:
+            payload: Resource payload
+            context: Plugin context
+            
+        Returns:
+            ResourcePreFetchResult
+        """
+        ...
+
+    {% elif hook == "resource_post_fetch" -%}
+    def resource_post_fetch(self, result: Any, context: Any) -> Any:
+        """Process resource after fetch.
+        
+        Args:
+            result: Resource result
+            context: Plugin context
+            
+        Returns:
+            ResourcePostFetchResult
+        """
+        ...
+
+    {% endif -%}
+    {% endfor -%}
+
+__all__ = ["{{ engine_class }}"]

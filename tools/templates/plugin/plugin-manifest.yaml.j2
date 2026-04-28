@@ -1,0 +1,10 @@
+description: "{{ description }}"
+author: "{{ author }}"
+version: "{{ version }}"
+kind: "{{ module_name }}.{{ plugin_name }}.{{ plugin_class }}"
+available_hooks:
+{% for hook in hooks -%}
+  - "{{ hook }}"
+{% endfor -%}
+default_configs:
+  example_option: "default_value"
