@@ -6,8 +6,9 @@ use pyo3::types::{PyDict, PyModule};
 
 /// {{ plugin_name_title }} engine implementation.
 #[pyclass]
+#[allow(dead_code)]
 pub struct {{ engine_class }} {
-    // TODO: Add engine state fields
+    // TODO: Add engine state fields and remove #[allow(dead_code)]
     example_option: String,
 }
 
