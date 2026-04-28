@@ -233,7 +233,7 @@ mod tests {
 
     #[test]
     fn test_engine_creation_with_defaults() {
-        pyo3::prepare_freethreaded_python();
+        Python::initialize();
         Python::attach(|py| {
             let config = PyDict::new(py);
             let engine = {{ engine_class }}::new(&config);
@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn test_engine_creation_with_custom_config() {
-        pyo3::prepare_freethreaded_python();
+        Python::initialize();
         Python::attach(|py| {
             let config = PyDict::new(py);
             config.set_item("example_option", "custom_value").unwrap();

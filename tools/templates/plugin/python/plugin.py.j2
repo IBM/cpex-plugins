@@ -12,26 +12,26 @@ from pydantic import BaseModel, Field
 
 try:
     from mcpgateway.plugins.framework import Plugin, PluginViolation
-    {% if has_prompt_hooks -%}
+    {% if has_prompt_hooks %}
     from mcpgateway.plugins.framework import PromptPrehookResult, PromptPosthookResult
-    {% endif -%}
-    {% if has_tool_hooks -%}
+    {% endif %}
+    {% if has_tool_hooks %}
     from mcpgateway.plugins.framework import ToolPreInvokeResult, ToolPostInvokeResult
-    {% endif -%}
-    {% if has_resource_hooks -%}
+    {% endif %}
+    {% if has_resource_hooks %}
     from mcpgateway.plugins.framework import ResourcePreFetchResult, ResourcePostFetchResult
-    {% endif -%}
-    {% if has_agent_hooks -%}
+    {% endif %}
+    {% if has_agent_hooks %}
     from mcpgateway.plugins.framework import AgentPreInvokeResult, AgentPostInvokeResult
-    {% endif -%}
-    {% if has_http_hooks -%}
+    {% endif %}
+    {% if has_http_hooks %}
     from mcpgateway.plugins.framework import (
         HttpPreRequestResult,
         HttpPostRequestResult,
         HttpAuthResolveUserResult,
         HttpAuthCheckPermissionResult,
     )
-    {% endif -%}
+    {% endif %}
 except ModuleNotFoundError:
     # Fallback stubs for standalone testing
     class Plugin:  # type: ignore[no-redef]
@@ -55,7 +55,7 @@ except ModuleNotFoundError:
             self.http_status_code = http_status_code
             self.http_headers = http_headers
 
-    {% if has_prompt_hooks -%}
+    {% if has_prompt_hooks %}
     class PromptPrehookResult:  # type: ignore[no-redef]
         def __init__(
             self,
@@ -81,9 +81,9 @@ except ModuleNotFoundError:
             self.violation = violation
             self.modified_result = modified_result
             self.metadata = metadata
-    {% endif -%}
 
-    {% if has_tool_hooks -%}
+    {% endif %}
+    {% if has_tool_hooks %}
     class ToolPreInvokeResult:  # type: ignore[no-redef]
         def __init__(
             self,
@@ -109,9 +109,9 @@ except ModuleNotFoundError:
             self.violation = violation
             self.modified_result = modified_result
             self.metadata = metadata
-    {% endif -%}
 
-    {% if has_resource_hooks -%}
+    {% endif %}
+    {% if has_resource_hooks %}
     class ResourcePreFetchResult:  # type: ignore[no-redef]
         def __init__(
             self,
@@ -139,9 +139,9 @@ except ModuleNotFoundError:
             self.violation = violation
             self.modified_result = modified_result
             self.metadata = metadata
-    {% endif -%}
 
-    {% if has_agent_hooks -%}
+    {% endif %}
+    {% if has_agent_hooks %}
     class AgentPreInvokeResult:  # type: ignore[no-redef]
         def __init__(
             self,
@@ -167,9 +167,9 @@ except ModuleNotFoundError:
             self.violation = violation
             self.modified_payload = modified_payload
             self.metadata = metadata
-    {% endif -%}
 
-    {% if has_http_hooks -%}
+    {% endif %}
+    {% if has_http_hooks %}
     class HttpPreRequestResult:  # type: ignore[no-redef]
         def __init__(
             self,
@@ -221,7 +221,8 @@ except ModuleNotFoundError:
             self.violation = violation
             self.modified_payload = modified_payload
             self.metadata = metadata
-    {% endif -%}
+
+    {% endif %}
 
 try:
     from {{ module_name }}.{{ rust_lib_name }} import {{ engine_class }}
@@ -252,9 +253,9 @@ class {{ plugin_class }}(Plugin):
             )
         self._cfg = {{ config_class }}(**(config.config or {}))
         self._core = {{ engine_class }}(self._cfg.model_dump())
+    {% for hook in hooks %}
 
-    {% for hook in hooks -%}
-    {% if hook == "prompt_pre_fetch" -%}
+    {% if hook == "prompt_pre_fetch" %}
     async def prompt_pre_fetch(self, payload, context):
         """Hook called before prompt is fetched."""
         try:
@@ -273,8 +274,7 @@ class {{ plugin_class }}(Plugin):
                     details={"error": str(exc)},
                 ),
             )
-
-    {% elif hook == "prompt_post_fetch" -%}
+    {% elif hook == "prompt_post_fetch" %}
     async def prompt_post_fetch(self, result, context):
         """Hook called after prompt is fetched."""
         try:
@@ -288,8 +288,7 @@ class {{ plugin_class }}(Plugin):
                 continue_processing=True,
                 metadata={"error": str(exc)},
             )
-
-    {% elif hook == "tool_pre_invoke" -%}
+    {% elif hook == "tool_pre_invoke" %}
     async def tool_pre_invoke(self, payload, context):
         """Hook called before tool is invoked."""
         try:
@@ -308,8 +307,7 @@ class {{ plugin_class }}(Plugin):
                     details={"error": str(exc)},
                 ),
             )
-
-    {% elif hook == "tool_post_invoke" -%}
+    {% elif hook == "tool_post_invoke" %}
     async def tool_post_invoke(self, result, context):
         """Hook called after tool is invoked."""
         try:
@@ -323,8 +321,7 @@ class {{ plugin_class }}(Plugin):
                 continue_processing=True,
                 metadata={"error": str(exc)},
             )
-
-    {% elif hook == "resource_pre_fetch" -%}
+    {% elif hook == "resource_pre_fetch" %}
     async def resource_pre_fetch(self, payload, context):
         """Hook called before resource is fetched."""
         try:
@@ -343,8 +340,7 @@ class {{ plugin_class }}(Plugin):
                     details={"error": str(exc)},
                 ),
             )
-
-    {% elif hook == "resource_post_fetch" -%}
+    {% elif hook == "resource_post_fetch" %}
     async def resource_post_fetch(self, result, context):
         """Hook called after resource is fetched."""
         try:
@@ -358,8 +354,7 @@ class {{ plugin_class }}(Plugin):
                 continue_processing=True,
                 metadata={"error": str(exc)},
             )
-
-    {% elif hook == "agent_pre_invoke" -%}
+    {% elif hook == "agent_pre_invoke" %}
     async def agent_pre_invoke(self, payload, context):
         """Hook called before agent is invoked."""
         try:
@@ -378,8 +373,7 @@ class {{ plugin_class }}(Plugin):
                     details={"error": str(exc)},
                 ),
             )
-
-    {% elif hook == "agent_post_invoke" -%}
+    {% elif hook == "agent_post_invoke" %}
     async def agent_post_invoke(self, result, context):
         """Hook called after agent responds."""
         try:
@@ -393,8 +387,7 @@ class {{ plugin_class }}(Plugin):
                 continue_processing=True,
                 metadata={"error": str(exc)},
             )
-
-    {% elif hook == "http_pre_request" -%}
+    {% elif hook == "http_pre_request" %}
     async def http_pre_request(self, payload, context):
         """Hook called before HTTP request is processed."""
         try:
@@ -413,8 +406,7 @@ class {{ plugin_class }}(Plugin):
                     details={"error": str(exc)},
                 ),
             )
-
-    {% elif hook == "http_post_request" -%}
+    {% elif hook == "http_post_request" %}
     async def http_post_request(self, result, context):
         """Hook called after HTTP request is processed."""
         try:
@@ -428,8 +420,7 @@ class {{ plugin_class }}(Plugin):
                 continue_processing=True,
                 metadata={"error": str(exc)},
             )
-
-    {% elif hook == "http_auth_resolve_user" -%}
+    {% elif hook == "http_auth_resolve_user" %}
     async def http_auth_resolve_user(self, payload, context):
         """Hook called to resolve authenticated user from request."""
         try:
@@ -448,8 +439,7 @@ class {{ plugin_class }}(Plugin):
                     details={"error": str(exc)},
                 ),
             )
-
-    {% elif hook == "http_auth_check_permission" -%}
+    {% elif hook == "http_auth_check_permission" %}
     async def http_auth_check_permission(self, payload, context):
         """Hook called to check whether a user has the required permission."""
         try:
@@ -468,9 +458,8 @@ class {{ plugin_class }}(Plugin):
                     details={"error": str(exc)},
                 ),
             )
-
-    {% endif -%}
-    {% endfor -%}
+    {% endif %}
+    {% endfor %}
 
 
 __all__ = [
