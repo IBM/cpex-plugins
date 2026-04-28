@@ -477,12 +477,22 @@ Examples:
                 print(f"{RED}Error: --name is required in non-interactive mode{NC}", file=sys.stderr)
                 return 1
 
+            hooks = [h.strip() for h in args.hooks.split(",")] if args.hooks else ["tool_pre_invoke"]
+            invalid_hooks = [h for h in hooks if h not in VALID_HOOKS]
+            if invalid_hooks:
+                print(
+                    f"{RED}Error: Invalid hooks: {', '.join(invalid_hooks)}{NC}\n"
+                    f"Valid hooks: {', '.join(VALID_HOOKS)}{NC}",
+                    file=sys.stderr,
+                )
+                return 1
+
             metadata = {
                 "plugin_name": args.name,
                 "description": args.description or f"A CPEX plugin for {args.name.replace('_', ' ')}",
                 "author": args.author or "ContextForge Contributors",
                 "version": args.version or "0.1.0",
-                "hooks": args.hooks.split(",") if args.hooks else ["tool_pre_invoke"],
+                "hooks": hooks,
                 "use_framework_bridge": not args.no_framework_bridge,
                 "include_benchmarks": args.benchmarks,
             }

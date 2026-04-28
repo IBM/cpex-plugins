@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 try:
     from mcpgateway.plugins.framework import Plugin, PluginViolation
     {% if has_prompt_hooks -%}
-    from mcpgateway.plugins.framework import PromptPreFetchResult, PromptPostFetchResult
+    from mcpgateway.plugins.framework import PromptPrehookResult, PromptPosthookResult
     {% endif -%}
     {% if has_tool_hooks -%}
     from mcpgateway.plugins.framework import ToolPreInvokeResult, ToolPostInvokeResult
@@ -56,7 +56,7 @@ except ModuleNotFoundError:
             self.http_headers = http_headers
 
     {% if has_prompt_hooks -%}
-    class PromptPreFetchResult:  # type: ignore[no-redef]
+    class PromptPrehookResult:  # type: ignore[no-redef]
         def __init__(
             self,
             continue_processing: bool = True,
@@ -69,7 +69,7 @@ except ModuleNotFoundError:
             self.modified_payload = modified_payload
             self.metadata = metadata
 
-    class PromptPostFetchResult:  # type: ignore[no-redef]
+    class PromptPosthookResult:  # type: ignore[no-redef]
         def __init__(
             self,
             continue_processing: bool = True,
@@ -264,7 +264,7 @@ class {{ plugin_class }}(Plugin):
             return result
         except Exception as exc:
             logger.warning("{{ plugin_name_title }} prompt_pre_fetch failed: %s", exc)
-            return PromptPreFetchResult(
+            return PromptPrehookResult(
                 continue_processing=False,
                 violation=PluginViolation(
                     reason="Plugin execution failure",
@@ -284,7 +284,7 @@ class {{ plugin_class }}(Plugin):
             return hook_result
         except Exception as exc:
             logger.warning("{{ plugin_name_title }} prompt_post_fetch failed: %s", exc)
-            return PromptPostFetchResult(
+            return PromptPosthookResult(
                 continue_processing=True,
                 metadata={"error": str(exc)},
             )

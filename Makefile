@@ -15,6 +15,7 @@ plugin-test:
 	@cd plugins/rust/python-package/$(PLUGIN) && make sync && make ci
 
 plugin-scaffold:
+	@python3 -m pip install --quiet jinja2 2>/dev/null || pip install --quiet jinja2 2>/dev/null || true
 	@python3 tools/scaffold_plugin.py
 
 plugin-scaffold-help:

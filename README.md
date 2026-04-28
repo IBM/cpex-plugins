@@ -54,7 +54,7 @@ python3 tools/scaffold_plugin.py --non-interactive \
   --name my_plugin \
   --description "My plugin description" \
   --author "Your Name" \
-  --hooks prompt_pre_fetch tool_pre_invoke
+  --hooks prompt_pre_fetch,tool_pre_invoke
 ```
 
 ## Helper Commands

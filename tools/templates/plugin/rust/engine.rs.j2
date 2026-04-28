@@ -36,11 +36,11 @@ impl {{ engine_class }} {
         py: Python<'_>,
         _payload: &Bound<'_, PyAny>,
         _context: &Bound<'_, PyAny>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         debug!("{{ plugin_name_title }}: prompt_pre_fetch called");
         // TODO: Implement prompt pre-fetch logic
         let module = PyModule::import(py, "mcpgateway.plugins.framework")?;
-        let result_class = module.getattr("PromptPreFetchResult")?;
+        let result_class = module.getattr("PromptPrehookResult")?;
         let kwargs = PyDict::new(py);
         kwargs.set_item("continue_processing", true)?;
         Ok(result_class.call((), Some(&kwargs))?.unbind())
@@ -53,11 +53,11 @@ impl {{ engine_class }} {
         py: Python<'_>,
         _result: &Bound<'_, PyAny>,
         _context: &Bound<'_, PyAny>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         debug!("{{ plugin_name_title }}: prompt_post_fetch called");
         // TODO: Implement prompt post-fetch logic
         let module = PyModule::import(py, "mcpgateway.plugins.framework")?;
-        let result_class = module.getattr("PromptPostFetchResult")?;
+        let result_class = module.getattr("PromptPosthookResult")?;
         let kwargs = PyDict::new(py);
         kwargs.set_item("continue_processing", true)?;
         Ok(result_class.call((), Some(&kwargs))?.unbind())
@@ -70,7 +70,7 @@ impl {{ engine_class }} {
         py: Python<'_>,
         _payload: &Bound<'_, PyAny>,
         _context: &Bound<'_, PyAny>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         debug!("{{ plugin_name_title }}: tool_pre_invoke called");
         // TODO: Implement tool pre-invoke logic
         let module = PyModule::import(py, "mcpgateway.plugins.framework")?;
@@ -87,7 +87,7 @@ impl {{ engine_class }} {
         py: Python<'_>,
         _result: &Bound<'_, PyAny>,
         _context: &Bound<'_, PyAny>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         debug!("{{ plugin_name_title }}: tool_post_invoke called");
         // TODO: Implement tool post-invoke logic
         let module = PyModule::import(py, "mcpgateway.plugins.framework")?;
@@ -104,7 +104,7 @@ impl {{ engine_class }} {
         py: Python<'_>,
         _payload: &Bound<'_, PyAny>,
         _context: &Bound<'_, PyAny>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         debug!("{{ plugin_name_title }}: resource_pre_fetch called");
         // TODO: Implement resource pre-fetch logic
         let module = PyModule::import(py, "mcpgateway.plugins.framework")?;
@@ -121,7 +121,7 @@ impl {{ engine_class }} {
         py: Python<'_>,
         _result: &Bound<'_, PyAny>,
         _context: &Bound<'_, PyAny>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         debug!("{{ plugin_name_title }}: resource_post_fetch called");
         // TODO: Implement resource post-fetch logic
         let module = PyModule::import(py, "mcpgateway.plugins.framework")?;
@@ -138,7 +138,7 @@ impl {{ engine_class }} {
         py: Python<'_>,
         _payload: &Bound<'_, PyAny>,
         _context: &Bound<'_, PyAny>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         debug!("{{ plugin_name_title }}: agent_pre_invoke called");
         // TODO: Implement agent pre-invoke logic
         let module = PyModule::import(py, "mcpgateway.plugins.framework")?;
@@ -155,7 +155,7 @@ impl {{ engine_class }} {
         py: Python<'_>,
         _result: &Bound<'_, PyAny>,
         _context: &Bound<'_, PyAny>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         debug!("{{ plugin_name_title }}: agent_post_invoke called");
         // TODO: Implement agent post-invoke logic
         let module = PyModule::import(py, "mcpgateway.plugins.framework")?;
@@ -172,7 +172,7 @@ impl {{ engine_class }} {
         py: Python<'_>,
         _payload: &Bound<'_, PyAny>,
         _context: &Bound<'_, PyAny>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         debug!("{{ plugin_name_title }}: http_pre_request called");
         // TODO: Implement HTTP pre-request logic
         let module = PyModule::import(py, "mcpgateway.plugins.framework")?;
@@ -189,7 +189,7 @@ impl {{ engine_class }} {
         py: Python<'_>,
         _result: &Bound<'_, PyAny>,
         _context: &Bound<'_, PyAny>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         debug!("{{ plugin_name_title }}: http_post_request called");
         // TODO: Implement HTTP post-request logic
         let module = PyModule::import(py, "mcpgateway.plugins.framework")?;
@@ -206,7 +206,7 @@ impl {{ engine_class }} {
         py: Python<'_>,
         _payload: &Bound<'_, PyAny>,
         _context: &Bound<'_, PyAny>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         debug!("{{ plugin_name_title }}: http_auth_resolve_user called");
         // TODO: Implement user resolution logic
         let module = PyModule::import(py, "mcpgateway.plugins.framework")?;
@@ -223,7 +223,7 @@ impl {{ engine_class }} {
         py: Python<'_>,
         _payload: &Bound<'_, PyAny>,
         _context: &Bound<'_, PyAny>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         debug!("{{ plugin_name_title }}: http_auth_check_permission called");
         // TODO: Implement permission-check logic
         let module = PyModule::import(py, "mcpgateway.plugins.framework")?;
@@ -234,7 +234,8 @@ impl {{ engine_class }} {
     }
 
     {% endif -%}
-    {% endfor -%}
+{%- endfor %}
+
 }
 
 #[cfg(test)]
