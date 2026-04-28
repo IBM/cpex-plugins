@@ -11,21 +11,21 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 try:
-    from mcpgateway.plugins.framework import Plugin, PluginViolation
+    from cpex.framework import Plugin, PluginViolation
     {% if has_prompt_hooks %}
-    from mcpgateway.plugins.framework import PromptPrehookResult, PromptPosthookResult
+    from cpex.framework import PromptPrehookResult, PromptPosthookResult
     {% endif %}
     {% if has_tool_hooks %}
-    from mcpgateway.plugins.framework import ToolPreInvokeResult, ToolPostInvokeResult
+    from cpex.framework import ToolPreInvokeResult, ToolPostInvokeResult
     {% endif %}
     {% if has_resource_hooks %}
-    from mcpgateway.plugins.framework import ResourcePreFetchResult, ResourcePostFetchResult
+    from cpex.framework import ResourcePreFetchResult, ResourcePostFetchResult
     {% endif %}
     {% if has_agent_hooks %}
-    from mcpgateway.plugins.framework import AgentPreInvokeResult, AgentPostInvokeResult
+    from cpex.framework import AgentPreInvokeResult, AgentPostInvokeResult
     {% endif %}
     {% if has_http_hooks %}
-    from mcpgateway.plugins.framework import (
+    from cpex.framework import (
         HttpPreRequestResult,
         HttpPostRequestResult,
         HttpAuthResolveUserResult,

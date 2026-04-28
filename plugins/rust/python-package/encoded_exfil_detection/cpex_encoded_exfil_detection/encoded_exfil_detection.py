@@ -22,7 +22,7 @@ from typing import Any, Dict, Iterable
 from pydantic import BaseModel, Field, field_validator
 
 # First-Party
-from mcpgateway.plugins.framework import (
+from cpex.framework import (
     Plugin,
     PluginConfig,
     PluginContext,

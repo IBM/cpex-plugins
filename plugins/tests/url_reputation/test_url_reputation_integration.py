@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Location: ./tests/unit/mcpgateway/plugins/plugins/url_reputation/test_url_reputation.py
+"""Location: ./tests/unit/cpex/framework/plugins/url_reputation/test_url_reputation.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
 Authors: Mihai Criveti
@@ -10,7 +10,7 @@ Tests for URLReputationPlugin.
 import pytest
 from unittest.mock import MagicMock, patch
 
-from mcpgateway.plugins.framework import (
+from cpex.framework import (
     PluginConfig,
     ResourceHookType,
     ResourcePreFetchPayload,

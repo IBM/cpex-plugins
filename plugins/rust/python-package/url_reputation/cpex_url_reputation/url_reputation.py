@@ -9,7 +9,7 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator
 
 try:
-    from mcpgateway.plugins.framework import Plugin, PluginViolation, ResourcePreFetchResult
+    from cpex.framework import Plugin, PluginViolation, ResourcePreFetchResult
 except ModuleNotFoundError:
     class Plugin:  # type: ignore[no-redef]
         def __init__(self, config) -> None:

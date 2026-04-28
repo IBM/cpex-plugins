@@ -1,9 +1,11 @@
 from dataclasses import dataclass
 import logging
+from pathlib import Path
 
 import pytest
 
-from mcpgateway.plugins.framework import (
+from real_cpex_imports import assert_real_cpex_imports
+from cpex.framework import (
     PluginConfig,
     PluginContext,
     PromptPosthookPayload,
@@ -11,9 +13,25 @@ from mcpgateway.plugins.framework import (
     ToolPostInvokePayload,
     ToolPreInvokePayload,
 )
-from mcpgateway.plugins.framework.models import GlobalContext
+from cpex.framework.models import GlobalContext
 
 from cpex_pii_filter.pii_filter import PIIDetectorRust, PIIFilterPlugin
+
+
+def test_imports_with_real_cpex_package() -> None:
+    plugin_root = (
+        Path(__file__).resolve().parents[3]
+        / "plugins"
+        / "rust"
+        / "python-package"
+        / "pii_filter"
+    )
+    assert_real_cpex_imports(
+        plugin_root,
+        [
+            "from cpex_pii_filter.pii_filter import PIIFilterPlugin",
+        ],
+    )
 
 
 @dataclass

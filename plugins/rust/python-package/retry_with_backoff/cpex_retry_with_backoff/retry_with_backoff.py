@@ -13,8 +13,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-from mcpgateway.config import get_settings
-from mcpgateway.plugins.framework import (
+from cpex.framework.settings import get_settings
+from cpex.framework import (
     Plugin,
     PluginConfig,
     PluginContext,
@@ -130,7 +130,7 @@ class RetryWithBackoffPlugin(Plugin):
         super().__init__(config)
         raw_cfg = RetryConfig(**(config.config or {}))
 
-        ceiling = get_settings().max_tool_retries
+        ceiling = getattr(get_settings(), "max_tool_retries", raw_cfg.max_retries)
         if raw_cfg.max_retries > ceiling:
             log.warning(
                 "retry_with_backoff: max_retries=%d exceeds gateway ceiling=%d, clamping",
