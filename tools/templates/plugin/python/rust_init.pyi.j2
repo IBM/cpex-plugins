@@ -82,13 +82,91 @@ class {{ engine_class }}:
     {% elif hook == "resource_post_fetch" -%}
     def resource_post_fetch(self, result: Any, context: Any) -> Any:
         """Process resource after fetch.
-        
+
         Args:
             result: Resource result
             context: Plugin context
-            
+
         Returns:
             ResourcePostFetchResult
+        """
+        ...
+
+    {% elif hook == "agent_pre_invoke" -%}
+    def agent_pre_invoke(self, payload: Any, context: Any) -> Any:
+        """Process agent before invocation.
+
+        Args:
+            payload: Agent payload
+            context: Plugin context
+
+        Returns:
+            AgentPreInvokeResult
+        """
+        ...
+
+    {% elif hook == "agent_post_invoke" -%}
+    def agent_post_invoke(self, result: Any, context: Any) -> Any:
+        """Process agent after response.
+
+        Args:
+            result: Agent result
+            context: Plugin context
+
+        Returns:
+            AgentPostInvokeResult
+        """
+        ...
+
+    {% elif hook == "http_pre_request" -%}
+    def http_pre_request(self, payload: Any, context: Any) -> Any:
+        """Process HTTP request before routing.
+
+        Args:
+            payload: HTTP request payload
+            context: Plugin context
+
+        Returns:
+            HttpPreRequestResult
+        """
+        ...
+
+    {% elif hook == "http_post_request" -%}
+    def http_post_request(self, result: Any, context: Any) -> Any:
+        """Process HTTP response after routing.
+
+        Args:
+            result: HTTP response payload
+            context: Plugin context
+
+        Returns:
+            HttpPostRequestResult
+        """
+        ...
+
+    {% elif hook == "http_auth_resolve_user" -%}
+    def http_auth_resolve_user(self, payload: Any, context: Any) -> Any:
+        """Resolve authenticated user from request credentials.
+
+        Args:
+            payload: HTTP auth payload
+            context: Plugin context
+
+        Returns:
+            HttpAuthResolveUserResult
+        """
+        ...
+
+    {% elif hook == "http_auth_check_permission" -%}
+    def http_auth_check_permission(self, payload: Any, context: Any) -> Any:
+        """Check whether a user has the required permission.
+
+        Args:
+            payload: Permission check payload
+            context: Plugin context
+
+        Returns:
+            HttpAuthCheckPermissionResult
         """
         ...
 

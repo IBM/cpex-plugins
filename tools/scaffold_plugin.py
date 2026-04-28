@@ -24,12 +24,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-try:
-    from jinja2 import Environment, FileSystemLoader, select_autoescape
-except ImportError:
-    print("Error: jinja2 is required. Install with: pip install jinja2", file=sys.stderr)
-    sys.exit(1)
-
 # Constants
 PLUGIN_ROOT = Path("plugins/rust/python-package")
 TEMPLATE_DIR = Path("tools/templates/plugin")
@@ -69,6 +63,12 @@ class PluginScaffolder:
     """Handles plugin scaffolding operations."""
 
     def __init__(self, root: Path):
+        try:
+            from jinja2 import Environment, FileSystemLoader, select_autoescape
+        except ImportError:
+            print("Error: jinja2 is required. Install with: pip install jinja2", file=sys.stderr)
+            sys.exit(1)
+
         self.root = root
         self.plugin_root = root / PLUGIN_ROOT
         self.template_dir = root / TEMPLATE_DIR
@@ -216,6 +216,8 @@ class PluginScaffolder:
             "has_prompt_hooks": any("prompt" in h for h in metadata["hooks"]),
             "has_tool_hooks": any("tool" in h for h in metadata["hooks"]),
             "has_resource_hooks": any("resource" in h for h in metadata["hooks"]),
+            "has_agent_hooks": any("agent" in h for h in metadata["hooks"]),
+            "has_http_hooks": any("http" in h for h in metadata["hooks"]),
         }
 
         return derived
@@ -251,10 +253,6 @@ class PluginScaffolder:
             output_path = plugin_dir / output_name
             output_path.write_text(content)
             print(f"  {GREEN}✓{NC} {output_name}")
-
-        # Create empty uv.lock
-        (plugin_dir / "uv.lock").touch()
-        print(f"  {GREEN}✓{NC} uv.lock")
 
         # Python package
         module_name = metadata["module_name"]
