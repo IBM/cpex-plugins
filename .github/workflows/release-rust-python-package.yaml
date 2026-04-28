@@ -199,7 +199,7 @@ jobs:
         run: uv run maturin build --release --out dist
 
       - name: Upload wheel artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: wheel-${{ matrix.platform }}
           path: ${{ needs.resolve.outputs.plugin_path }}/dist/*.whl
@@ -251,7 +251,7 @@ jobs:
         run: uv run maturin sdist --out dist
 
       - name: Upload sdist artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: sdist
           path: ${{ needs.resolve.outputs.plugin_path }}/dist/*.tar.gz
@@ -289,7 +289,7 @@ jobs:
       id-token: write
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
         with:
           path: dist
           merge-multiple: true
