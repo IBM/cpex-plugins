@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 try:
-    from mcpgateway.plugins.framework import Plugin
+    from cpex.framework import Plugin
 except ModuleNotFoundError:
     class Plugin:  # type: ignore[no-redef]
         def __init__(self, config) -> None:

@@ -1,11 +1,13 @@
 import subprocess
 import sys
+from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 from pydantic import BaseModel, RootModel, model_serializer
 
-from mcpgateway.common.models import ResourceContent
-from mcpgateway.plugins.framework import (
+from real_cpex_imports import assert_real_cpex_imports
+from cpex.framework import (
     PluginConfig,
     PluginContext,
     PluginManager,
@@ -17,10 +19,18 @@ from mcpgateway.plugins.framework import (
     ToolPostInvokePayload,
     ToolHookType,
 )
-from mcpgateway.plugins.framework.models import GlobalContext
+from cpex.framework.models import GlobalContext
 
 from cpex_secrets_detection.secrets_detection import SecretsDetectionPlugin
 from cpex_secrets_detection.secrets_detection_rust import py_scan_container
+
+
+@dataclass
+class ResourceContent:
+    type: str
+    id: str
+    uri: str
+    text: str
 
 
 def make_context() -> PluginContext:
@@ -49,6 +59,22 @@ def _make_context() -> PluginContext:
 
 def _make_config(**overrides) -> PluginConfig:
     return make_config(**overrides)
+
+
+def test_imports_with_real_cpex_package() -> None:
+    plugin_root = (
+        Path(__file__).resolve().parents[3]
+        / "plugins"
+        / "rust"
+        / "python-package"
+        / "secrets_detection"
+    )
+    assert_real_cpex_imports(
+        plugin_root,
+        [
+            "from cpex_secrets_detection.secrets_detection import SecretsDetectionPlugin",
+        ],
+    )
 
 
 @pytest.mark.asyncio

@@ -11,6 +11,7 @@ license = { text = "Apache-2.0" }
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "cpex>=0.1.0.dev13",
     "pydantic>=2,<3",
 ]
 classifiers = [

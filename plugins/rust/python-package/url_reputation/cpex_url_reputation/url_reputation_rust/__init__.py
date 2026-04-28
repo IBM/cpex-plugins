@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 try:
-    from mcpgateway.plugins.framework import PluginViolation, ResourcePreFetchResult
+    from cpex.framework import PluginViolation, ResourcePreFetchResult
 except ModuleNotFoundError:
     class PluginViolation:  # type: ignore[no-redef]
         def __init__(

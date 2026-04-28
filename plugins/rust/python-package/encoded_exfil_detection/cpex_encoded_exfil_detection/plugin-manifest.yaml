@@ -1,6 +1,6 @@
 description: "Detect suspicious encoded payload exfiltration patterns in prompts, tool outputs, and resources"
 author: "ContextForge Contributors"
-version: "0.2.0"
+version: "0.2.1"
 kind: "cpex_encoded_exfil_detection.encoded_exfil_detection.EncodedExfilDetectorPlugin"
 available_hooks:
   - "prompt_pre_fetch"

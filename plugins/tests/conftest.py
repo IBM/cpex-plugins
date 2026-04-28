@@ -38,14 +38,11 @@ if os.environ.get("CPEX_TEST_PLUGIN_HOOKS") != "1":
         "use the plugin Makefile test targets."
     )
 
-mcpgateway = types.ModuleType("mcpgateway")
-common = types.ModuleType("mcpgateway.common")
-plugins = types.ModuleType("mcpgateway.plugins")
+cpex = types.ModuleType("cpex")
+framework = types.ModuleType("cpex.framework")
 
-sys.modules["mcpgateway"] = mcpgateway
-sys.modules["mcpgateway.common"] = common
-sys.modules["mcpgateway.common.models"] = plugin_hooks
-sys.modules["mcpgateway.config"] = plugin_hooks
-sys.modules["mcpgateway.plugins"] = plugins
-sys.modules["mcpgateway.plugins.framework"] = plugin_hooks
-sys.modules["mcpgateway.plugins.framework.models"] = plugin_hooks
+framework.__dict__.update(plugin_hooks.__dict__)
+sys.modules["cpex"] = cpex
+sys.modules["cpex.framework"] = framework
+sys.modules["cpex.framework.models"] = plugin_hooks
+sys.modules["cpex.framework.settings"] = plugin_hooks

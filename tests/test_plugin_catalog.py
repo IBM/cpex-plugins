@@ -1,7 +1,9 @@
 import json
 import os
 import ast
+import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 import tomllib
@@ -268,6 +270,7 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertEqual(workspace_deps["regex"], "1.12")
         self.assertEqual(workspace_deps["serde_json"], "1.0")
         self.assertEqual(workspace_deps["thiserror"], "2.0")
+
         self.assertEqual(
             workspace_deps["tokio"],
             {"version": "1", "features": ["full"]},
@@ -375,6 +378,93 @@ class PluginCatalogTests(unittest.TestCase):
                         expected_value,
                         f"{slug} should source {dependency_name} from workspace {section_name}",
                     )
+
+    def test_plugin_scaffold_templates_use_standalone_cpex_imports(self) -> None:
+        template_root = REPO_ROOT / "tools" / "templates" / "plugin"
+        rendered_source = "\n".join(
+            path.read_text()
+            for path in sorted(template_root.rglob("*"))
+            if path.is_file()
+        )
+
+        self.assertNotIn("mcpgateway", rendered_source)
+        self.assertIn("cpex.framework", rendered_source)
+        self.assertIn('"cpex>=0.1.0.dev13"', rendered_source)
+
+    def test_plugin_scaffold_generator_renders_standalone_cpex_imports(self) -> None:
+        try:
+            import jinja2  # noqa: F401
+        except ImportError:
+            self.skipTest("jinja2 is required to render scaffold templates")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "plugins" / "rust" / "python-package").mkdir(parents=True)
+            (root / "tools").mkdir()
+            shutil.copytree(REPO_ROOT / "tools" / "templates", root / "tools" / "templates")
+            (root / "Cargo.toml").write_text(
+                textwrap.dedent(
+                    """
+                    [workspace]
+                    members = []
+                    resolver = "2"
+
+                    [workspace.package]
+                    edition = "2021"
+                    authors = ["Test"]
+                    license = "Apache-2.0"
+                    repository = "https://example.invalid"
+
+                    [workspace.dependencies]
+                    cpex_framework_bridge = { path = "crates/framework_bridge" }
+                    criterion = "0.8"
+                    log = "0.4"
+                    pyo3 = { version = "0.28.2", features = ["abi3-py311"] }
+                    pyo3-log = "0.13"
+                    pyo3-stub-gen = "0.22.1"
+                    regex = "1"
+                    """
+                ).lstrip()
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPO_ROOT / "tools" / "scaffold_plugin.py"),
+                    "--non-interactive",
+                    "--name",
+                    "ci_scaffold_all_hooks",
+                    "--description",
+                    "CI scaffold all hooks",
+                    "--author",
+                    "CI",
+                    "--hooks",
+                    "prompt_pre_fetch,prompt_post_fetch,tool_pre_invoke,tool_post_invoke,resource_pre_fetch,resource_post_fetch,agent_pre_invoke,agent_post_invoke,http_pre_request,http_post_request,http_auth_resolve_user,http_auth_check_permission",
+                ],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            plugin_dir = root / "plugins" / "rust" / "python-package" / "ci_scaffold_all_hooks"
+            generated_source = "\n".join(path.read_text() for path in plugin_dir.rglob("*") if path.is_file())
+            self.assertNotIn("mcpgateway", generated_source)
+            self.assertIn("cpex.framework", generated_source)
+            self.assertIn('"cpex>=0.1.0.dev13"', generated_source)
+
+            compile_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "py_compile",
+                    str(plugin_dir / "cpex_ci_scaffold_all_hooks" / "ci_scaffold_all_hooks.py"),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(compile_result.returncode, 0, compile_result.stderr)
 
     def test_repo_lists_all_managed_plugins(self) -> None:
         result = run_catalog("list", str(REPO_ROOT))
@@ -1450,7 +1540,7 @@ class PluginCatalogTests(unittest.TestCase):
             self.assertEqual(payload["plugins"], ["pii_filter", "rate_limiter"])
 
     def test_release_info_accepts_canonical_tag(self) -> None:
-        result = run_catalog("release-info", str(REPO_ROOT), "rate-limiter-v0.0.4")
+        result = run_catalog("release-info", str(REPO_ROOT), "rate-limiter-v0.0.5")
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["slug"], "rate_limiter")
@@ -1471,7 +1561,7 @@ class PluginCatalogTests(unittest.TestCase):
         )
 
     def test_release_info_gives_pii_filter_the_same_target_matrix(self) -> None:
-        result = run_catalog("release-info", str(REPO_ROOT), "pii-filter-v0.2.1")
+        result = run_catalog("release-info", str(REPO_ROOT), "pii-filter-v0.2.2")
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["slug"], "pii_filter")
@@ -1488,12 +1578,12 @@ class PluginCatalogTests(unittest.TestCase):
         )
 
     def test_release_info_rejects_noncanonical_tag(self) -> None:
-        result = run_catalog("release-info", str(REPO_ROOT), "rate_limiter-v0.0.4")
+        result = run_catalog("release-info", str(REPO_ROOT), "rate_limiter-v0.0.5")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("canonical", result.stderr.lower())
 
     def test_release_info_field_supports_kind(self) -> None:
-        result = run_catalog("release-info-field", str(REPO_ROOT), "pii-filter-v0.2.1", "kind")
+        result = run_catalog("release-info-field", str(REPO_ROOT), "pii-filter-v0.2.2", "kind")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "cpex_pii_filter.pii_filter.PIIFilterPlugin")
 
@@ -2127,7 +2217,7 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("working-directory: plugins/rust/python-package/${{ matrix.plugin }}", workflow)
         self.assertIn("release-validation:", workflow)
         self.assertIn("uses: ./.github/workflows/release-rust-python-package.yaml", workflow)
-        self.assertIn("tag: retry-with-backoff-v0.2.0", workflow)
+        self.assertIn("tag: retry-with-backoff-v0.2.1", workflow)
         self.assertIn("repository: testpypi", workflow)
         self.assertIn("publish_enabled: false", workflow)
         self.assertNotIn("tools/plugin_catalog.py ci-selection-field", workflow)
@@ -2755,8 +2845,9 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("matrix:\n        include: ${{ fromJson(needs.resolve.outputs.wheel_matrix) }}", workflow)
         self.assertIn("runs-on: ${{ matrix.runner }}", workflow)
         self.assertIn("name: wheel-${{ matrix.platform }}", workflow)
+        self.assertIn("allow_non_main_pypi", workflow)
         self.assertIn(
-            "if: ${{ needs.resolve.outputs.publish_enabled == 'true' && (needs.resolve.outputs.publish_env != 'pypi' || needs.resolve.outputs.tag_on_main == 'true') }}",
+            "if: ${{ needs.resolve.outputs.publish_enabled == 'true' && (needs.resolve.outputs.publish_env != 'pypi' || needs.resolve.outputs.tag_on_main == 'true' || needs.resolve.outputs.allow_non_main_pypi == 'true') }}",
             workflow,
         )
         self.assertNotIn("matrix.", preflight_section)

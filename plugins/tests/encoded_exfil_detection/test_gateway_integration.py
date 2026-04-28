@@ -7,8 +7,8 @@ import base64
 # Third-Party
 import pytest
 
-# First-Party (mcpgateway framework surface, satisfied by plugin hook contracts)
-from mcpgateway.plugins.framework import (
+# First-Party (cpex framework surface, satisfied by plugin hook contracts)
+from cpex.framework import (
     GlobalContext,
     PluginConfig,
     PluginContext,

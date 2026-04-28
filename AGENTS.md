@@ -11,7 +11,7 @@ This is a monorepo of standalone plugin packages for the ContextForge Plugin Ext
 - Plugins are Rust+Python (PyO3/maturin) or pure Python.
 - Each plugin has its own `pyproject.toml`, `Cargo.toml`, `Makefile`, and `tests/`.
 - Package names follow the pattern `cpex-<plugin-name>` (e.g., `cpex-rate-limiter`).
-- `mcpgateway` is a runtime dependency provided by the host gateway — never declare it in `pyproject.toml`.
+- `cpex` is the framework runtime dependency; declare it in plugin `pyproject.toml`.
 
 ## Build & Test
 

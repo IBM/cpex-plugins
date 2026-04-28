@@ -5,10 +5,13 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from dataclasses import dataclass
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from real_cpex_imports import assert_real_cpex_imports
 from cpex_retry_with_backoff.retry_with_backoff import (
     RetryConfig,
     RetryWithBackoffPlugin,
@@ -20,14 +23,21 @@ from cpex_retry_with_backoff.retry_with_backoff import (
     _STATE,
     _STATE_TTL_SECONDS,
 )
-from mcpgateway.common.models import ResourceContent
-from mcpgateway.plugins.framework import (
+from cpex.framework import (
     GlobalContext,
     PluginConfig,
     PluginContext,
     ResourcePostFetchPayload,
     ToolPostInvokePayload,
 )
+
+
+@dataclass
+class ResourceContent:
+    type: str
+    id: str
+    uri: str
+    text: str
 
 
 def make_plugin(config_overrides: dict | None = None) -> RetryWithBackoffPlugin:
@@ -61,6 +71,22 @@ def make_context() -> PluginContext:
 
 def make_payload(tool: str, result: dict) -> ToolPostInvokePayload:
     return ToolPostInvokePayload(name=tool, result=result)
+
+
+def test_imports_with_real_cpex_package() -> None:
+    plugin_root = (
+        Path(__file__).resolve().parents[3]
+        / "plugins"
+        / "rust"
+        / "python-package"
+        / "retry_with_backoff"
+    )
+    assert_real_cpex_imports(
+        plugin_root,
+        [
+            "from cpex_retry_with_backoff.retry_with_backoff import RetryConfig, RetryWithBackoffPlugin",
+        ],
+    )
 
 
 class TestComputeDelayMs:
@@ -241,6 +267,15 @@ class TestRustNativePolicy:
 
 
 class TestPluginInit:
+    def test_missing_gateway_retry_ceiling_uses_plugin_config(self):
+        class StandaloneCpexSettings:
+            pass
+
+        with patch("cpex_retry_with_backoff.retry_with_backoff.get_settings") as mock_settings:
+            mock_settings.return_value = StandaloneCpexSettings()
+            plugin = make_plugin({"max_retries": 5})
+            assert plugin._cfg.max_retries == 5
+
     def test_max_retries_clamped_to_gateway_ceiling(self):
         with patch("cpex_retry_with_backoff.retry_with_backoff.get_settings") as mock_settings:
             mock_settings.return_value.max_tool_retries = 2

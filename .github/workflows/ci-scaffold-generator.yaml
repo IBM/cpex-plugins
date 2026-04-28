@@ -59,6 +59,13 @@ jobs:
             --description "CI scaffold default test plugin" \
             --author "CI"
 
+      - name: Verify default plugin standalone CPEX imports
+        run: |
+          ! grep -R "mcpgateway\.plugins\.framework\|from mcpgateway\|import mcpgateway\|mcpgateway\.plugins\|gateway\.plugins" plugins/rust/python-package/ci_scaffold_default
+          grep -R "cpex.framework" plugins/rust/python-package/ci_scaffold_default
+          grep -F '"cpex>=0.1.0.dev13"' plugins/rust/python-package/ci_scaffold_default/pyproject.toml
+          python3 -m py_compile plugins/rust/python-package/ci_scaffold_default/cpex_ci_scaffold_default/ci_scaffold_default.py
+
       - name: Sync default plugin
         working-directory: plugins/rust/python-package/ci_scaffold_default
         run: make sync
@@ -74,6 +81,13 @@ jobs:
             --description "CI scaffold all-hooks test plugin" \
             --author "CI" \
             --hooks prompt_pre_fetch,prompt_post_fetch,tool_pre_invoke,tool_post_invoke,resource_pre_fetch,resource_post_fetch,agent_pre_invoke,agent_post_invoke,http_pre_request,http_post_request,http_auth_resolve_user,http_auth_check_permission
+
+      - name: Verify all-hooks plugin standalone CPEX imports
+        run: |
+          ! grep -R "mcpgateway\.plugins\.framework\|from mcpgateway\|import mcpgateway\|mcpgateway\.plugins\|gateway\.plugins" plugins/rust/python-package/ci_scaffold_all_hooks
+          grep -R "cpex.framework" plugins/rust/python-package/ci_scaffold_all_hooks
+          grep -F '"cpex>=0.1.0.dev13"' plugins/rust/python-package/ci_scaffold_all_hooks/pyproject.toml
+          python3 -m py_compile plugins/rust/python-package/ci_scaffold_all_hooks/cpex_ci_scaffold_all_hooks/ci_scaffold_all_hooks.py
 
       - name: Sync all-hooks plugin
         working-directory: plugins/rust/python-package/ci_scaffold_all_hooks

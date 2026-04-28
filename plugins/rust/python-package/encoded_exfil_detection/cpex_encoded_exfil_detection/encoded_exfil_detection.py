@@ -28,7 +28,7 @@ from urllib.parse import unquote_to_bytes
 from pydantic import BaseModel, Field, field_validator
 
 # First-Party
-from mcpgateway.plugins.framework import (
+from cpex.framework import (
     Plugin,
     PluginConfig,
     PluginContext,

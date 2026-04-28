@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 
 try:
-    from mcpgateway.plugins.framework import Plugin, PromptPrehookResult, ToolPreInvokeResult
+    from cpex.framework import Plugin, PromptPrehookResult, ToolPreInvokeResult
 except ModuleNotFoundError:
     class Plugin:  # type: ignore[no-redef]
         def __init__(self, config) -> None:
