@@ -9,7 +9,8 @@
 This is a monorepo of standalone plugin packages for the ContextForge Plugin Extensibility (CPEX) Framework. Each plugin lives in its own top-level directory with independent build configuration.
 
 - Plugins are Rust+Python (PyO3/maturin) or pure Python.
-- Each plugin has its own `pyproject.toml`, `Cargo.toml`, `Makefile`, and `tests/`.
+- Each plugin has its own `pyproject.toml`, `Cargo.toml`, and `Makefile`.
+- Python integration tests live under `plugins/tests/<slug>/`; Rust unit tests live in the plugin crate.
 - Package names follow the pattern `cpex-<plugin-name>` (e.g., `cpex-rate-limiter`).
 - `mcpgateway` is a runtime dependency provided by the host gateway — never declare it in `pyproject.toml`.
 

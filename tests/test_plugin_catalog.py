@@ -2667,20 +2667,21 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("rustc --version", workflow)
         self.assertIn("working-directory: ${{ needs.resolve.outputs.plugin_path }}", workflow)
         self.assertIn(
-            'if [[ -d "${GITHUB_WORKSPACE}/plugins/tests/${{ needs.resolve.outputs.slug }}" ]]; then',
+            'if [[ -d "${GITHUB_WORKSPACE}/plugins/tests/${{ needs.resolve.outputs.plugin }}" ]]; then',
             workflow,
         )
         self.assertIn(
-            'cp -R "${GITHUB_WORKSPACE}/plugins/tests/${{ needs.resolve.outputs.slug }}" "${tmpdir}/tests/${{ needs.resolve.outputs.slug }}"',
+            'cp -R "${GITHUB_WORKSPACE}/plugins/tests/${{ needs.resolve.outputs.plugin }}" "${tmpdir}/tests/${{ needs.resolve.outputs.plugin }}"',
             workflow,
         )
+        self.assertIn("pytest pytest-asyncio pydantic PyYAML", workflow)
         self.assertIn('cp "${GITHUB_WORKSPACE}/plugins/tests/conftest.py"', workflow)
         self.assertIn('cp "${GITHUB_WORKSPACE}/plugins/tests/plugin_hooks.py"', workflow)
         self.assertIn('cp "${GITHUB_WORKSPACE}/plugins/tests/pytest.ini"', workflow)
         self.assertIn("CPEX_TEST_PLUGIN_HOOKS=1", workflow)
         self.assertIn('PYTHONPATH="${tmpdir}/tests"', workflow)
         self.assertIn('cd "${tmpdir}"', workflow)
-        self.assertIn('"${tmpdir}/tests/${{ needs.resolve.outputs.slug }}" -v', workflow)
+        self.assertIn('"${tmpdir}/tests/${{ needs.resolve.outputs.plugin }}" -v', workflow)
         self.assertNotIn('PYTHONPATH="${GITHUB_WORKSPACE}/${{ needs.resolve.outputs.plugin_path }}/tests"', workflow)
         self.assertEqual(workflow.count("cargo run --bin stub_gen"), 1)
         self.assertIn('git show-ref --verify --quiet "refs/tags/${tag}"', workflow)
