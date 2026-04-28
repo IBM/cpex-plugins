@@ -85,6 +85,7 @@ class PluginScaffolder:
             autoescape=select_autoescape(),
             trim_blocks=True,
             lstrip_blocks=True,
+            keep_trailing_newline=True,
         )
 
     def validate_plugin_name(self, name: str) -> tuple[bool, str]:
