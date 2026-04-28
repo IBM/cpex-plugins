@@ -46,6 +46,42 @@ It runs the catalog validator plus the shared repo contract test modules:
 
 ## Adding a New Managed Plugin
 
+### Using the Plugin Scaffold Generator (Recommended)
+
+The easiest way to create a new plugin is using the scaffold generator:
+
+```bash
+make plugin-scaffold
+```
+
+This interactive tool will:
+- Prompt for plugin name, description, author, and version
+- Let you select from 12 available hooks across 5 categories
+- Generate complete plugin structure with all required files
+- Create comprehensive unit tests (Python and Rust)
+- Set up build configuration and documentation
+
+For non-interactive mode:
+
+```bash
+python3 tools/scaffold_plugin.py --non-interactive \
+  --name my_plugin \
+  --description "My plugin description" \
+  --author "Your Name" \
+  --hooks prompt_pre_fetch,tool_pre_invoke
+```
+
+After scaffolding:
+
+1. Review and customize the generated code in `plugins/rust/python-package/<slug>/`
+2. The crate is automatically added to the workspace `Cargo.toml`
+3. Run `make plugins-validate` to verify structure
+4. Run `make plugin-test PLUGIN=<slug>` to execute the plugin's full `make ci` flow
+
+### Manual Plugin Creation
+
+If you prefer to create a plugin manually:
+
 1. Create `plugins/rust/python-package/<slug>/`.
 2. Add the required files and package/module names that match the slug conventions.
 3. Add the crate path to the workspace `members` list in the top-level `Cargo.toml`.

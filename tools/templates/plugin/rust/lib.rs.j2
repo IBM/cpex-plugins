@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2024 ContextForge Contributors
+use pyo3::prelude::*;
+use pyo3_stub_gen::define_stub_info_gatherer;
+
+pub mod engine;
+
+#[pymodule]
+fn {{ rust_lib_name }}(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    pyo3_log::init();
+    m.add_class::<engine::{{ engine_class }}>()?;
+    Ok(())
+}
+
+define_stub_info_gatherer!(stub_info);

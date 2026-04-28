@@ -1,0 +1,258 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2024 ContextForge Contributors
+use log::{debug, info};
+use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyModule};
+
+/// {{ plugin_name_title }} engine implementation.
+#[pyclass]
+#[allow(dead_code)]
+pub struct {{ engine_class }} {
+    // TODO: Add engine state fields and remove #[allow(dead_code)]
+    example_option: String,
+}
+
+#[pymethods]
+impl {{ engine_class }} {
+    /// Create a new {{ engine_class }} instance.
+    #[new]
+    pub fn new(config: &Bound<'_, PyDict>) -> PyResult<Self> {
+        info!("Initializing {{ plugin_name_title }} engine");
+
+        let example_option = config
+            .get_item("example_option")?
+            .and_then(|v| v.extract::<String>().ok())
+            .unwrap_or_else(|| "default_value".to_string());
+
+        debug!("Configuration: example_option={}", example_option);
+
+        Ok(Self { example_option })
+    }
+    {% for hook in hooks %}
+
+    {% if hook == "prompt_pre_fetch" %}
+    /// Hook called before prompt is fetched.
+    pub fn prompt_pre_fetch(
+        &self,
+        py: Python<'_>,
+        _payload: &Bound<'_, PyAny>,
+        _context: &Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        debug!("{{ plugin_name_title }}: prompt_pre_fetch called");
+        // TODO: Implement prompt pre-fetch logic
+        let module = PyModule::import(py, "mcpgateway.plugins.framework")?;
+        let result_class = module.getattr("PromptPrehookResult")?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("continue_processing", true)?;
+        Ok(result_class.call((), Some(&kwargs))?.unbind())
+    }
+    {% elif hook == "prompt_post_fetch" %}
+    /// Hook called after prompt is fetched.
+    pub fn prompt_post_fetch(
+        &self,
+        py: Python<'_>,
+        _result: &Bound<'_, PyAny>,
+        _context: &Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        debug!("{{ plugin_name_title }}: prompt_post_fetch called");
+        // TODO: Implement prompt post-fetch logic
+        let module = PyModule::import(py, "mcpgateway.plugins.framework")?;
+        let result_class = module.getattr("PromptPosthookResult")?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("continue_processing", true)?;
+        Ok(result_class.call((), Some(&kwargs))?.unbind())
+    }
+    {% elif hook == "tool_pre_invoke" %}
+    /// Hook called before tool is invoked.
+    pub fn tool_pre_invoke(
+        &self,
+        py: Python<'_>,
+        _payload: &Bound<'_, PyAny>,
+        _context: &Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        debug!("{{ plugin_name_title }}: tool_pre_invoke called");
+        // TODO: Implement tool pre-invoke logic
+        let module = PyModule::import(py, "mcpgateway.plugins.framework")?;
+        let result_class = module.getattr("ToolPreInvokeResult")?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("continue_processing", true)?;
+        Ok(result_class.call((), Some(&kwargs))?.unbind())
+    }
+    {% elif hook == "tool_post_invoke" %}
+    /// Hook called after tool is invoked.
+    pub fn tool_post_invoke(
+        &self,
+        py: Python<'_>,
+        _result: &Bound<'_, PyAny>,
+        _context: &Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        debug!("{{ plugin_name_title }}: tool_post_invoke called");
+        // TODO: Implement tool post-invoke logic
+        let module = PyModule::import(py, "mcpgateway.plugins.framework")?;
+        let result_class = module.getattr("ToolPostInvokeResult")?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("continue_processing", true)?;
+        Ok(result_class.call((), Some(&kwargs))?.unbind())
+    }
+    {% elif hook == "resource_pre_fetch" %}
+    /// Hook called before resource is fetched.
+    pub fn resource_pre_fetch(
+        &self,
+        py: Python<'_>,
+        _payload: &Bound<'_, PyAny>,
+        _context: &Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        debug!("{{ plugin_name_title }}: resource_pre_fetch called");
+        // TODO: Implement resource pre-fetch logic
+        let module = PyModule::import(py, "mcpgateway.plugins.framework")?;
+        let result_class = module.getattr("ResourcePreFetchResult")?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("continue_processing", true)?;
+        Ok(result_class.call((), Some(&kwargs))?.unbind())
+    }
+    {% elif hook == "resource_post_fetch" %}
+    /// Hook called after resource is fetched.
+    pub fn resource_post_fetch(
+        &self,
+        py: Python<'_>,
+        _result: &Bound<'_, PyAny>,
+        _context: &Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        debug!("{{ plugin_name_title }}: resource_post_fetch called");
+        // TODO: Implement resource post-fetch logic
+        let module = PyModule::import(py, "mcpgateway.plugins.framework")?;
+        let result_class = module.getattr("ResourcePostFetchResult")?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("continue_processing", true)?;
+        Ok(result_class.call((), Some(&kwargs))?.unbind())
+    }
+    {% elif hook == "agent_pre_invoke" %}
+    /// Hook called before agent is invoked.
+    pub fn agent_pre_invoke(
+        &self,
+        py: Python<'_>,
+        _payload: &Bound<'_, PyAny>,
+        _context: &Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        debug!("{{ plugin_name_title }}: agent_pre_invoke called");
+        // TODO: Implement agent pre-invoke logic
+        let module = PyModule::import(py, "mcpgateway.plugins.framework")?;
+        let result_class = module.getattr("AgentPreInvokeResult")?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("continue_processing", true)?;
+        Ok(result_class.call((), Some(&kwargs))?.unbind())
+    }
+    {% elif hook == "agent_post_invoke" %}
+    /// Hook called after agent responds.
+    pub fn agent_post_invoke(
+        &self,
+        py: Python<'_>,
+        _result: &Bound<'_, PyAny>,
+        _context: &Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        debug!("{{ plugin_name_title }}: agent_post_invoke called");
+        // TODO: Implement agent post-invoke logic
+        let module = PyModule::import(py, "mcpgateway.plugins.framework")?;
+        let result_class = module.getattr("AgentPostInvokeResult")?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("continue_processing", true)?;
+        Ok(result_class.call((), Some(&kwargs))?.unbind())
+    }
+    {% elif hook == "http_pre_request" %}
+    /// Hook called before HTTP request is processed.
+    pub fn http_pre_request(
+        &self,
+        py: Python<'_>,
+        _payload: &Bound<'_, PyAny>,
+        _context: &Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        debug!("{{ plugin_name_title }}: http_pre_request called");
+        // TODO: Implement HTTP pre-request logic
+        let module = PyModule::import(py, "mcpgateway.plugins.framework")?;
+        let result_class = module.getattr("HttpPreRequestResult")?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("continue_processing", true)?;
+        Ok(result_class.call((), Some(&kwargs))?.unbind())
+    }
+    {% elif hook == "http_post_request" %}
+    /// Hook called after HTTP request is processed.
+    pub fn http_post_request(
+        &self,
+        py: Python<'_>,
+        _result: &Bound<'_, PyAny>,
+        _context: &Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        debug!("{{ plugin_name_title }}: http_post_request called");
+        // TODO: Implement HTTP post-request logic
+        let module = PyModule::import(py, "mcpgateway.plugins.framework")?;
+        let result_class = module.getattr("HttpPostRequestResult")?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("continue_processing", true)?;
+        Ok(result_class.call((), Some(&kwargs))?.unbind())
+    }
+    {% elif hook == "http_auth_resolve_user" %}
+    /// Hook called to resolve authenticated user from request.
+    pub fn http_auth_resolve_user(
+        &self,
+        py: Python<'_>,
+        _payload: &Bound<'_, PyAny>,
+        _context: &Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        debug!("{{ plugin_name_title }}: http_auth_resolve_user called");
+        // TODO: Implement user resolution logic
+        let module = PyModule::import(py, "mcpgateway.plugins.framework")?;
+        let result_class = module.getattr("HttpAuthResolveUserResult")?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("continue_processing", true)?;
+        Ok(result_class.call((), Some(&kwargs))?.unbind())
+    }
+    {% elif hook == "http_auth_check_permission" %}
+    /// Hook called to check whether a user has the required permission.
+    pub fn http_auth_check_permission(
+        &self,
+        py: Python<'_>,
+        _payload: &Bound<'_, PyAny>,
+        _context: &Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        debug!("{{ plugin_name_title }}: http_auth_check_permission called");
+        // TODO: Implement permission-check logic
+        let module = PyModule::import(py, "mcpgateway.plugins.framework")?;
+        let result_class = module.getattr("HttpAuthCheckPermissionResult")?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("continue_processing", true)?;
+        Ok(result_class.call((), Some(&kwargs))?.unbind())
+    }
+    {% endif %}
+    {% endfor %}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::types::PyDict;
+
+    #[test]
+    fn test_engine_creation_with_defaults() {
+        Python::initialize();
+        Python::attach(|py| {
+            let config = PyDict::new(py);
+            let engine = {{ engine_class }}::new(&config);
+            assert!(engine.is_ok());
+            let engine = engine.unwrap();
+            assert_eq!(engine.example_option, "default_value");
+        });
+    }
+
+    #[test]
+    fn test_engine_creation_with_custom_config() {
+        Python::initialize();
+        Python::attach(|py| {
+            let config = PyDict::new(py);
+            config.set_item("example_option", "custom_value").unwrap();
+            let engine = {{ engine_class }}::new(&config);
+            assert!(engine.is_ok());
+            let engine = engine.unwrap();
+            assert_eq!(engine.example_option, "custom_value");
+        });
+    }
+}
