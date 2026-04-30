@@ -16,7 +16,6 @@ from __future__ import annotations
 
 # Standard
 import logging
-import re
 from typing import Any, Dict, Iterable
 
 # Third-Party
@@ -99,12 +98,10 @@ class EncodedExfilDetectorConfig(BaseModel):
     @field_validator("allowlist_patterns")
     @classmethod
     def _validate_allowlist_patterns(cls, v: list[str]) -> list[str]:
-        """Validate that allowlist patterns are valid regexes."""
+        """Validate allowlist patterns are non-empty strings; Rust validates regex syntax at engine init."""
         for idx, pattern in enumerate(v):
-            try:
-                re.compile(pattern)
-            except re.error as exc:
-                raise ValueError(f"Invalid allowlist regex pattern at index {idx} ('{pattern}'): {exc}") from exc
+            if not isinstance(pattern, str) or not pattern:
+                raise ValueError(f"allowlist_patterns[{idx}] must be a non-empty string")
         return v
 
 
@@ -164,7 +161,13 @@ class EncodedExfilDetectorPlugin(Plugin):
         """
         super().__init__(config)
         self._cfg = EncodedExfilDetectorConfig(**(config.config or {}))
-        self._rust_engine = ExfilDetectorEngine(self._cfg)
+        try:
+            self._rust_engine = ExfilDetectorEngine(self._cfg)
+        except ValueError as exc:
+            raise ValueError(
+                f"Failed to initialize Rust engine — check allowlist_patterns for Rust regex compatibility "
+                f"(lookaround and backreferences are not supported): {exc}"
+            ) from exc
         self.implementation = "Rust"
 
     def _findings_for_metadata(self, findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
