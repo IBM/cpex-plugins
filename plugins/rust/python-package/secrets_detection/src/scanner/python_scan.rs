@@ -33,7 +33,8 @@ fn scan_container_inner<'py>(
 ) -> PyResult<(usize, Bound<'py, PyAny>, Bound<'py, PyList>)> {
     let findings = PyList::empty(py);
 
-    if container.is_exact_instance_of::<PyString>() {
+    let str_type = py.import("builtins")?.getattr("str")?;
+    if container.is_instance(&str_type)? {
         let text = container.extract::<String>()?;
         let (matches, redacted) = detect_and_redact(&text, config);
         for finding in &matches {
@@ -182,6 +183,12 @@ fn should_scan_serialized_state(
     serialized_state: &Bound<'_, PyAny>,
     has_rebuild_state: bool,
 ) -> PyResult<bool> {
+    if let Some(rebuild_state) = rebuild_state
+        && serialized_duplicates_rebuild_root(serialized_state, rebuild_state)?
+    {
+        return Ok(false);
+    }
+
     if serialized_state.is_exact_instance_of::<PyString>() {
         if let Some(rebuild_state) = rebuild_state
             && rebuild_state.is_exact_instance_of::<PyString>()
@@ -225,6 +232,19 @@ fn should_scan_serialized_state(
         return Ok(false);
     };
     Ok(!serialized_rebuild_state.as_any().eq(rebuild_state)?)
+}
+
+fn serialized_duplicates_rebuild_root(
+    serialized_state: &Bound<'_, PyAny>,
+    rebuild_state: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    let Ok(rebuild_dict) = rebuild_state.cast::<PyDict>() else {
+        return Ok(false);
+    };
+    let Some(root) = rebuild_dict.get_item("root")? else {
+        return Ok(false);
+    };
+    same_safe_value(serialized_state, &root, &mut HashSet::new())
 }
 
 fn serialized_dict_duplicates_rebuild_state(
@@ -273,7 +293,7 @@ fn same_safe_value(
 
     if let (Ok(left_list), Ok(right_list)) = (left.cast::<PyList>(), right.cast::<PyList>()) {
         if !seen.insert((left.as_ptr() as usize, right.as_ptr() as usize)) {
-            return Ok(false);
+            return Ok(true);
         }
         if left_list.len() != right_list.len() {
             return Ok(false);
@@ -288,7 +308,7 @@ fn same_safe_value(
 
     if let (Ok(left_tuple), Ok(right_tuple)) = (left.cast::<PyTuple>(), right.cast::<PyTuple>()) {
         if !seen.insert((left.as_ptr() as usize, right.as_ptr() as usize)) {
-            return Ok(false);
+            return Ok(true);
         }
         if left_tuple.len() != right_tuple.len() {
             return Ok(false);
@@ -303,7 +323,7 @@ fn same_safe_value(
 
     if let (Ok(left_dict), Ok(right_dict)) = (left.cast::<PyDict>(), right.cast::<PyDict>()) {
         if !seen.insert((left.as_ptr() as usize, right.as_ptr() as usize)) {
-            return Ok(false);
+            return Ok(true);
         }
         if left_dict.len() != right_dict.len()
             || !dict_has_only_exact_string_keys(left_dict)
@@ -544,6 +564,34 @@ class Model:
     }
 
     #[test]
+    fn scan_container_detects_str_subclass_secret() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let code = CString::new(
+                r#"
+class SecretString(str):
+    pass
+
+payload = SecretString("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")
+"#,
+            )
+            .unwrap();
+            let module =
+                PyModule::from_code(py, code.as_c_str(), c"test_module.py", c"test_module")?;
+            let payload = module.getattr("payload")?;
+            let config = SecretsDetectionConfig::default();
+
+            let (count, _, findings) = scan_container(py, &payload, &config)?;
+
+            assert_eq!(count, 1);
+            assert_eq!(findings.len(), 1);
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
     fn scan_container_does_not_double_count_matching_model_dump_list() {
         Python::initialize();
         Python::attach(|py| -> PyResult<()> {
@@ -561,6 +609,69 @@ class Model:
             let module =
                 PyModule::from_code(py, code.as_c_str(), c"test_module.py", c"test_module")?;
             let instance = module.getattr("Model")?.call0()?;
+            let config = SecretsDetectionConfig::default();
+
+            let (count, _, findings) = scan_container(py, &instance, &config)?;
+
+            assert_eq!(count, 1);
+            assert_eq!(findings.len(), 1);
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn scan_container_does_not_double_count_cyclic_model_dump_secret() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let code = CString::new(
+                r#"
+class Model:
+    def __init__(self):
+        self.items = ["AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"]
+        self.items.append(self.items)
+
+    def model_dump(self):
+        items = ["AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"]
+        items.append(items)
+        return {"items": items}
+"#,
+            )
+            .unwrap();
+            let module =
+                PyModule::from_code(py, code.as_c_str(), c"test_module.py", c"test_module")?;
+            let instance = module.getattr("Model")?.call0()?;
+            let config = SecretsDetectionConfig::default();
+
+            let (count, _, findings) = scan_container(py, &instance, &config)?;
+
+            assert_eq!(count, 1);
+            assert_eq!(findings.len(), 1);
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn scan_container_does_not_double_count_duplicate_root_serialized_state() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let code = CString::new(
+                r#"
+class RootObject:
+    def __init__(self):
+        self.root = "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+
+    def model_dump(self):
+        return str(self.root)
+"#,
+            )
+            .unwrap();
+            let module =
+                PyModule::from_code(py, code.as_c_str(), c"test_module.py", c"test_module")?;
+            let instance = module.getattr("RootObject")?.call0()?;
             let config = SecretsDetectionConfig::default();
 
             let (count, _, findings) = scan_container(py, &instance, &config)?;
@@ -645,7 +756,7 @@ class Model:
                 r#"
 class BadKey:
     def __hash__(self):
-        return hash("bad-key")
+        return hash("text")
 
     def __eq__(self, other):
         raise RuntimeError("duplicate gate should not compare custom keys")
@@ -678,7 +789,7 @@ class BadKey:
                 r#"
 class BadKey:
     def __hash__(self):
-        return hash("bad-key")
+        return hash("text")
 
     def __eq__(self, other):
         raise RuntimeError("duplicate gate should not compare custom keys")

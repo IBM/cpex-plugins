@@ -37,24 +37,8 @@ pub fn inspect_object_state<'py>(
         mappings.push(&slot_state)?;
     }
 
-    let rebuild_state = mappings.finish();
-    if container.hasattr("root")?
-        && serialized_state.is_some()
-        && let Some(rebuild_state) = rebuild_state.as_ref()
-        && rebuild_state.contains("root")?
-        && let Some(serialized) = serialized_state.as_ref()
-        && rebuild_state
-            .get_item("root")?
-            .is_some_and(|root| root.eq(serialized).unwrap_or(false))
-    {
-        return Ok(InspectedObjectState {
-            rebuild_state: Some(rebuild_state.clone()),
-            serialized_state: None,
-        });
-    }
-
     Ok(InspectedObjectState {
-        rebuild_state,
+        rebuild_state: mappings.finish(),
         serialized_state,
     })
 }
@@ -345,7 +329,7 @@ class StateObject:
     }
 
     #[test]
-    fn inspect_root_model_uses_rebuild_state_only_when_root_matches_serialized_state() {
+    fn inspect_root_model_exposes_rebuild_and_serialized_state() {
         Python::initialize();
         Python::attach(|py| -> PyResult<()> {
             let code = CString::new(
@@ -365,7 +349,7 @@ class RootObject:
             let inspected = inspect_object_state(py, &instance)?;
 
             assert!(inspected.rebuild_state.is_some());
-            assert!(inspected.serialized_state.is_none());
+            assert!(inspected.serialized_state.is_some());
             Ok(())
         })
         .unwrap();
