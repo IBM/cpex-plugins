@@ -230,7 +230,7 @@ fn merge_state_into(target: &Bound<'_, PyDict>, source: &Bound<'_, PyDict>) -> P
     Ok(())
 }
 
-fn dict_has_only_exact_string_keys(dict: &Bound<'_, PyDict>) -> bool {
+pub fn dict_has_only_exact_string_keys(dict: &Bound<'_, PyDict>) -> bool {
     dict.iter()
         .all(|(key, _)| key.is_exact_instance_of::<PyString>())
 }

@@ -4,11 +4,12 @@
 use std::collections::{HashMap, HashSet};
 
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyList, PyString, PyTuple};
+use pyo3::types::{PyAny, PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
 
 use crate::config::SecretsDetectionConfig;
 use crate::object_model::{
-    apply_object_state, copy_object_with_updates, inspect_object_state, prepare_rebuild_target,
+    apply_object_state, copy_object_with_updates, dict_has_only_exact_string_keys,
+    inspect_object_state, prepare_rebuild_target,
 };
 
 use super::cycle_rewrite::replace_placeholder_references;
@@ -349,39 +350,11 @@ fn same_safe_value(
     Ok(false)
 }
 
-fn dict_has_only_exact_string_keys(dict: &Bound<'_, PyDict>) -> bool {
-    dict.iter()
-        .all(|(key, _)| key.is_exact_instance_of::<PyString>())
-}
-
 fn is_exact_safe_scalar_pair(left: &Bound<'_, PyAny>, right: &Bound<'_, PyAny>) -> bool {
-    let left_module = left
-        .get_type()
-        .module()
-        .and_then(|module| module.extract::<String>());
-    let left_name = left
-        .get_type()
-        .name()
-        .and_then(|name| name.extract::<String>());
-    let right_module = right
-        .get_type()
-        .module()
-        .and_then(|module| module.extract::<String>());
-    let right_name = right
-        .get_type()
-        .name()
-        .and_then(|name| name.extract::<String>());
-    match (
-        left_module.as_deref(),
-        left_name.as_deref(),
-        right_module.as_deref(),
-        right_name.as_deref(),
-    ) {
-        (Ok("builtins"), Ok(left_name), Ok("builtins"), Ok(right_name)) => {
-            left_name == right_name && matches!(left_name, "int" | "float" | "bool" | "bytes")
-        }
-        _ => false,
-    }
+    (left.is_exact_instance_of::<PyBool>() && right.is_exact_instance_of::<PyBool>())
+        || (left.is_exact_instance_of::<PyInt>() && right.is_exact_instance_of::<PyInt>())
+        || (left.is_exact_instance_of::<PyFloat>() && right.is_exact_instance_of::<PyFloat>())
+        || (left.is_exact_instance_of::<PyBytes>() && right.is_exact_instance_of::<PyBytes>())
 }
 
 fn serialized_result<'py>(
@@ -555,6 +528,46 @@ class Model:
 
     def __init__(self):
         self.value = EqBomb()
+
+    def model_dump(self):
+        if type(self).dumping:
+            type(self).dumping = False
+            return Model()
+        return self
+"#,
+            )
+            .unwrap();
+            let module =
+                PyModule::from_code(py, code.as_c_str(), c"test_module.py", c"test_module")?;
+            let instance = module.getattr("Model")?.call0()?;
+            let config = SecretsDetectionConfig::default();
+
+            let (count, _, findings) = scan_container(py, &instance, &config)?;
+
+            assert_eq!(count, 0);
+            assert!(findings.is_empty());
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn safe_scalar_duplicate_gate_rejects_spoofed_builtin_type() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let code = CString::new(
+                r#"
+def eq_bomb(self, other):
+    raise RuntimeError("eq should not run")
+
+SpoofedInt = type("int", (), {"__module__": "builtins", "__eq__": eq_bomb})
+
+class Model:
+    dumping = True
+
+    def __init__(self):
+        self.value = SpoofedInt()
 
     def model_dump(self):
         if type(self).dumping:
@@ -852,12 +865,28 @@ class Model:
             let module =
                 PyModule::from_code(py, code.as_c_str(), c"test_module.py", c"test_module")?;
             let instance = module.getattr("Model")?.call0()?;
-            let config = SecretsDetectionConfig::default();
+            let config = SecretsDetectionConfig {
+                redact: true,
+                redaction_text: "[REDACTED]".to_string(),
+                ..Default::default()
+            };
 
-            let (count, _, findings) = scan_container(py, &instance, &config)?;
+            let (count, redacted, findings) = scan_container(py, &instance, &config)?;
 
             assert_eq!(count, 1);
             assert_eq!(findings.len(), 1);
+            assert_eq!(instance.getattr("text")?.extract::<String>()?, "clean");
+
+            let redacted_dict = redacted.cast::<PyDict>()?;
+            assert_eq!(redacted_dict.len(), 1);
+            let values: Vec<String> = redacted_dict
+                .values()
+                .iter()
+                .map(|value| value.extract::<String>())
+                .collect::<PyResult<_>>()?;
+            assert_eq!(values.len(), 1);
+            assert!(values[0].contains(&config.redaction_text));
+            assert!(!values[0].contains("AKIAFAKE12345EXAMPLE"));
 
             Ok(())
         })
