@@ -1,6 +1,6 @@
 """Behavioral normalization tests for Rust-owned rate parsing."""
 
-from mcpgateway.plugins.framework import (
+from cpex.framework import (
     GlobalContext,
     PluginConfig,
     PluginContext,

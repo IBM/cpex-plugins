@@ -36,7 +36,7 @@ class EvalDimension:
 class EvalResult:
     r"""
     The aggregated result returned to Python via `evaluate_many()`.
-    
+
     Contains the most restrictive outcome across all active dimensions
     (min remaining, earliest unblock among blocked dimensions — matching
     Python `_select_most_restrictive`).
@@ -82,10 +82,10 @@ class EvalResult:
 class RateLimiterEngine:
     r"""
     High-performance rate limiter engine.
-    
+
     Construct once per plugin instance (`__init__`), then call
     `check()` / `check_async()` on every hook invocation.
-    
+
     Backend is selected at init time from the config dict:
     - `backend: "memory"` (default) — in-process counting via `MemoryStore`
     - `backend: "redis"` — Rust owns the Redis connection; same batch Lua
@@ -94,10 +94,10 @@ class RateLimiterEngine:
     def __new__(cls, config: dict) -> RateLimiterEngine:
         r"""
         Construct from the Python config dict.
-        
+
         Parses all rate strings and normalises `by_tool` keys at init time —
         never on the request path (IFACE-01, IFACE-05).
-        
+
         Extra keys consumed here (not part of `EngineConfig`):
         - `backend`: `"memory"` (default) or `"redis"`
         - `redis_url`: required when `backend = "redis"`
@@ -105,7 +105,7 @@ class RateLimiterEngine:
         - `fail_mode`: `"open"` (default) or `"closed"` — handled by the
           plugin shim, but accepted here so it doesn't trip the unknown-key
           warning below.
-        
+
         Any other key in the dict is logged at WARN so misspellings (e.g.
         `redis_ur` instead of `redis_url`) surface visibly instead of being
         silently ignored.
@@ -114,17 +114,17 @@ class RateLimiterEngine:
         r"""
         High-level check: builds dimension keys internally, evaluates, and
         returns pre-built Python dicts for headers and metadata.
-        
+
         This eliminates all per-attribute PyO3 accesses on the Python side.
         The Python wrapper calls this once per hook invocation.
-        
+
         Returns `(allowed, headers_dict, meta_dict)`.
-        
+
         When `context_prefix` is provided (e.g. a team/tenant ID), it is
         prepended to every dimension key so that separate plugin instances
         for different tenants use isolated Redis counters instead of sharing
         a single key namespace.
-        
+
         **Note:** The Redis backend arm uses `block_on()` on a dedicated Tokio
         runtime, which would deadlock if called from within a Tokio context.
         The Python wrapper routes Redis to `check_async()` instead; this sync
@@ -134,7 +134,7 @@ class RateLimiterEngine:
     def check_async(self, user: builtins.str, tenant: typing.Optional[builtins.str], tool: builtins.str, now_unix: builtins.int, include_retry_after: builtins.bool, context_prefix: typing.Optional[builtins.str]) -> typing.Any:
         r"""
         Async variant of `check()` for Redis-backed deployments.
-        
+
         Returns an awaitable that resolves to `(allowed, headers_dict, meta_dict)`.
         """
 

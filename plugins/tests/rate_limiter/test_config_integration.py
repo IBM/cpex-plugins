@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from mcpgateway.plugins.framework import PluginConfig
+from cpex.framework import PluginConfig
 
 from cpex_rate_limiter import RateLimiterConfig as PackageRateLimiterConfig
 from cpex_rate_limiter import RateLimiterPlugin as PackageRateLimiterPlugin

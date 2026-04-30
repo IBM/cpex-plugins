@@ -7,7 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from mcpgateway.plugins.framework import (
+from real_cpex_imports import assert_real_cpex_imports
+from cpex.framework import (
     PluginConfig,
     ResourceHookType,
     ResourcePreFetchPayload,
@@ -15,6 +16,22 @@ from mcpgateway.plugins.framework import (
 
 from cpex_url_reputation.url_reputation import URLReputationConfig, URLReputationPlugin
 from cpex_url_reputation.url_reputation_rust import URLReputationEngine
+
+
+def test_imports_with_real_cpex_package() -> None:
+    plugin_root = (
+        Path(__file__).resolve().parents[3]
+        / "plugins"
+        / "rust"
+        / "python-package"
+        / "url_reputation"
+    )
+    assert_real_cpex_imports(
+        plugin_root,
+        [
+            "from cpex_url_reputation.url_reputation import URLReputationConfig, URLReputationPlugin",
+        ],
+    )
 
 
 def _make_plugin_config(**overrides) -> PluginConfig:
@@ -47,8 +64,10 @@ class TestRustEngine:
         )
         for module_name in (
             "plugin_hooks",
-            "mcpgateway.plugins",
-            "mcpgateway.plugins.framework",
+            "cpex",
+            "cpex.framework",
+            "cpex.framework.models",
+            "cpex.framework.settings",
             "cpex_url_reputation.url_reputation_rust",
         ):
             sys.modules.pop(module_name, None)

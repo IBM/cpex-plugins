@@ -7,7 +7,7 @@ import statistics
 import sys
 import time
 from typing import Any, Literal
-from mcpgateway.plugins.framework import (
+from cpex.framework import (
     PluginConfig,
     ResourceHookType,
 )

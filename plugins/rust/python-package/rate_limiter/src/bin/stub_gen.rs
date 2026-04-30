@@ -9,6 +9,15 @@ use std::path::Path;
 
 use rate_limiter_rust::stub_info;
 
+fn strip_blank_line_trailing_whitespace(content: &str) -> String {
+    content
+        .lines()
+        .map(|line| if line.trim().is_empty() { "" } else { line })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n"
+}
+
 fn curate_extension_stub() {
     let stub_path = Path::new("cpex_rate_limiter/rate_limiter_rust/__init__.pyi");
     let mut content = fs::read_to_string(stub_path).expect("Failed to read generated stub file");
@@ -26,6 +35,7 @@ fn curate_extension_stub() {
             "\n\ndef compat_default_config() -> dict: ...\ndef compat_parse_rate(rate: builtins.str) -> tuple[builtins.int, builtins.int]: ...\n",
         );
     }
+    content = strip_blank_line_trailing_whitespace(&content);
     fs::write(stub_path, content).expect("Failed to write curated stub file");
 }
 
@@ -41,4 +51,20 @@ fn main() {
     curate_top_level_stub();
     curate_extension_stub();
     println!("✓ Generated stub files successfully");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_blank_line_trailing_whitespace;
+
+    #[test]
+    fn strip_blank_line_trailing_whitespace_preserves_nonblank_lines() {
+        let content =
+            "class Example:\n    r\"\"\"\n    keep indentation\n    \n        \n    done\n";
+
+        assert_eq!(
+            strip_blank_line_trailing_whitespace(content),
+            "class Example:\n    r\"\"\"\n    keep indentation\n\n\n    done\n"
+        );
+    }
 }

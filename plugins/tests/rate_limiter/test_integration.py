@@ -1,8 +1,11 @@
 """End-to-end tests for RateLimiterPlugin using the real Rust engine."""
 
+from pathlib import Path
+
 import pytest
 
-from mcpgateway.plugins.framework import (
+from real_cpex_imports import assert_real_cpex_imports
+from cpex.framework import (
     GlobalContext,
     PluginConfig,
     PluginContext,
@@ -11,6 +14,22 @@ from mcpgateway.plugins.framework import (
 )
 
 from cpex_rate_limiter.rate_limiter import RateLimiterPlugin
+
+
+def test_imports_with_real_cpex_package() -> None:
+    plugin_root = (
+        Path(__file__).resolve().parents[3]
+        / "plugins"
+        / "rust"
+        / "python-package"
+        / "rate_limiter"
+    )
+    assert_real_cpex_imports(
+        plugin_root,
+        [
+            "from cpex_rate_limiter.rate_limiter import RateLimiterConfig, RateLimiterPlugin",
+        ],
+    )
 
 
 # ---------------------------------------------------------------------------

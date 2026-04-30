@@ -5,7 +5,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyModule};
 
 fn framework_class<'py>(py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyAny>> {
-    PyModule::import(py, "mcpgateway.plugins.framework")?.getattr(name)
+    PyModule::import(py, "cpex.framework")?.getattr(name)
 }
 
 pub fn build_framework_object<'py, const N: usize>(
