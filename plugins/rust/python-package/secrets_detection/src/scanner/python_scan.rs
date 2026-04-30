@@ -231,7 +231,11 @@ fn should_scan_serialized_state(
     let Some(rebuild_state) = rebuild_state else {
         return Ok(false);
     };
-    Ok(!serialized_rebuild_state.as_any().eq(rebuild_state)?)
+    Ok(!same_safe_value(
+        serialized_rebuild_state.as_any(),
+        rebuild_state,
+        &mut HashSet::new(),
+    )?)
 }
 
 fn serialized_duplicates_rebuild_root(
@@ -391,6 +395,9 @@ fn serialized_result<'py>(
 
     if redacted_state.cast::<PyDict>().is_ok() {
         let redacted_dict = redacted_state.cast::<PyDict>()?;
+        if !dict_has_only_exact_string_keys(redacted_dict) {
+            return Ok(redacted_state.clone());
+        }
         return copy_object_with_updates(py, container, redacted_dict)
             .map(|value| value.bind(py).clone());
     }
@@ -527,6 +534,45 @@ dummy = object()
                     true,
                 )?);
             }
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn same_type_serialized_state_duplicate_gate_skips_user_defined_eq() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let code = CString::new(
+                r#"
+class EqBomb:
+    def __eq__(self, other):
+        raise RuntimeError("eq should not run")
+
+class Model:
+    dumping = True
+
+    def __init__(self):
+        self.value = EqBomb()
+
+    def model_dump(self):
+        if type(self).dumping:
+            type(self).dumping = False
+            return Model()
+        return self
+"#,
+            )
+            .unwrap();
+            let module =
+                PyModule::from_code(py, code.as_c_str(), c"test_module.py", c"test_module")?;
+            let instance = module.getattr("Model")?.call0()?;
+            let config = SecretsDetectionConfig::default();
+
+            let (count, _, findings) = scan_container(py, &instance, &config)?;
+
+            assert_eq!(count, 0);
+            assert!(findings.is_empty());
 
             Ok(())
         })
@@ -799,7 +845,7 @@ class Model:
         self.text = "clean"
 
     def model_dump(self):
-        return {BadKey(): "clean"}
+        return {BadKey(): "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"}
 "#,
             )
             .unwrap();
@@ -810,8 +856,8 @@ class Model:
 
             let (count, _, findings) = scan_container(py, &instance, &config)?;
 
-            assert_eq!(count, 0);
-            assert_eq!(findings.len(), 0);
+            assert_eq!(count, 1);
+            assert_eq!(findings.len(), 1);
 
             Ok(())
         })
