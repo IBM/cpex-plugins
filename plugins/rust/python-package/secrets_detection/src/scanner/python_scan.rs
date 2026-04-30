@@ -238,6 +238,7 @@ fn scan_object_state<'py>(
             let base = rebuilt.as_ref().unwrap_or(container);
             let serialized_rebuilt = serialized_result(py, base, &redacted_state)?;
             if let Some(pending) = pending_scan_state.as_ref()
+                && serialized_rebuilt.get_type().is(container.get_type())
                 && serialized_rebuilt.hasattr("__dict__")?
             {
                 let mut rewrite_seen = HashSet::new();

@@ -296,6 +296,37 @@ class TestPublicRustApi:
             if not isinstance(key, str)
         )
 
+    def test_scan_container_does_not_apply_clean_dict_values_to_different_serialized_object_type(self):
+        class BadKey:
+            pass
+
+        class View:
+            def __init__(self):
+                self.secret = "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+
+        class SecretBox:
+            def __init__(self):
+                self.__dict__[BadKey()] = "side-channel"
+
+            def model_dump(self):
+                return View()
+
+        payload = SecretBox()
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 1
+        assert findings == [{"type": "aws_access_key_id"}]
+        assert isinstance(redacted, View)
+        assert redacted.secret == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        assert not any(
+            value == "side-channel"
+            for key, value in redacted.__dict__.items()
+            if not isinstance(key, str)
+        )
+
     def test_scan_container_rewrites_non_string_dict_back_edges_on_objects(self):
         class BadKey:
             pass
