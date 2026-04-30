@@ -28,10 +28,11 @@ clippy:
 
 # help: sync                  - Install plugin development dependencies
 # help: test                  - Run Rust unit tests and Python integration tests
-# help: test-unit             - Run Rust unit tests
+# help: test-unit             - Run Rust unit tests (requires cargo; fails loudly if absent)
+# help: test-unit-local       - Run Rust unit tests; skip with a notice if cargo is absent
 # help: test-integration      - Run repo-level integration tests for encoded_exfil_detection
 # help: test-all              - Alias for test
-.PHONY: sync test test-unit test-python test-integration test-all verify-stubs
+.PHONY: sync test test-unit test-unit-local test-python test-integration test-all verify-stubs
 
 sync:
 	uv sync --dev
@@ -39,6 +40,14 @@ sync:
 test-unit:
 	@echo "$(GREEN)Running encoded_exfil_detection Rust tests...$(NC)"
 	$(CARGO) test
+
+test-unit-local:
+	@echo "$(GREEN)Running encoded_exfil_detection Rust tests...$(NC)"
+	@if command -v $(CARGO) >/dev/null 2>&1; then \
+		$(CARGO) test; \
+	else \
+		echo "$(YELLOW)cargo not found — skipping Rust unit tests (use test-unit to require cargo)$(NC)"; \
+	fi
 
 test: test-unit test-integration
 

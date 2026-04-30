@@ -2,10 +2,8 @@
 # ruff: noqa: E501, F401, F403, F405
 
 from .encoded_exfil_detection import EncodedExfilDetectorConfig, EncodedExfilDetectorPlugin
-from .encoded_exfil_detection_rust import py_scan_container
 
 __all__ = [
     "EncodedExfilDetectorConfig",
     "EncodedExfilDetectorPlugin",
-    "py_scan_container",
 ]
