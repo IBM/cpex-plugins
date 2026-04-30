@@ -150,7 +150,7 @@ class Model:
     def model_dump(self):
         if type(self).dumping:
             type(self).dumping = False
-            return Model()
+            return type(self)()
         return self
 "#,
         )
@@ -189,7 +189,7 @@ class Model:
     def model_dump(self):
         if type(self).dumping:
             type(self).dumping = False
-            return Model()
+            return type(self)()
         return self
 "#,
         )
@@ -276,6 +276,93 @@ class Model:
             redacted.getattr("token")?.extract::<String>()?,
             "AWS_ACCESS_KEY_ID=[REDACTED]"
         );
+
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn scan_container_scans_secret_under_non_string_object_dict_key() {
+    Python::initialize();
+    Python::attach(|py| -> PyResult<()> {
+        let code = CString::new(
+            r#"
+class BadKey:
+    pass
+
+class Model:
+    def __init__(self):
+        self.label = "clean"
+        self.__dict__[BadKey()] = "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+"#,
+        )
+        .unwrap();
+        let module = PyModule::from_code(py, code.as_c_str(), c"test_module.py", c"test_module")?;
+        let instance = module.getattr("Model")?.call0()?;
+        let config = SecretsDetectionConfig {
+            redact: true,
+            redaction_text: "[REDACTED]".to_string(),
+            ..Default::default()
+        };
+
+        let (count, redacted, findings) = scan_container(py, &instance, &config)?;
+
+        assert_eq!(count, 1);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(redacted.getattr("label")?.extract::<String>()?, "clean");
+        let redacted_dict = redacted.getattr("__dict__")?.cast_into::<PyDict>()?;
+        let values: Vec<String> = redacted_dict
+            .values()
+            .iter()
+            .map(|value| value.extract::<String>())
+            .collect::<PyResult<_>>()?;
+        assert!(
+            values
+                .iter()
+                .any(|value| value == "AWS_ACCESS_KEY_ID=[REDACTED]")
+        );
+
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn scan_container_scans_nested_same_type_model_dump_state() {
+    Python::initialize();
+    Python::attach(|py| -> PyResult<()> {
+        let code = CString::new(
+            r#"
+class Wrapper:
+    def __init__(self, value, nested=False):
+        self.value = value
+        self.nested = nested
+
+    def model_dump(self):
+        if self.nested:
+            return "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+        return Wrapper("clean", nested=True)
+"#,
+        )
+        .unwrap();
+        let module = PyModule::from_code(py, code.as_c_str(), c"test_module.py", c"test_module")?;
+        let instance = module.getattr("Wrapper")?.call1(("clean",))?;
+        let config = SecretsDetectionConfig {
+            redact: true,
+            redaction_text: "[REDACTED]".to_string(),
+            ..Default::default()
+        };
+
+        let (count, redacted, findings) = scan_container(py, &instance, &config)?;
+
+        assert_eq!(count, 1);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            redacted.extract::<String>()?,
+            "AWS_ACCESS_KEY_ID=[REDACTED]"
+        );
+        assert_eq!(instance.getattr("value")?.extract::<String>()?, "clean");
 
         Ok(())
     })

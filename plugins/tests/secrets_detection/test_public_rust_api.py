@@ -148,6 +148,38 @@ class TestPublicRustApi:
         assert redacted.value == "AWS_ACCESS_KEY_ID=[REDACTED]"
         assert payload.value == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
 
+    def test_scan_container_scans_non_string_dict_key_values_on_objects(self):
+        class BadKey:
+            pass
+
+        class SecretBox:
+            def __init__(self):
+                self.value = "clean"
+                self.__dict__[BadKey()] = "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+
+        payload = SecretBox()
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 1
+        assert findings == [{"type": "aws_access_key_id"}]
+        assert redacted is not payload
+        assert isinstance(redacted, SecretBox)
+        assert redacted.value == "clean"
+        assert payload.value == "clean"
+        assert any(
+            value == "AWS_ACCESS_KEY_ID=[REDACTED]"
+            for key, value in redacted.__dict__.items()
+            if not isinstance(key, str)
+        )
+        assert any(
+            value == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+            for key, value in payload.__dict__.items()
+            if not isinstance(key, str)
+        )
+
     def test_scan_container_omits_match_previews_from_public_findings(self):
         count, _, findings = py_scan_container(
             "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE",
@@ -557,6 +589,28 @@ assert redacted.value == "AWS_ACCESS_KEY_ID=[REDACTED]"
         assert len(findings) == 1
         assert isinstance(redacted, Wrapper)
         assert redacted.value == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        assert payload.value == "clean"
+
+    def test_scan_container_detects_nested_same_type_model_dump_only_secret(self):
+        class Wrapper:
+            def __init__(self, value, nested=False):
+                self.value = value
+                self.nested = nested
+
+            def model_dump(self):
+                if self.nested:
+                    return "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+                return Wrapper("clean", nested=True)
+
+        payload = Wrapper("clean")
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 1
+        assert findings == [{"type": "aws_access_key_id"}]
+        assert redacted == "AWS_ACCESS_KEY_ID=[REDACTED]"
         assert payload.value == "clean"
 
     def test_scan_container_handles_recursive_same_type_wrapper_without_rebuild_state(self):

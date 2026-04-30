@@ -8,8 +8,9 @@ use pyo3::types::{PyAny, PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyStri
 
 use crate::config::SecretsDetectionConfig;
 use crate::object_model::{
-    apply_object_state, copy_object_with_updates, dict_has_only_exact_string_keys,
-    inspect_object_state, prepare_rebuild_target,
+    InspectedObjectState, apply_object_state, copy_object_with_extra_dict_state,
+    copy_object_with_updates, dict_has_only_exact_string_keys, inspect_object_state,
+    inspect_object_state_without_model_dump, prepare_rebuild_target,
 };
 
 use super::cycle_rewrite::replace_placeholder_references;
@@ -22,20 +23,21 @@ pub fn scan_container<'py>(
 ) -> PyResult<(usize, Bound<'py, PyAny>, Bound<'py, PyList>)> {
     let mut seen = HashSet::new();
     let mut memo = HashMap::new();
-    scan_container_inner(py, container, config, &mut seen, &mut memo)
+    let str_type = py.import("builtins")?.getattr("str")?;
+    scan_container_inner(py, container, config, &str_type, &mut seen, &mut memo)
 }
 
 fn scan_container_inner<'py>(
     py: Python<'py>,
     container: &Bound<'py, PyAny>,
     config: &SecretsDetectionConfig,
+    str_type: &Bound<'py, PyAny>,
     seen: &mut HashSet<usize>,
     memo: &mut HashMap<usize, Py<PyAny>>,
 ) -> PyResult<(usize, Bound<'py, PyAny>, Bound<'py, PyList>)> {
     let findings = PyList::empty(py);
 
-    let str_type = py.import("builtins")?.getattr("str")?;
-    if container.is_instance(&str_type)? {
+    if container.is_instance(str_type)? {
         let text = container.extract::<String>()?;
         let (matches, redacted) = detect_and_redact(&text, config);
         for finding in &matches {
@@ -64,7 +66,7 @@ fn scan_container_inner<'py>(
         let mut total = 0usize;
         for (key, value) in dict.iter() {
             let (count, redacted_value, child_findings) =
-                scan_container_inner(py, &value, config, seen, memo)?;
+                scan_container_inner(py, &value, config, str_type, seen, memo)?;
             total += count;
             for finding in child_findings.iter() {
                 findings.append(finding)?;
@@ -81,7 +83,7 @@ fn scan_container_inner<'py>(
         let mut total = 0usize;
         for item in list.iter() {
             let (count, redacted_item, child_findings) =
-                scan_container_inner(py, &item, config, seen, memo)?;
+                scan_container_inner(py, &item, config, str_type, seen, memo)?;
             total += count;
             for finding in child_findings.iter() {
                 findings.append(finding)?;
@@ -99,7 +101,7 @@ fn scan_container_inner<'py>(
         let mut total = 0usize;
         for item in tuple.iter() {
             let (count, redacted_item, child_findings) =
-                scan_container_inner(py, &item, config, seen, memo)?;
+                scan_container_inner(py, &item, config, str_type, seen, memo)?;
             total += count;
             for finding in child_findings.iter() {
                 findings.append(finding)?;
@@ -121,54 +123,16 @@ fn scan_container_inner<'py>(
     }
 
     let object_state = inspect_object_state(py, container)?;
-    if object_state.rebuild_state.is_some() || object_state.serialized_state.is_some() {
-        let mut total = 0usize;
-        let mut rebuilt = None;
-        let has_rebuild_state = object_state.rebuild_state.is_some();
-        let rebuild_state_for_gate = object_state
-            .rebuild_state
-            .as_ref()
-            .map(|state| state.as_any().clone());
-
-        if let Some(state) = object_state.rebuild_state {
-            let target = prepare_rebuild_target(py, container)?;
-            memo.insert(object_id, target.clone().unbind());
-            let state_any = state.into_any();
-            let (count, redacted_state, child_findings) =
-                scan_container_inner(py, &state_any, config, seen, memo)?;
-            total += count;
-            for finding in child_findings.iter() {
-                findings.append(finding)?;
-            }
-            if count > 0 || !same_safe_value(&redacted_state, &state_any, &mut HashSet::new())? {
-                apply_object_state(py, &target, &redacted_state)?;
-                rebuilt = Some(target.into_any());
-            }
+    if object_state.rebuild_state.is_some()
+        || object_state.serialized_state.is_some()
+        || object_state.scan_state.is_some()
+    {
+        let (total, result, object_findings) =
+            scan_object_state(py, container, object_state, config, str_type, seen, memo)?;
+        for finding in object_findings.iter() {
+            findings.append(finding)?;
         }
-
-        if let Some(serialized_state) = object_state.serialized_state
-            && should_scan_serialized_state(
-                py,
-                container,
-                rebuild_state_for_gate.as_ref(),
-                &serialized_state,
-                has_rebuild_state,
-            )?
-        {
-            let (count, redacted_state, child_findings) =
-                scan_serialized_state_inner(py, container, &serialized_state, config, seen, memo)?;
-            total += count;
-            for finding in child_findings.iter() {
-                findings.append(finding)?;
-            }
-            if count > 0 {
-                let base = rebuilt.as_ref().unwrap_or(container);
-                rebuilt = Some(serialized_result(py, base, &redacted_state)?);
-            }
-        }
-
         seen.remove(&object_id);
-        let result = rebuilt.unwrap_or_else(|| container.clone());
         memo.remove(&object_id);
         return Ok((total, result, findings));
     }
@@ -177,35 +141,160 @@ fn scan_container_inner<'py>(
     Ok((0, container.clone(), findings))
 }
 
-fn scan_serialized_state_inner<'py>(
+struct SerializedScanTarget<'py> {
+    state: Bound<'py, PyAny>,
+    object_state: Option<InspectedObjectState<'py>>,
+}
+
+fn scan_object_state<'py>(
     py: Python<'py>,
     container: &Bound<'py, PyAny>,
-    serialized_state: &Bound<'py, PyAny>,
+    object_state: InspectedObjectState<'py>,
     config: &SecretsDetectionConfig,
+    str_type: &Bound<'py, PyAny>,
     seen: &mut HashSet<usize>,
     memo: &mut HashMap<usize, Py<PyAny>>,
 ) -> PyResult<(usize, Bound<'py, PyAny>, Bound<'py, PyList>)> {
-    if serialized_state.get_type().is(container.get_type()) {
-        let serialized_object_state = inspect_object_state(py, serialized_state)?;
-        if let Some(state) = serialized_object_state.rebuild_state {
-            return scan_container_inner(py, &state.into_any(), config, seen, memo);
+    let findings = PyList::empty(py);
+    let mut total = 0usize;
+    let mut rebuilt = None;
+    let rebuild_state_for_gate = object_state
+        .rebuild_state
+        .as_ref()
+        .map(|state| state.as_any().clone());
+    let rebuild_state_for_extra = object_state.rebuild_state.as_ref().cloned();
+    let has_rebuild_state = object_state.rebuild_state.is_some();
+
+    if let Some(state) = object_state.rebuild_state {
+        let target = prepare_rebuild_target(py, container)?;
+        memo.insert(container.as_ptr() as usize, target.clone().unbind());
+        let state_any = state.into_any();
+        let (count, redacted_state, child_findings) =
+            scan_container_inner(py, &state_any, config, str_type, seen, memo)?;
+        total += count;
+        for finding in child_findings.iter() {
+            findings.append(finding)?;
+        }
+        if count > 0 || !same_safe_value(&redacted_state, &state_any, &mut HashSet::new())? {
+            apply_object_state(py, &target, &redacted_state)?;
+            rebuilt = Some(target.into_any());
         }
     }
 
-    scan_container_inner(py, serialized_state, config, seen, memo)
+    if let Some(scan_state) = object_state.scan_state {
+        let scan_state_any = scan_state.clone().into_any();
+        let (count, redacted_state, child_findings) =
+            scan_container_inner(py, &scan_state_any, config, str_type, seen, memo)?;
+        total += count;
+        for finding in child_findings.iter() {
+            findings.append(finding)?;
+        }
+        if count > 0 {
+            let base = rebuilt.as_ref().unwrap_or(container);
+            rebuilt = Some(
+                copy_object_with_extra_dict_state(
+                    py,
+                    base,
+                    rebuild_state_for_extra.as_ref(),
+                    redacted_state.cast::<PyDict>()?,
+                )?
+                .bind(py)
+                .clone(),
+            );
+        }
+    }
+
+    if let Some(serialized_state) = object_state.serialized_state
+        && let Some(target) = serialized_scan_target(
+            py,
+            container,
+            rebuild_state_for_gate.as_ref(),
+            &serialized_state,
+            has_rebuild_state,
+        )?
+    {
+        let (count, redacted_state, child_findings) =
+            scan_serialized_state_target(py, target, config, str_type, seen, memo)?;
+        total += count;
+        for finding in child_findings.iter() {
+            findings.append(finding)?;
+        }
+        if count > 0 {
+            let base = rebuilt.as_ref().unwrap_or(container);
+            rebuilt = Some(serialized_result(py, base, &redacted_state)?);
+        }
+    }
+
+    Ok((
+        total,
+        rebuilt.unwrap_or_else(|| container.clone()),
+        findings,
+    ))
 }
 
-fn should_scan_serialized_state(
-    py: Python<'_>,
-    container: &Bound<'_, PyAny>,
-    rebuild_state: Option<&Bound<'_, PyAny>>,
-    serialized_state: &Bound<'_, PyAny>,
+fn scan_serialized_state_target<'py>(
+    py: Python<'py>,
+    target: SerializedScanTarget<'py>,
+    config: &SecretsDetectionConfig,
+    str_type: &Bound<'py, PyAny>,
+    seen: &mut HashSet<usize>,
+    memo: &mut HashMap<usize, Py<PyAny>>,
+) -> PyResult<(usize, Bound<'py, PyAny>, Bound<'py, PyList>)> {
+    if let Some(object_state) = target.object_state {
+        let object_id = target.state.as_ptr() as usize;
+        if !seen.insert(object_id) {
+            let findings = PyList::empty(py);
+            if let Some(existing) = memo.get(&object_id) {
+                return Ok((0, existing.bind(py).clone(), findings));
+            }
+            return Ok((0, target.state, findings));
+        }
+        let result = scan_object_state(
+            py,
+            &target.state,
+            object_state,
+            config,
+            str_type,
+            seen,
+            memo,
+        )?;
+        seen.remove(&object_id);
+        memo.remove(&object_id);
+        return Ok(result);
+    }
+
+    scan_container_inner(py, &target.state, config, str_type, seen, memo)
+}
+
+#[cfg(test)]
+fn should_scan_serialized_state<'py>(
+    py: Python<'py>,
+    container: &Bound<'py, PyAny>,
+    rebuild_state: Option<&Bound<'py, PyAny>>,
+    serialized_state: &Bound<'py, PyAny>,
     has_rebuild_state: bool,
 ) -> PyResult<bool> {
+    Ok(serialized_scan_target(
+        py,
+        container,
+        rebuild_state,
+        serialized_state,
+        has_rebuild_state,
+    )?
+    .is_some())
+}
+
+fn serialized_scan_target<'py>(
+    py: Python<'py>,
+    container: &Bound<'py, PyAny>,
+    rebuild_state: Option<&Bound<'py, PyAny>>,
+    serialized_state: &Bound<'py, PyAny>,
+    has_rebuild_state: bool,
+) -> PyResult<Option<SerializedScanTarget<'py>>> {
     if let Some(rebuild_state) = rebuild_state
         && serialized_duplicates_rebuild_root(serialized_state, rebuild_state)?
     {
-        return Ok(false);
+        return Ok(None);
     }
 
     if serialized_state.is_exact_instance_of::<PyString>() {
@@ -213,48 +302,96 @@ fn should_scan_serialized_state(
             && rebuild_state.is_exact_instance_of::<PyString>()
             && serialized_state.eq(rebuild_state)?
         {
-            return Ok(false);
+            return Ok(None);
         }
-        return Ok(true);
+        return Ok(Some(SerializedScanTarget {
+            state: serialized_state.clone(),
+            object_state: None,
+        }));
     }
 
     if serialized_state.is_exact_instance_of::<PyDict>() {
         if let Some(rebuild_state) = rebuild_state
             && serialized_dict_duplicates_rebuild_state(serialized_state, rebuild_state)?
         {
-            return Ok(false);
+            return Ok(None);
         }
-        return Ok(true);
+        return Ok(Some(SerializedScanTarget {
+            state: serialized_state.clone(),
+            object_state: None,
+        }));
     }
 
     if serialized_state.is_exact_instance_of::<PyList>() {
-        return Ok(true);
+        return Ok(Some(SerializedScanTarget {
+            state: serialized_state.clone(),
+            object_state: None,
+        }));
     }
 
     if serialized_state.is_exact_instance_of::<PyTuple>() {
-        return Ok(true);
+        return Ok(Some(SerializedScanTarget {
+            state: serialized_state.clone(),
+            object_state: None,
+        }));
     }
 
     if !has_rebuild_state {
-        return Ok(!serialized_state.get_type().is(container.get_type()));
+        if serialized_state.get_type().is(container.get_type()) {
+            return Ok(None);
+        }
+        return Ok(Some(SerializedScanTarget {
+            state: serialized_state.clone(),
+            object_state: None,
+        }));
     }
 
     if !serialized_state.get_type().is(container.get_type()) {
-        return Ok(true);
+        return Ok(Some(SerializedScanTarget {
+            state: serialized_state.clone(),
+            object_state: None,
+        }));
     }
 
-    let serialized_object_state = inspect_object_state(py, serialized_state)?;
+    let serialized_object_state = if is_pydantic_model(serialized_state)? {
+        inspect_object_state_without_model_dump(py, serialized_state)?
+    } else {
+        inspect_object_state(py, serialized_state)?
+    };
     let Some(serialized_rebuild_state) = serialized_object_state.rebuild_state.as_ref() else {
-        return Ok(false);
+        return Ok(None);
     };
     let Some(rebuild_state) = rebuild_state else {
-        return Ok(false);
+        return Ok(None);
     };
-    Ok(!same_safe_value(
+    let duplicates = same_safe_value(
         serialized_rebuild_state.as_any(),
         rebuild_state,
         &mut HashSet::new(),
-    )?)
+    )?;
+    if duplicates {
+        if let Some(nested_serialized_state) = serialized_object_state.serialized_state.as_ref()
+            && !nested_serialized_state
+                .get_type()
+                .is(serialized_state.get_type())
+        {
+            return Ok(Some(SerializedScanTarget {
+                state: nested_serialized_state.clone(),
+                object_state: None,
+            }));
+        }
+        if serialized_object_state.scan_state.is_none() {
+            return Ok(None);
+        }
+    }
+    Ok(Some(SerializedScanTarget {
+        state: serialized_state.clone(),
+        object_state: Some(serialized_object_state),
+    }))
+}
+
+fn is_pydantic_model(value: &Bound<'_, PyAny>) -> PyResult<bool> {
+    value.hasattr("__pydantic_serializer__")
 }
 
 fn serialized_duplicates_rebuild_root(
