@@ -1314,6 +1314,48 @@ class TestPluginHookResults:
         assert result.violation is not None
         assert result.violation.code == "SECRETS_DETECTED"
 
+    async def test_tool_post_invoke_does_not_double_count_model_dump_fields(self):
+        class SecretModel(BaseModel):
+            text: str
+
+        plugin = SecretsDetectionPlugin(
+            _make_config(block_on_detection=True, redact=False, min_findings_to_block=2)
+        )
+        payload = ToolPostInvokePayload(
+            name="writer",
+            result=SecretModel(text="AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"),
+        )
+
+        result = await plugin.tool_post_invoke(payload, _make_context())
+
+        assert result.continue_processing is True
+        assert result.violation is None
+        assert result.metadata == {
+            "count": 1,
+            "secrets_findings": [{"type": "aws_access_key_id"}],
+        }
+
+    async def test_tool_post_invoke_does_not_double_count_model_dump_list_fields(self):
+        class SecretListModel(BaseModel):
+            items: list[str]
+
+        plugin = SecretsDetectionPlugin(
+            _make_config(block_on_detection=True, redact=False, min_findings_to_block=2)
+        )
+        payload = ToolPostInvokePayload(
+            name="writer",
+            result=SecretListModel(items=["AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"]),
+        )
+
+        result = await plugin.tool_post_invoke(payload, _make_context())
+
+        assert result.continue_processing is True
+        assert result.violation is None
+        assert result.metadata == {
+            "count": 1,
+            "secrets_findings": [{"type": "aws_access_key_id"}],
+        }
+
     async def test_tool_post_invoke_redacts_secret_exposed_only_by_model_dump(self, plugin):
         class SplitSecretModel(BaseModel):
             prefix: str

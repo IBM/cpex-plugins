@@ -192,6 +192,11 @@ fn should_scan_serialized_state(
     }
 
     if serialized_state.is_exact_instance_of::<PyDict>() {
+        if let Some(rebuild_state) = rebuild_state
+            && serialized_dict_duplicates_rebuild_state(serialized_state, rebuild_state)?
+        {
+            return Ok(false);
+        }
         return Ok(true);
     }
 
@@ -219,6 +224,92 @@ fn should_scan_serialized_state(
         return Ok(false);
     };
     Ok(!serialized_rebuild_state.as_any().eq(rebuild_state)?)
+}
+
+fn serialized_dict_duplicates_rebuild_state(
+    serialized_state: &Bound<'_, PyAny>,
+    rebuild_state: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    let serialized_dict = serialized_state.cast::<PyDict>()?;
+    let Ok(rebuild_dict) = rebuild_state.cast::<PyDict>() else {
+        return Ok(false);
+    };
+
+    if !dict_has_only_exact_string_keys(serialized_dict)
+        || !dict_has_only_exact_string_keys(rebuild_dict)
+    {
+        return Ok(false);
+    }
+
+    for (key, serialized_value) in serialized_dict.iter() {
+        let Some(rebuild_value) = rebuild_dict.get_item(&key)? else {
+            return Ok(false);
+        };
+        if !same_safe_value(&serialized_value, &rebuild_value)? {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
+}
+
+fn same_safe_value(left: &Bound<'_, PyAny>, right: &Bound<'_, PyAny>) -> PyResult<bool> {
+    if left.is(right) {
+        return Ok(true);
+    }
+
+    if left.is_exact_instance_of::<PyString>() && right.is_exact_instance_of::<PyString>() {
+        return Ok(left.extract::<String>()? == right.extract::<String>()?);
+    }
+
+    if let (Ok(left_list), Ok(right_list)) = (left.cast::<PyList>(), right.cast::<PyList>()) {
+        if left_list.len() != right_list.len() {
+            return Ok(false);
+        }
+        for (left_item, right_item) in left_list.iter().zip(right_list.iter()) {
+            if !same_safe_value(&left_item, &right_item)? {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
+    }
+
+    if let (Ok(left_tuple), Ok(right_tuple)) = (left.cast::<PyTuple>(), right.cast::<PyTuple>()) {
+        if left_tuple.len() != right_tuple.len() {
+            return Ok(false);
+        }
+        for (left_item, right_item) in left_tuple.iter().zip(right_tuple.iter()) {
+            if !same_safe_value(&left_item, &right_item)? {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
+    }
+
+    if let (Ok(left_dict), Ok(right_dict)) = (left.cast::<PyDict>(), right.cast::<PyDict>()) {
+        if left_dict.len() != right_dict.len()
+            || !dict_has_only_exact_string_keys(left_dict)
+            || !dict_has_only_exact_string_keys(right_dict)
+        {
+            return Ok(false);
+        }
+        for (key, left_value) in left_dict.iter() {
+            let Some(right_value) = right_dict.get_item(&key)? else {
+                return Ok(false);
+            };
+            if !same_safe_value(&left_value, &right_value)? {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
+fn dict_has_only_exact_string_keys(dict: &Bound<'_, PyDict>) -> bool {
+    dict.iter()
+        .all(|(key, _)| key.is_exact_instance_of::<PyString>())
 }
 
 fn serialized_result<'py>(
@@ -368,6 +459,99 @@ dummy = object()
                     true,
                 )?);
             }
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn scan_container_does_not_double_count_matching_model_dump_dict() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let code = CString::new(
+                r#"
+class Model:
+    def __init__(self):
+        self.text = "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+
+    def model_dump(self):
+        return {"text": self.text}
+"#,
+            )
+            .unwrap();
+            let module =
+                PyModule::from_code(py, code.as_c_str(), c"test_module.py", c"test_module")?;
+            let instance = module.getattr("Model")?.call0()?;
+            let config = SecretsDetectionConfig::default();
+
+            let (count, _, findings) = scan_container(py, &instance, &config)?;
+
+            assert_eq!(count, 1);
+            assert_eq!(findings.len(), 1);
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn scan_container_does_not_double_count_matching_model_dump_list() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let code = CString::new(
+                r#"
+class Model:
+    def __init__(self):
+        self.items = ["AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"]
+
+    def model_dump(self):
+        return {"items": list(self.items)}
+"#,
+            )
+            .unwrap();
+            let module =
+                PyModule::from_code(py, code.as_c_str(), c"test_module.py", c"test_module")?;
+            let instance = module.getattr("Model")?.call0()?;
+            let config = SecretsDetectionConfig::default();
+
+            let (count, _, findings) = scan_container(py, &instance, &config)?;
+
+            assert_eq!(count, 1);
+            assert_eq!(findings.len(), 1);
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn duplicate_gate_ignores_non_string_model_dump_keys_without_lookup() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let code = CString::new(
+                r#"
+class BadKey:
+    def __hash__(self):
+        return hash("text")
+
+    def __eq__(self, other):
+        raise RuntimeError("duplicate gate should not compare custom keys")
+"#,
+            )
+            .unwrap();
+            let module =
+                PyModule::from_code(py, code.as_c_str(), c"test_module.py", c"test_module")?;
+            let bad_key = module.getattr("BadKey")?.call0()?;
+            let serialized = PyDict::new(py);
+            serialized.set_item(&bad_key, "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")?;
+            let rebuild = PyDict::new(py);
+            rebuild.set_item("text", "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")?;
+
+            let duplicates =
+                serialized_dict_duplicates_rebuild_state(serialized.as_any(), rebuild.as_any())?;
+
+            assert!(!duplicates);
 
             Ok(())
         })
