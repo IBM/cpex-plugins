@@ -374,6 +374,85 @@ class Model:
 }
 
 #[test]
+fn scan_container_preserves_clean_non_string_dict_values_when_rebuilt() {
+    Python::initialize();
+    Python::attach(|py| -> PyResult<()> {
+        let code = CString::new(
+            r#"
+class BadKey:
+    pass
+
+class Model:
+    def __init__(self):
+        self.token = "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+        self.__dict__[BadKey()] = "side-channel"
+"#,
+        )
+        .unwrap();
+        let module = PyModule::from_code(py, code.as_c_str(), c"test_module.py", c"test_module")?;
+        let instance = module.getattr("Model")?.call0()?;
+        let config = SecretsDetectionConfig {
+            redact: true,
+            redaction_text: "[REDACTED]".to_string(),
+            ..Default::default()
+        };
+
+        let (count, redacted, findings) = scan_container(py, &instance, &config)?;
+
+        assert_eq!(count, 1);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            redacted.getattr("token")?.extract::<String>()?,
+            "AWS_ACCESS_KEY_ID=[REDACTED]"
+        );
+        let redacted_dict = redacted.getattr("__dict__")?.cast_into::<PyDict>()?;
+        let values: Vec<String> = redacted_dict
+            .values()
+            .iter()
+            .filter_map(|value| value.extract::<String>().ok())
+            .collect();
+        assert!(values.iter().any(|value| value == "side-channel"));
+
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn scan_container_returns_original_for_clean_scan_state_only_object() {
+    Python::initialize();
+    Python::attach(|py| -> PyResult<()> {
+        let code = CString::new(
+            r#"
+class BadKey:
+    pass
+
+class Model:
+    def __init__(self):
+        self.__dict__[BadKey()] = "side-channel"
+"#,
+        )
+        .unwrap();
+        let module = PyModule::from_code(py, code.as_c_str(), c"test_module.py", c"test_module")?;
+        let instance = module.getattr("Model")?.call0()?;
+        let config = SecretsDetectionConfig {
+            redact: true,
+            redaction_text: "[REDACTED]".to_string(),
+            ..Default::default()
+        };
+
+        let (count, redacted, findings) = scan_container(py, &instance, &config)?;
+
+        assert_eq!(count, 0);
+        assert_eq!(findings.len(), 0);
+        assert!(redacted.is(&instance));
+
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
 fn scan_container_rewrites_scan_state_only_back_edges() {
     Python::initialize();
     Python::attach(|py| -> PyResult<()> {

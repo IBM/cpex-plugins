@@ -183,6 +183,7 @@ fn scan_object_state<'py>(
     }
 
     if let Some(scan_state) = object_state.scan_state {
+        let had_rebuilt_before_scan_state = rebuilt.is_some();
         if rebuilt.is_none() {
             let target = prepare_rebuild_target(py, container)?;
             if let Some(state) = rebuild_state_for_extra.as_ref() {
@@ -199,9 +200,12 @@ fn scan_object_state<'py>(
         for finding in child_findings.iter() {
             findings.append(finding)?;
         }
-        if count > 0 {
+        if count > 0 || had_rebuilt_before_scan_state {
             let base = rebuilt.as_ref().expect("scan_state target exists");
             apply_extra_dict_state(py, base, redacted_state.cast::<PyDict>()?)?;
+        } else {
+            rebuilt = None;
+            memo.remove(&(container.as_ptr() as usize));
         }
     }
 
