@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyFrozenSet, PyList, PySet, PyTuple};
+use pyo3::types::{PyAny, PyDict, PyFrozenSet, PyList, PySet, PyString, PyTuple};
 
 pub struct InspectedObjectState<'py> {
     pub rebuild_state: Option<Bound<'py, PyDict>>,
@@ -19,7 +19,9 @@ pub fn inspect_object_state<'py>(
     if let Ok(model_dump) = container.call_method0("model_dump") {
         if let Ok(model_state) = model_dump.cast::<PyDict>() {
             serialized_state = Some(model_state.clone().into_any());
-            mappings.push(model_state)?;
+            if dict_has_only_exact_string_keys(model_state) {
+                mappings.push(model_state)?;
+            }
         } else if !model_dump.is(container) {
             serialized_state = Some(model_dump);
         }
@@ -242,6 +244,11 @@ fn merge_state_into(target: &Bound<'_, PyDict>, source: &Bound<'_, PyDict>) -> P
         target.set_item(key, value)?;
     }
     Ok(())
+}
+
+fn dict_has_only_exact_string_keys(dict: &Bound<'_, PyDict>) -> bool {
+    dict.iter()
+        .all(|(key, _)| key.is_exact_instance_of::<PyString>())
 }
 
 struct MappingStateAccumulator<'py> {

@@ -33,7 +33,8 @@ fn scan_container_inner<'py>(
 ) -> PyResult<(usize, Bound<'py, PyAny>, Bound<'py, PyList>)> {
     let findings = PyList::empty(py);
 
-    if let Ok(text) = container.extract::<String>() {
+    if container.is_exact_instance_of::<PyString>() {
+        let text = container.extract::<String>()?;
         let (matches, redacted) = detect_and_redact(&text, config);
         for finding in &matches {
             let finding_dict = PyDict::new(py);
@@ -137,7 +138,7 @@ fn scan_container_inner<'py>(
             for finding in child_findings.iter() {
                 findings.append(finding)?;
             }
-            if count > 0 || !redacted_state.eq(&state_any)? {
+            if count > 0 || !same_safe_value(&redacted_state, &state_any, &mut HashSet::new())? {
                 apply_object_state(py, &target, &redacted_state)?;
                 rebuilt = Some(target.into_any());
             }
@@ -245,7 +246,7 @@ fn serialized_dict_duplicates_rebuild_state(
         let Some(rebuild_value) = rebuild_dict.get_item(&key)? else {
             return Ok(false);
         };
-        if !same_safe_value(&serialized_value, &rebuild_value)? {
+        if !same_safe_value(&serialized_value, &rebuild_value, &mut HashSet::new())? {
             return Ok(false);
         }
     }
@@ -253,7 +254,11 @@ fn serialized_dict_duplicates_rebuild_state(
     Ok(true)
 }
 
-fn same_safe_value(left: &Bound<'_, PyAny>, right: &Bound<'_, PyAny>) -> PyResult<bool> {
+fn same_safe_value(
+    left: &Bound<'_, PyAny>,
+    right: &Bound<'_, PyAny>,
+    seen: &mut HashSet<(usize, usize)>,
+) -> PyResult<bool> {
     if left.is(right) {
         return Ok(true);
     }
@@ -262,12 +267,19 @@ fn same_safe_value(left: &Bound<'_, PyAny>, right: &Bound<'_, PyAny>) -> PyResul
         return Ok(left.extract::<String>()? == right.extract::<String>()?);
     }
 
+    if is_exact_safe_scalar_pair(left, right) {
+        return left.eq(right);
+    }
+
     if let (Ok(left_list), Ok(right_list)) = (left.cast::<PyList>(), right.cast::<PyList>()) {
+        if !seen.insert((left.as_ptr() as usize, right.as_ptr() as usize)) {
+            return Ok(false);
+        }
         if left_list.len() != right_list.len() {
             return Ok(false);
         }
         for (left_item, right_item) in left_list.iter().zip(right_list.iter()) {
-            if !same_safe_value(&left_item, &right_item)? {
+            if !same_safe_value(&left_item, &right_item, seen)? {
                 return Ok(false);
             }
         }
@@ -275,11 +287,14 @@ fn same_safe_value(left: &Bound<'_, PyAny>, right: &Bound<'_, PyAny>) -> PyResul
     }
 
     if let (Ok(left_tuple), Ok(right_tuple)) = (left.cast::<PyTuple>(), right.cast::<PyTuple>()) {
+        if !seen.insert((left.as_ptr() as usize, right.as_ptr() as usize)) {
+            return Ok(false);
+        }
         if left_tuple.len() != right_tuple.len() {
             return Ok(false);
         }
         for (left_item, right_item) in left_tuple.iter().zip(right_tuple.iter()) {
-            if !same_safe_value(&left_item, &right_item)? {
+            if !same_safe_value(&left_item, &right_item, seen)? {
                 return Ok(false);
             }
         }
@@ -287,6 +302,9 @@ fn same_safe_value(left: &Bound<'_, PyAny>, right: &Bound<'_, PyAny>) -> PyResul
     }
 
     if let (Ok(left_dict), Ok(right_dict)) = (left.cast::<PyDict>(), right.cast::<PyDict>()) {
+        if !seen.insert((left.as_ptr() as usize, right.as_ptr() as usize)) {
+            return Ok(false);
+        }
         if left_dict.len() != right_dict.len()
             || !dict_has_only_exact_string_keys(left_dict)
             || !dict_has_only_exact_string_keys(right_dict)
@@ -297,7 +315,7 @@ fn same_safe_value(left: &Bound<'_, PyAny>, right: &Bound<'_, PyAny>) -> PyResul
             let Some(right_value) = right_dict.get_item(&key)? else {
                 return Ok(false);
             };
-            if !same_safe_value(&left_value, &right_value)? {
+            if !same_safe_value(&left_value, &right_value, seen)? {
                 return Ok(false);
             }
         }
@@ -310,6 +328,36 @@ fn same_safe_value(left: &Bound<'_, PyAny>, right: &Bound<'_, PyAny>) -> PyResul
 fn dict_has_only_exact_string_keys(dict: &Bound<'_, PyDict>) -> bool {
     dict.iter()
         .all(|(key, _)| key.is_exact_instance_of::<PyString>())
+}
+
+fn is_exact_safe_scalar_pair(left: &Bound<'_, PyAny>, right: &Bound<'_, PyAny>) -> bool {
+    let left_module = left
+        .get_type()
+        .module()
+        .and_then(|module| module.extract::<String>());
+    let left_name = left
+        .get_type()
+        .name()
+        .and_then(|name| name.extract::<String>());
+    let right_module = right
+        .get_type()
+        .module()
+        .and_then(|module| module.extract::<String>());
+    let right_name = right
+        .get_type()
+        .name()
+        .and_then(|name| name.extract::<String>());
+    match (
+        left_module.as_deref(),
+        left_name.as_deref(),
+        right_module.as_deref(),
+        right_name.as_deref(),
+    ) {
+        (Ok("builtins"), Ok(left_name), Ok("builtins"), Ok(right_name)) => {
+            left_name == right_name && matches!(left_name, "int" | "float" | "bool" | "bytes")
+        }
+        _ => false,
+    }
 }
 
 fn serialized_result<'py>(
@@ -526,6 +574,70 @@ class Model:
     }
 
     #[test]
+    fn scan_container_does_not_double_count_with_copied_model_dump_scalar() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let code = CString::new(
+                r#"
+class Model:
+    def __init__(self):
+        self.text = "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+        self.num = int("1000000000000000000000")
+
+    def model_dump(self):
+        return {"text": self.text, "num": int(str(self.num))}
+"#,
+            )
+            .unwrap();
+            let module =
+                PyModule::from_code(py, code.as_c_str(), c"test_module.py", c"test_module")?;
+            let instance = module.getattr("Model")?.call0()?;
+            let config = SecretsDetectionConfig::default();
+
+            let (count, _, findings) = scan_container(py, &instance, &config)?;
+
+            assert_eq!(count, 1);
+            assert_eq!(findings.len(), 1);
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn scan_container_scans_cyclic_model_dump_without_duplicate_gate_recursion() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let code = CString::new(
+                r#"
+class Model:
+    def __init__(self):
+        self.items = []
+        self.items.append(self.items)
+
+    def model_dump(self):
+        items = []
+        items.append(items)
+        return {"items": items}
+"#,
+            )
+            .unwrap();
+            let module =
+                PyModule::from_code(py, code.as_c_str(), c"test_module.py", c"test_module")?;
+            let instance = module.getattr("Model")?.call0()?;
+            let config = SecretsDetectionConfig::default();
+
+            let (count, _, findings) = scan_container(py, &instance, &config)?;
+
+            assert_eq!(count, 0);
+            assert_eq!(findings.len(), 0);
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
     fn duplicate_gate_ignores_non_string_model_dump_keys_without_lookup() {
         Python::initialize();
         Python::attach(|py| -> PyResult<()> {
@@ -533,7 +645,7 @@ class Model:
                 r#"
 class BadKey:
     def __hash__(self):
-        return hash("text")
+        return hash("bad-key")
 
     def __eq__(self, other):
         raise RuntimeError("duplicate gate should not compare custom keys")
@@ -552,6 +664,43 @@ class BadKey:
                 serialized_dict_duplicates_rebuild_state(serialized.as_any(), rebuild.as_any())?;
 
             assert!(!duplicates);
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn scan_container_ignores_duplicate_gate_for_non_string_model_dump_keys() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let code = CString::new(
+                r#"
+class BadKey:
+    def __hash__(self):
+        return hash("bad-key")
+
+    def __eq__(self, other):
+        raise RuntimeError("duplicate gate should not compare custom keys")
+
+class Model:
+    def __init__(self):
+        self.text = "clean"
+
+    def model_dump(self):
+        return {BadKey(): "clean"}
+"#,
+            )
+            .unwrap();
+            let module =
+                PyModule::from_code(py, code.as_c_str(), c"test_module.py", c"test_module")?;
+            let instance = module.getattr("Model")?.call0()?;
+            let config = SecretsDetectionConfig::default();
+
+            let (count, _, findings) = scan_container(py, &instance, &config)?;
+
+            assert_eq!(count, 0);
+            assert_eq!(findings.len(), 0);
 
             Ok(())
         })
