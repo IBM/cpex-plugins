@@ -1,54 +1,7 @@
-import subprocess
-import sys
-
 import pytest
-from pydantic import BaseModel, RootModel, model_serializer
 
-from mcpgateway.common.models import ResourceContent
-from mcpgateway.plugins.framework import (
-    PluginConfig,
-    PluginContext,
-    PluginManager,
-    PluginMode,
-    PromptHookType,
-    PromptPrehookPayload,
-    ResourceHookType,
-    ResourcePostFetchPayload,
-    ToolPostInvokePayload,
-    ToolHookType,
-)
-from mcpgateway.plugins.framework.models import GlobalContext
+from secrets_detection.helpers import *  # noqa: F403,F405
 
-from cpex_secrets_detection.secrets_detection import SecretsDetectionPlugin
-from cpex_secrets_detection.secrets_detection_rust import py_scan_container
-
-
-def make_context() -> PluginContext:
-    return PluginContext(
-        global_context=GlobalContext(request_id="req-secrets", server_id="srv-secrets")
-    )
-
-
-def make_config(**overrides) -> PluginConfig:
-    config = {
-        "block_on_detection": False,
-        "redact": True,
-        "redaction_text": "[REDACTED]",
-    }
-    config.update(overrides)
-    return PluginConfig(
-        name="secrets_detection",
-        kind="cpex_secrets_detection.secrets_detection.SecretsDetectionPlugin",
-        config=config,
-    )
-
-
-def _make_context() -> PluginContext:
-    return make_context()
-
-
-def _make_config(**overrides) -> PluginConfig:
-    return make_config(**overrides)
 
 async def test_prompt_pre_fetch_rebuilds_frozen_payload_on_redaction():
     plugin = SecretsDetectionPlugin(make_config())
