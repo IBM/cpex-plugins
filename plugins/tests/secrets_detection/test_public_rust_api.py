@@ -261,6 +261,41 @@ class TestPublicRustApi:
             if not isinstance(key, str)
         )
 
+    def test_scan_container_preserves_clean_non_string_dict_values_after_model_dump_redaction(self):
+        class BadKey:
+            pass
+
+        class SecretBox:
+            def __init__(self):
+                self.value = "clean"
+                self.__dict__[BadKey()] = "side-channel"
+                self.__dict__[BadKey()] = self
+
+            def model_dump(self):
+                return {"value": "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"}
+
+        payload = SecretBox()
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 1
+        assert findings == [{"type": "aws_access_key_id"}]
+        assert redacted is not payload
+        assert isinstance(redacted, SecretBox)
+        assert redacted.value == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        assert any(
+            value == "side-channel"
+            for key, value in redacted.__dict__.items()
+            if not isinstance(key, str)
+        )
+        assert any(
+            value is redacted
+            for key, value in redacted.__dict__.items()
+            if not isinstance(key, str)
+        )
+
     def test_scan_container_rewrites_non_string_dict_back_edges_on_objects(self):
         class BadKey:
             pass

@@ -146,6 +146,11 @@ struct SerializedScanTarget<'py> {
     object_state: Option<InspectedObjectState<'py>>,
 }
 
+struct PendingScanState<'py> {
+    state: Bound<'py, PyDict>,
+    placeholder: Bound<'py, PyAny>,
+}
+
 fn scan_object_state<'py>(
     py: Python<'py>,
     container: &Bound<'py, PyAny>,
@@ -164,6 +169,7 @@ fn scan_object_state<'py>(
         .map(|state| state.as_any().clone());
     let mut rebuild_state_for_extra = object_state.rebuild_state.as_ref().cloned();
     let has_rebuild_state = object_state.rebuild_state.is_some();
+    let mut pending_scan_state = None;
 
     if let Some(state) = object_state.rebuild_state {
         let target = prepare_rebuild_target(py, container)?;
@@ -204,7 +210,11 @@ fn scan_object_state<'py>(
             let base = rebuilt.as_ref().expect("scan_state target exists");
             apply_extra_dict_state(py, base, redacted_state.cast::<PyDict>()?)?;
         } else {
-            rebuilt = None;
+            let placeholder = rebuilt.take().expect("scan_state target exists");
+            pending_scan_state = Some(PendingScanState {
+                state: redacted_state.cast::<PyDict>()?.clone(),
+                placeholder,
+            });
             memo.remove(&(container.as_ptr() as usize));
         }
     }
@@ -226,7 +236,21 @@ fn scan_object_state<'py>(
         }
         if count > 0 {
             let base = rebuilt.as_ref().unwrap_or(container);
-            rebuilt = Some(serialized_result(py, base, &redacted_state)?);
+            let serialized_rebuilt = serialized_result(py, base, &redacted_state)?;
+            if let Some(pending) = pending_scan_state.as_ref()
+                && serialized_rebuilt.hasattr("__dict__")?
+            {
+                let mut rewrite_seen = HashSet::new();
+                let _ = replace_placeholder_references(
+                    py,
+                    &pending.state.clone().into_any(),
+                    &pending.placeholder,
+                    &serialized_rebuilt,
+                    &mut rewrite_seen,
+                )?;
+                apply_extra_dict_state(py, &serialized_rebuilt, &pending.state)?;
+            }
+            rebuilt = Some(serialized_rebuilt);
         }
     }
 
