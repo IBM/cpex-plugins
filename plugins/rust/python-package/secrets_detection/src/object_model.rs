@@ -29,6 +29,7 @@ pub fn inspect_object_state<'py>(
 
     if let Ok(dict_state) = container.getattr("__dict__")
         && let Ok(dict_state) = dict_state.cast::<PyDict>()
+        && dict_has_only_exact_string_keys(dict_state)
     {
         mappings.push(dict_state)?;
     }

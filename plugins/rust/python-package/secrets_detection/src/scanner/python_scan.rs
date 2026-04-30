@@ -246,6 +246,9 @@ fn serialized_duplicates_rebuild_root(
     let Ok(rebuild_dict) = rebuild_state.cast::<PyDict>() else {
         return Ok(false);
     };
+    if !dict_has_only_exact_string_keys(rebuild_dict) {
+        return Ok(false);
+    }
     let Some(root) = rebuild_dict.get_item("root")? else {
         return Ok(false);
     };
@@ -586,6 +589,75 @@ class Model:
 
             assert_eq!(count, 0);
             assert!(findings.is_empty());
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn root_duplicate_gate_rejects_non_string_rebuild_keys_before_lookup() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let code = CString::new(
+                r#"
+class BadKey:
+    def __hash__(self):
+        return hash("root")
+
+    def __eq__(self, other):
+        raise RuntimeError("root lookup should not compare custom keys")
+
+class Model:
+    def __init__(self):
+        self.__dict__[BadKey()] = "clean"
+
+    def model_dump(self):
+        return "clean"
+"#,
+            )
+            .unwrap();
+            let module =
+                PyModule::from_code(py, code.as_c_str(), c"test_module.py", c"test_module")?;
+            let instance = module.getattr("Model")?.call0()?;
+            let config = SecretsDetectionConfig::default();
+
+            let (count, _, findings) = scan_container(py, &instance, &config)?;
+
+            assert_eq!(count, 0);
+            assert!(findings.is_empty());
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn root_duplicate_helper_rejects_non_string_rebuild_keys_before_lookup() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let code = CString::new(
+                r#"
+class BadKey:
+    def __hash__(self):
+        return hash("root")
+
+    def __eq__(self, other):
+        raise RuntimeError("root lookup should not compare custom keys")
+"#,
+            )
+            .unwrap();
+            let module =
+                PyModule::from_code(py, code.as_c_str(), c"test_module.py", c"test_module")?;
+            let bad_key = module.getattr("BadKey")?.call0()?;
+            let rebuild = PyDict::new(py);
+            rebuild.set_item(&bad_key, "clean")?;
+            let serialized = PyString::new(py, "clean");
+
+            let duplicates =
+                serialized_duplicates_rebuild_root(serialized.as_any(), rebuild.as_any())?;
+
+            assert!(!duplicates);
 
             Ok(())
         })
