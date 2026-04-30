@@ -1,6 +1,7 @@
 import json
 import os
 import ast
+import shutil
 import subprocess
 import tempfile
 import textwrap
@@ -1533,6 +1534,9 @@ class PluginCatalogTests(unittest.TestCase):
                     "has_plugins": True,
                     "plugin_count": 2,
                     "cargo_packages": ["pii_filter", "rate_limiter"],
+                    "mutation_cargo_packages": [],
+                    "has_mutation_cargo_packages": False,
+                    "mutation_jobs": [],
                 },
             )
 
@@ -1574,6 +1578,9 @@ class PluginCatalogTests(unittest.TestCase):
                     "has_plugins": False,
                     "plugin_count": 0,
                     "cargo_packages": [],
+                    "mutation_cargo_packages": [],
+                    "has_mutation_cargo_packages": False,
+                    "mutation_jobs": [],
                 },
             )
 
@@ -1615,8 +1622,92 @@ class PluginCatalogTests(unittest.TestCase):
                     "has_plugins": True,
                     "plugin_count": 2,
                     "cargo_packages": ["pii_filter", "rate_limiter"],
+                    "mutation_cargo_packages": [],
+                    "has_mutation_cargo_packages": False,
+                    "mutation_jobs": [],
                 },
             )
+
+    def test_ci_selection_treats_tooling_config_changes_as_all_plugins(self) -> None:
+        for config_path in (".cargo/mutants.toml", ".config/nextest.toml"):
+            with self.subTest(config_path=config_path):
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    root = Path(tmpdir)
+                    git = lambda *args: subprocess.run(  # noqa: E731
+                        ["git", *args],
+                        cwd=root,
+                        text=True,
+                        capture_output=True,
+                        check=True,
+                    )
+                    git("init")
+                    git("config", "user.name", "Test User")
+                    git("config", "user.email", "test@example.com")
+                    (root / "Cargo.toml").write_text(
+                        '[workspace]\nmembers = ["plugins/rust/python-package/rate_limiter", "plugins/rust/python-package/pii_filter"]\n'
+                    )
+                    self._create_plugin(root, "rate_limiter")
+                    self._create_plugin(root, "pii_filter")
+                    git("add", ".")
+                    git("commit", "--no-verify", "-m", "seed layout")
+                    base_sha = git("rev-parse", "HEAD").stdout.strip()
+
+                    path = root / config_path
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text("# shared tooling config change\n")
+                    git("add", ".")
+                    git("commit", "--no-verify", "-m", "shared tooling config input")
+
+                    result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    payload = json.loads(result.stdout)
+                    self.assertEqual(
+                        payload,
+                        {
+                            "plugins": ["pii_filter", "rate_limiter"],
+                            "has_plugins": True,
+                            "plugin_count": 2,
+                            "cargo_packages": ["pii_filter", "rate_limiter"],
+                            "mutation_cargo_packages": [],
+                            "has_mutation_cargo_packages": False,
+                            "mutation_jobs": [],
+                        },
+                    )
+
+    def test_ci_selection_skips_mutation_for_unrelated_tooling_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            git = lambda *args: subprocess.run(  # noqa: E731
+                ["git", *args],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            git("init")
+            git("config", "user.name", "Test User")
+            git("config", "user.email", "test@example.com")
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/rate_limiter", "plugins/rust/python-package/pii_filter"]\n'
+            )
+            self._create_plugin(root, "rate_limiter")
+            self._create_plugin(root, "pii_filter")
+            git("add", ".")
+            git("commit", "--no-verify", "-m", "seed layout")
+            base_sha = git("rev-parse", "HEAD").stdout.strip()
+
+            path = root / ".config" / "editor.toml"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("# unrelated tooling config change\n")
+            git("add", ".")
+            git("commit", "--no-verify", "-m", "unrelated tooling config input")
+
+            result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["plugins"], ["pii_filter", "rate_limiter"])
+            self.assertEqual(payload["mutation_cargo_packages"], [])
+            self.assertEqual(payload["mutation_jobs"], [])
 
     def test_ci_selection_treats_cargo_lock_change_as_all_plugins(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1655,6 +1746,9 @@ class PluginCatalogTests(unittest.TestCase):
                     "has_plugins": True,
                     "plugin_count": 2,
                     "cargo_packages": ["pii_filter", "rate_limiter"],
+                    "mutation_cargo_packages": [],
+                    "has_mutation_cargo_packages": False,
+                    "mutation_jobs": [],
                 },
             )
 
@@ -1695,6 +1789,9 @@ class PluginCatalogTests(unittest.TestCase):
                     "has_plugins": True,
                     "plugin_count": 2,
                     "cargo_packages": ["pii_filter", "rate_limiter"],
+                    "mutation_cargo_packages": [],
+                    "has_mutation_cargo_packages": False,
+                    "mutation_jobs": [],
                 },
             )
 
@@ -1737,6 +1834,9 @@ class PluginCatalogTests(unittest.TestCase):
                     "has_plugins": True,
                     "plugin_count": 1,
                     "cargo_packages": ["pii_filter"],
+                    "mutation_cargo_packages": [],
+                    "has_mutation_cargo_packages": False,
+                    "mutation_jobs": [],
                 },
             )
 
@@ -1779,6 +1879,9 @@ class PluginCatalogTests(unittest.TestCase):
                     "has_plugins": True,
                     "plugin_count": 2,
                     "cargo_packages": ["pii_filter", "rate_limiter"],
+                    "mutation_cargo_packages": [],
+                    "has_mutation_cargo_packages": False,
+                    "mutation_jobs": [],
                 },
             )
 
@@ -1800,6 +1903,10 @@ class PluginCatalogTests(unittest.TestCase):
             )
             self._create_plugin(root, "rate_limiter")
             self._create_plugin(root, "pii_filter")
+            (root / "plugins" / "rust" / "python-package" / "rate_limiter" / "Cargo.toml").write_text(
+                '[package]\nname = "rate_limiter"\nversion = "0.0.1"\nrepository = "https://github.com/IBM/cpex-plugins"\n\n'
+                "[dependencies]\ncpex_framework_bridge = { workspace = true }\n"
+            )
             shared_crate = root / "crates" / "framework_bridge" / "src"
             shared_crate.mkdir(parents=True)
             (shared_crate / "lib.rs").write_text("// shared crate change\n")
@@ -1821,7 +1928,212 @@ class PluginCatalogTests(unittest.TestCase):
                     "has_plugins": True,
                     "plugin_count": 2,
                     "cargo_packages": ["pii_filter", "rate_limiter"],
+                    "mutation_cargo_packages": ["cpex_framework_bridge"],
+                    "has_mutation_cargo_packages": True,
+                    "mutation_jobs": [
+                        {
+                            "cargo_package": "cpex_framework_bridge",
+                            "in_diff": True,
+                            "test_packages": ["rate_limiter"],
+                        }
+                    ],
                 },
+            )
+
+    def test_ci_selection_ignores_tooling_config_for_shared_crate_mutation_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            git = lambda *args: subprocess.run(  # noqa: E731
+                ["git", *args],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            git("init")
+            git("config", "user.name", "Test User")
+            git("config", "user.email", "test@example.com")
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/rate_limiter", "plugins/rust/python-package/pii_filter"]\n'
+            )
+            self._create_plugin(root, "rate_limiter")
+            self._create_plugin(root, "pii_filter")
+            (root / "plugins" / "rust" / "python-package" / "rate_limiter" / "Cargo.toml").write_text(
+                '[package]\nname = "rate_limiter"\nversion = "0.0.1"\nrepository = "https://github.com/IBM/cpex-plugins"\n\n'
+                "[dependencies]\ncpex_framework_bridge = { workspace = true }\n"
+            )
+            shared_crate = root / "crates" / "framework_bridge" / "src"
+            shared_crate.mkdir(parents=True)
+            (shared_crate / "lib.rs").write_text("// shared crate change\n")
+            config_path = root / ".cargo" / "mutants.toml"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text("# seed\n")
+            git("add", ".")
+            git("commit", "--no-verify", "-m", "seed layout")
+            base_sha = git("rev-parse", "HEAD").stdout.strip()
+
+            (shared_crate / "lib.rs").write_text("// shared crate change\n// update\n")
+            config_path.write_text("# updated\n")
+            git("add", ".")
+            git("commit", "--no-verify", "-m", "mixed mutation inputs")
+
+            result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(
+                payload["mutation_jobs"],
+                [
+                    {
+                        "cargo_package": "cpex_framework_bridge",
+                        "in_diff": True,
+                        "test_packages": ["rate_limiter"],
+                    },
+                ],
+            )
+
+    def test_ci_selection_ignores_tooling_config_for_plugin_rust_mutation_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            git = lambda *args: subprocess.run(  # noqa: E731
+                ["git", *args],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            git("init")
+            git("config", "user.name", "Test User")
+            git("config", "user.email", "test@example.com")
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/rate_limiter", "plugins/rust/python-package/pii_filter"]\n'
+            )
+            rate_limiter = self._create_plugin(root, "rate_limiter")
+            self._create_plugin(root, "pii_filter")
+            src_dir = rate_limiter / "src"
+            src_dir.mkdir()
+            (src_dir / "lib.rs").write_text("pub fn rate_limit() {}\n")
+            config_path = root / ".cargo" / "mutants.toml"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text("# seed\n")
+            git("add", ".")
+            git("commit", "--no-verify", "-m", "seed layout")
+            base_sha = git("rev-parse", "HEAD").stdout.strip()
+
+            (src_dir / "lib.rs").write_text("pub fn rate_limit() -> bool { true }\n")
+            config_path.write_text("# updated\n")
+            git("add", ".")
+            git("commit", "--no-verify", "-m", "mixed plugin and config inputs")
+
+            result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(
+                payload["mutation_jobs"],
+                [
+                    {"cargo_package": "rate_limiter", "in_diff": True, "test_packages": []},
+                ],
+            )
+
+    def test_framework_bridge_mutation_dependents_match_real_manifests(self) -> None:
+        plugin_root = REPO_ROOT / "plugins" / "rust" / "python-package"
+        dependents = []
+        for manifest_path in sorted(plugin_root.glob("*/Cargo.toml")):
+            with manifest_path.open("rb") as handle:
+                manifest = tomllib.load(handle)
+            if "cpex_framework_bridge" in manifest.get("dependencies", {}):
+                dependents.append(manifest_path.parent.name)
+
+        self.assertEqual(
+            dependents,
+            [
+                "encoded_exfil_detection",
+                "pii_filter",
+                "rate_limiter",
+                "secrets_detection",
+            ],
+        )
+
+    def test_framework_bridge_mutation_job_uses_real_dependents(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            subprocess.run(
+                ["git", "init"],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Test User"],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.com"],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            shutil.copytree(REPO_ROOT / "plugins", root / "plugins")
+            shutil.copytree(REPO_ROOT / "crates", root / "crates")
+            (root / "Cargo.toml").write_text((REPO_ROOT / "Cargo.toml").read_text())
+            subprocess.run(
+                ["git", "add", "."],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "commit", "--no-verify", "-m", "seed real manifests"],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            base_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout.strip()
+
+            bridge_lib = root / "crates" / "framework_bridge" / "src" / "lib.rs"
+            bridge_lib.write_text(bridge_lib.read_text() + "\n// mutation route test\n")
+            subprocess.run(
+                ["git", "add", "."],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "commit", "--no-verify", "-m", "shared crate change"],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+
+            result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertIn(
+                {
+                    "cargo_package": "cpex_framework_bridge",
+                    "in_diff": True,
+                    "test_packages": [
+                        "encoded_exfil_detection",
+                        "pii_filter",
+                        "rate_limiter",
+                        "secrets_detection",
+                    ],
+                },
+                payload["mutation_jobs"],
             )
 
     def test_ci_selection_reports_cargo_packages_for_single_plugin_diff(self) -> None:
@@ -1862,23 +2174,72 @@ class PluginCatalogTests(unittest.TestCase):
                     "has_plugins": True,
                     "plugin_count": 1,
                     "cargo_packages": ["rate_limiter"],
+                    "mutation_cargo_packages": [],
+                    "has_mutation_cargo_packages": False,
+                    "mutation_jobs": [],
+                },
+            )
+
+    def test_ci_selection_reports_mutation_package_for_single_rust_diff(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            git = lambda *args: subprocess.run(  # noqa: E731
+                ["git", *args],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            git("init")
+            git("config", "user.name", "Test User")
+            git("config", "user.email", "test@example.com")
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/rate_limiter", "plugins/rust/python-package/pii_filter"]\n'
+                '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n'
+            )
+            plugin_dir = self._create_plugin(root, "rate_limiter")
+            self._create_plugin(root, "pii_filter")
+            src_dir = plugin_dir / "src"
+            src_dir.mkdir()
+            (src_dir / "lib.rs").write_text("pub fn rate_limit() {}\n")
+            git("add", ".")
+            git("commit", "--no-verify", "-m", "seed layout")
+            base_sha = git("rev-parse", "HEAD").stdout.strip()
+
+            (src_dir / "lib.rs").write_text("pub fn rate_limit() -> bool { true }\n")
+            git("add", ".")
+            git("commit", "--no-verify", "-m", "single rust change")
+
+            result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(
+                payload,
+                {
+                    "plugins": ["rate_limiter"],
+                    "has_plugins": True,
+                    "plugin_count": 1,
+                    "cargo_packages": ["rate_limiter"],
+                    "mutation_cargo_packages": ["rate_limiter"],
+                    "has_mutation_cargo_packages": True,
+                    "mutation_jobs": [
+                        {"cargo_package": "rate_limiter", "in_diff": True, "test_packages": []}
+                    ],
                 },
             )
 
     def test_ci_selection_field_prints_json_and_bool_scalars(self) -> None:
+        expected_plugins = [
+            "encoded_exfil_detection",
+            "pii_filter",
+            "rate_limiter",
+            "retry_with_backoff",
+            "secrets_detection",
+            "url_reputation",
+        ]
         result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "plugins")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(
-            json.loads(result.stdout),
-            [
-                "encoded_exfil_detection",
-                "pii_filter",
-                "rate_limiter",
-                "retry_with_backoff",
-                "secrets_detection",
-                "url_reputation",
-            ],
-        )
+        self.assertEqual(json.loads(result.stdout), expected_plugins)
 
         result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "has_plugins")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -1890,17 +2251,25 @@ class PluginCatalogTests(unittest.TestCase):
 
         result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "cargo_packages")
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), expected_plugins)
+
+        result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "mutation_cargo_packages")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), expected_plugins)
+
+        result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "mutation_jobs")
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             json.loads(result.stdout),
             [
-                "encoded_exfil_detection",
-                "pii_filter",
-                "rate_limiter",
-                "retry_with_backoff",
-                "secrets_detection",
-                "url_reputation",
+                {"cargo_package": plugin, "in_diff": False, "test_packages": []}
+                for plugin in expected_plugins
             ],
         )
+
+        result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "has_mutation_cargo_packages")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "true")
 
     def test_ci_selection_field_supports_diff_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1960,6 +2329,8 @@ class PluginCatalogTests(unittest.TestCase):
             "Makefile",
             "Cargo.toml",
             "Cargo.lock",
+            ".cargo/**",
+            ".config/nextest.toml",
             "deny.toml",
             "crates/**",
             "README.md",
@@ -2198,6 +2569,7 @@ class PluginCatalogTests(unittest.TestCase):
             REPO_ROOT / ".github" / "workflows" / "ci-rust-python-package.yaml"
         ).read_text()
         security_section = self._extract_workflow_job_section(workflow, "security-policy")
+        mutants_section = self._extract_workflow_job_section(workflow, "mutation-testing")
         coverage_section = self._extract_workflow_job_section(workflow, "coverage")
         documentation_section = self._extract_workflow_job_section(
             workflow, "documentation"
@@ -2207,6 +2579,24 @@ class PluginCatalogTests(unittest.TestCase):
         )
         deny_run = self._extract_workflow_step_run(
             workflow, "security-policy", step_name="Run cargo deny"
+        )
+        mutants_install_run = self._extract_workflow_step_run(
+            workflow, "mutation-testing", step_name="Install Rust mutation testing tooling"
+        )
+        mutants_diff_run = self._extract_workflow_step_run(
+            workflow, "mutation-testing", step_name="Create mutation diff"
+        )
+        mutants_run = self._extract_workflow_step_run(
+            workflow, "mutation-testing", step_name="Run cargo-mutants with nextest"
+        )
+        build_test_nextest_install = self._extract_workflow_step_section(
+            workflow, "build-test", step_name="Install cargo-nextest"
+        )
+        build_test_ci_build = self._extract_workflow_step_section(
+            workflow, "build-test", step_name="Plugin CI build verification"
+        )
+        build_test_ci = self._extract_workflow_step_section(
+            workflow, "build-test", step_name="Plugin CI verification"
         )
         coverage_run = self._extract_workflow_step_run(
             workflow, "coverage", step_name="Generate Rust coverage report"
@@ -2224,11 +2614,16 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("plugin_count: ${{ steps.detect.outputs.plugin_count }}", workflow)
         self.assertNotIn("single_cargo_package", workflow)
         self.assertIn("cargo_packages: ${{ steps.detect.outputs.cargo_packages }}", workflow)
+        self.assertIn("mutation_cargo_packages: ${{ steps.detect.outputs.mutation_cargo_packages }}", workflow)
+        self.assertIn("mutation_jobs: ${{ steps.detect.outputs.mutation_jobs }}", workflow)
+        self.assertIn("has_mutation_cargo_packages: ${{ steps.detect.outputs.has_mutation_cargo_packages }}", workflow)
         self.assertIn("security-policy:", workflow)
+        self.assertIn("mutation-testing:", workflow)
         self.assertIn("coverage:", workflow)
         self.assertIn("documentation:", workflow)
         self.assertNotIn("benchmark-build-verification:", workflow)
         self.assertIn("if: needs.validate-and-detect.outputs.has_plugins == 'true'", security_section)
+        self.assertIn("if: github.event_name == 'pull_request' && needs.validate-and-detect.outputs.has_mutation_cargo_packages == 'true'", mutants_section)
         self.assertIn("if: needs.validate-and-detect.outputs.has_plugins == 'true'", coverage_section)
         self.assertIn("if: needs.validate-and-detect.outputs.has_plugins == 'true'", documentation_section)
         self.assertNotIn("cargo-audit", security_section)
@@ -2239,7 +2634,30 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertNotIn("--workspace", security_section)
         self.assertNotIn("--manifest-path", security_section)
         self.assertNotIn("matrix:", security_section)
+        self.assertIn("NEXTEST_PROFILE: ci", build_test_ci_build)
+        self.assertIn("NEXTEST_PROFILE: ci", build_test_ci)
         self.assertIn("cargo install cargo-llvm-cov --version 0.8.4 --locked", coverage_section)
+        self.assertIn("cargo install cargo-nextest --version 0.9.133 --locked", build_test_nextest_install)
+        self.assertIn("cargo nextest --version", build_test_nextest_install)
+        self.assertIn("cargo install cargo-nextest --version 0.9.133 --locked", coverage_section)
+        self.assertIn("cargo nextest --version", coverage_section)
+        self.assertIn("cargo install cargo-nextest --version 0.9.133 --locked", mutants_install_run)
+        self.assertIn("cargo nextest --version", mutants_install_run)
+        self.assertIn("cargo install cargo-mutants --version 27.0.0 --locked", mutants_install_run)
+        self.assertIn("cargo mutants --version", mutants_install_run)
+        self.assertIn("fetch-depth: 0", mutants_section)
+        self.assertEqual('git diff "${BASE_SHA}..${HEAD_SHA}" -- \'*.rs\' > cargo-mutants.diff\n', mutants_diff_run)
+        self.assertIn("BASE_SHA: ${{ github.event.pull_request.base.sha }}", mutants_section)
+        self.assertIn("HEAD_SHA: ${{ github.sha }}", mutants_section)
+        self.assertIn("mutation_job: ${{ fromJson(needs.validate-and-detect.outputs.mutation_jobs) }}", mutants_section)
+        self.assertIn("CARGO_PACKAGE: ${{ matrix.mutation_job.cargo_package }}", mutants_section)
+        self.assertIn("IN_DIFF: ${{ matrix.mutation_job.in_diff }}", mutants_section)
+        self.assertIn("TEST_PACKAGES: ${{ toJson(matrix.mutation_job.test_packages) }}", mutants_section)
+        self.assertIn('cargo_args=("-p" "${CARGO_PACKAGE}")', mutants_run)
+        self.assertIn('cargo_args+=("--in-diff" "cargo-mutants.diff")', mutants_run)
+        self.assertIn('cargo_args+=("--test-package" "${package}")', mutants_run)
+        self.assertIn('cargo mutants "${cargo_args[@]}"', mutants_run)
+        self.assertIn("PYO3_PYTHON: python", mutants_section)
         self.assertIn("python -m pip install uv==0.9.30 maturin==1.12.6", coverage_section)
         self.assertIn("CARGO_PACKAGES: ${{ needs.validate-and-detect.outputs.cargo_packages }}", coverage_section)
         self.assertIn("PLUGINS: ${{ needs.validate-and-detect.outputs.plugins }}", coverage_section)
@@ -2264,7 +2682,10 @@ class PluginCatalogTests(unittest.TestCase):
             'mkdir -p "${CARGO_TARGET_DIR}"',
             coverage_run,
         )
-        self.assertIn('cargo test "${cargo_args[@]}"', coverage_run)
+        self.assertIn(
+            'cargo llvm-cov nextest --no-report "${cargo_args[@]}" -P "${NEXTEST_PROFILE}"',
+            coverage_run,
+        )
         self.assertIn('make sync && uv run maturin develop', coverage_run)
         self.assertIn('make test-integration', coverage_run)
         self.assertIn(
@@ -2325,20 +2746,57 @@ class PluginCatalogTests(unittest.TestCase):
             ]
             self.assertEqual(json.loads(outputs["plugins"]), expected_plugins)
             self.assertEqual(json.loads(outputs["cargo_packages"]), expected_plugins)
+            self.assertEqual(json.loads(outputs["mutation_cargo_packages"]), expected_plugins)
+            self.assertEqual(
+                json.loads(outputs["mutation_jobs"]),
+                [
+                    {"cargo_package": plugin, "in_diff": False, "test_packages": []}
+                    for plugin in expected_plugins
+                ],
+            )
+            self.assertEqual(outputs["has_mutation_cargo_packages"], "true")
+
+    def test_scaffold_workflow_installs_nextest_for_generated_plugin_ci(self) -> None:
+        workflow = (
+            REPO_ROOT / ".github" / "workflows" / "ci-scaffold-generator.yaml"
+        ).read_text()
+        nextest_install = self._extract_workflow_step_section(
+            workflow, "test", step_name="Install cargo-nextest"
+        )
+        self.assertIn("cargo install cargo-nextest --version 0.9.133 --locked", nextest_install)
+        self.assertIn("cargo nextest --version", nextest_install)
 
     def test_testing_docs_include_local_rust_coverage_command(self) -> None:
         testing_doc = (REPO_ROOT / "TESTING.md").read_text()
+        mutants_config = (REPO_ROOT / ".cargo" / "mutants.toml").read_text()
+        nextest_config = (REPO_ROOT / ".config" / "nextest.toml").read_text()
 
         self.assertIn("cargo install cargo-llvm-cov --version 0.8.4 --locked", testing_doc)
+        self.assertIn("cargo install cargo-nextest --version 0.9.133 --locked", testing_doc)
         self.assertIn("cargo llvm-cov clean --workspace", testing_doc)
         self.assertIn('eval "$(cargo llvm-cov show-env --sh)"', testing_doc)
         self.assertIn('export CARGO_TARGET_DIR="${CARGO_LLVM_COV_TARGET_DIR}/llvm-cov-target"', testing_doc)
         self.assertIn("make sync && uv run maturin develop", testing_doc)
-        self.assertIn("cargo test", testing_doc)
+        self.assertIn("cargo llvm-cov nextest --no-report", testing_doc)
         self.assertIn("make test-integration", testing_doc)
         self.assertIn("env -u CARGO_TARGET_DIR", testing_doc)
         self.assertIn("coverage/cobertura.xml", testing_doc)
         self.assertIn("python3 tools/plugin_catalog.py coverage-check . coverage/cobertura.xml 90.00", testing_doc)
+        self.assertIn("Nextest does not run Rust doctests", testing_doc)
+        self.assertIn("cargo nextest run --benches -E 'kind(bench)' --no-run", testing_doc)
+        self.assertIn("cargo install cargo-nextest --version 0.9.133 --locked", testing_doc)
+        self.assertIn("cargo install cargo-mutants --version 27.0.0 --locked", testing_doc)
+        self.assertIn("make plugin-mutants PLUGIN=retry_with_backoff", testing_doc)
+        self.assertIn('cargo mutants "${cargo_args[@]}"', testing_doc)
+        self.assertIn('test_tool = "nextest"', mutants_config)
+        self.assertIn('additional_cargo_test_args = ["--profile=mutants"]', mutants_config)
+        self.assertIn("cap_lints = false", mutants_config)
+        self.assertIn('nextest-version = "0.9.133"', nextest_config)
+        self.assertIn("[profile.ci]", nextest_config)
+        self.assertIn("fail-fast = false", nextest_config)
+        self.assertIn('failure-output = "immediate-final"', nextest_config)
+        self.assertIn("[profile.mutants]", nextest_config)
+        self.assertIn("fail-fast = true", nextest_config)
 
     def test_python_integration_tests_live_under_repo_plugins_tests(self) -> None:
         plugin_root = REPO_ROOT / "plugins" / "rust" / "python-package"
@@ -2363,6 +2821,8 @@ class PluginCatalogTests(unittest.TestCase):
             self.assertIn("test: test-unit test-integration", makefile)
             self.assertIn("test-all: test", makefile)
             self.assertIn("check-all: fmt-check clippy test-unit", makefile)
+            self.assertIn(f"CARGO_PACKAGE := {slug}", makefile)
+            self.assertIn("NEXTEST_PROFILE ?= default", makefile)
             self.assertNotIn("[tool.pytest.ini_options]", pyproject)
 
             result = subprocess.run(
@@ -2373,7 +2833,7 @@ class PluginCatalogTests(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("cargo test", result.stdout)
+            self.assertIn(f"cargo nextest run --profile default -p {slug}", result.stdout)
             self.assertIn(f"../../../tests/{slug}", result.stdout)
 
     def test_coverage_check_reports_per_plugin_percentages(self) -> None:
@@ -2988,10 +3448,64 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("ops_per_sec", result.stdout)
 
+    def test_bench_no_run_uses_nextest_benchmark_test_mode(self) -> None:
+        plugin_root = REPO_ROOT / "plugins" / "rust" / "python-package"
+        for slug in (
+            "encoded_exfil_detection",
+            "pii_filter",
+            "rate_limiter",
+            "secrets_detection",
+            "url_reputation",
+        ):
+            makefile = (plugin_root / slug / "Makefile").read_text()
+            self.assertIn("bench-no-run:", makefile)
+            self.assertIn("$(CARGO) nextest run --profile $(NEXTEST_PROFILE) -p $(CARGO_PACKAGE) --benches -E 'kind(bench)' --no-run", makefile)
+            self.assertNotIn("$(CARGO) bench --no-run", makefile)
+
+    def test_nextest_make_targets_dry_run(self) -> None:
+        plugin_root = REPO_ROOT / "plugins" / "rust" / "python-package"
+        cases = [
+            ("encoded_exfil_detection", "test-unit", "cargo nextest run --profile default -p encoded_exfil_detection"),
+            ("encoded_exfil_detection", "bench-no-run", "cargo nextest run --profile default -p encoded_exfil_detection --benches -E 'kind(bench)' --no-run"),
+            ("pii_filter", "test-unit", "cargo nextest run --profile default -p pii_filter"),
+            ("pii_filter", "bench-no-run", "cargo nextest run --profile default -p pii_filter --benches -E 'kind(bench)' --no-run"),
+            ("rate_limiter", "test-unit", "cargo nextest run --profile default -p rate_limiter"),
+            ("rate_limiter", "bench-no-run", "cargo nextest run --profile default -p rate_limiter --benches -E 'kind(bench)' --no-run"),
+            ("retry_with_backoff", "test-unit", "cargo nextest run --profile default -p retry_with_backoff"),
+            ("secrets_detection", "test-unit", "cargo nextest run --profile default -p secrets_detection"),
+            ("secrets_detection", "bench-no-run", "cargo nextest run --profile default -p secrets_detection --benches -E 'kind(bench)' --no-run"),
+            ("url_reputation", "test-unit", "cargo nextest run --profile default -p url_reputation"),
+            ("url_reputation", "bench-no-run", "cargo nextest run --profile default -p url_reputation --benches -E 'kind(bench)' --no-run"),
+        ]
+        for slug, target, expected in cases:
+            with self.subTest(slug=slug, target=target):
+                result = subprocess.run(
+                    ["make", "-n", target],
+                    cwd=plugin_root / slug,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(expected, result.stdout)
+
+    def test_scaffold_benchmark_template_uses_nextest_benchmark_test_mode(self) -> None:
+        makefile_template = (REPO_ROOT / "tools" / "templates" / "plugin" / "Makefile.j2").read_text()
+        self.assertIn("bench-no-run:", makefile_template)
+        self.assertIn("$(CARGO) nextest run --profile $(NEXTEST_PROFILE) -p $(CARGO_PACKAGE) --benches -E 'kind(bench)' --no-run", makefile_template)
+        self.assertIn("ci: check-all verify-stubs build{% if include_benchmarks %} bench-no-run{% endif %} install-wheel test-python", makefile_template)
+
     def test_root_plugin_test_uses_plugin_ci_target(self) -> None:
         makefile = (REPO_ROOT / "Makefile").read_text()
         self.assertIn("make ci", makefile)
         self.assertNotIn("make install && make test-all", makefile)
+
+    def test_root_makefile_exposes_plugin_mutants_targets(self) -> None:
+        makefile = (REPO_ROOT / "Makefile").read_text()
+        self.assertIn("plugin-mutants PLUGIN=<slug>", makefile)
+        self.assertIn("plugin-mutants-list PLUGIN=<slug>", makefile)
+        self.assertIn('cargo mutants -p "$(PLUGIN)"', makefile)
+        self.assertIn('cargo mutants --list -p "$(PLUGIN)"', makefile)
 
     def test_retry_make_ci_enforces_local_coverage_floor(self) -> None:
         plugin_dir = REPO_ROOT / "plugins" / "rust" / "python-package" / "retry_with_backoff"
@@ -3000,6 +3514,7 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("rustup component add llvm-tools-preview", makefile)
         self.assertIn("cargo install cargo-llvm-cov --version $(CARGO_LLVM_COV_VERSION) --locked", makefile)
         self.assertIn("cargo llvm-cov clean --workspace", makefile)
+        self.assertIn("$(CARGO) llvm-cov nextest --no-report -p $(CARGO_PACKAGE) -P $(NEXTEST_PROFILE)", makefile)
         self.assertIn("cargo llvm-cov report -p $(CARGO_PACKAGE)", makefile)
         self.assertIn(
             "python3 $(REPO_ROOT)/tools/plugin_catalog.py coverage-check $(REPO_ROOT) $(COVERAGE_REPORT) $(COVERAGE_MIN)",

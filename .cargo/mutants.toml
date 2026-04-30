@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
+test_tool = "nextest"
+additional_cargo_test_args = ["--profile=mutants"]
+cap_lints = false

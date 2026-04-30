@@ -13,6 +13,8 @@ help:
 PACKAGE_NAME := cpex-rate-limiter
 WHEEL_PREFIX := cpex_rate_limiter
 CARGO := cargo
+CARGO_PACKAGE := rate_limiter
+NEXTEST_PROFILE ?= default
 STUB_FILES := cpex_rate_limiter/__init__.pyi cpex_rate_limiter/rate_limiter_rust/__init__.pyi
 WHEEL_DIR := ../../../../target/wheels
 
@@ -53,13 +55,13 @@ sync:
 
 test-unit:
 	@echo "$(GREEN)Running rate_limiter Rust tests...$(NC)"
-	$(CARGO) test
+	$(CARGO) nextest run --profile $(NEXTEST_PROFILE) -p $(CARGO_PACKAGE)
 
 test: test-unit test-integration
 
 test-verbose:
 	@echo "$(GREEN)Running rate_limiter Rust tests (verbose)...$(NC)"
-	$(CARGO) test -- --nocapture
+	$(CARGO) nextest run --profile $(NEXTEST_PROFILE) -p $(CARGO_PACKAGE) --no-capture
 
 test-python:
 	$(MAKE) test-integration
@@ -110,7 +112,7 @@ uninstall:
 # 📊 BENCHMARKS
 # =============================================================================
 # help: bench                 - Run Criterion benchmarks
-# help: bench-no-run          - Compile Criterion benchmarks without running them
+# help: bench-no-run          - Compile Criterion benchmark targets with nextest
 # help: bench-compare         - Compare against saved baseline
 .PHONY: bench bench-no-run bench-baseline bench-compare
 
@@ -119,8 +121,8 @@ bench:
 	$(CARGO) bench
 
 bench-no-run:
-	@echo "$(GREEN)Compiling benchmarks without running them...$(NC)"
-	$(CARGO) bench --no-run
+	@echo "$(GREEN)Compiling Criterion benchmark targets with nextest...$(NC)"
+	$(CARGO) nextest run --profile $(NEXTEST_PROFILE) -p $(CARGO_PACKAGE) --benches -E 'kind(bench)' --no-run
 
 bench-baseline:
 	$(CARGO) bench --bench rate_limiter -- --save-baseline main

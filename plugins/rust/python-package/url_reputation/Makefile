@@ -5,6 +5,8 @@ help:
 PACKAGE_NAME := cpex-url-reputation
 WHEEL_PREFIX := cpex_url_reputation
 CARGO := cargo
+CARGO_PACKAGE := url_reputation
+NEXTEST_PROFILE ?= default
 STUB_FILES := cpex_url_reputation/__init__.pyi cpex_url_reputation/url_reputation_rust/__init__.pyi
 WHEEL_DIR := ../../../../target/wheels
 
@@ -39,13 +41,13 @@ sync:
 
 test-unit:
 	@echo "$(GREEN)Running url_reputation Rust tests...$(NC)"
-	$(CARGO) test
+	$(CARGO) nextest run --profile $(NEXTEST_PROFILE) -p $(CARGO_PACKAGE)
 
 test: test-unit test-integration
 
 test-verbose:
 	@echo "$(GREEN)Running url_reputation Rust tests (verbose)...$(NC)"
-	$(CARGO) test -- --nocapture
+	$(CARGO) nextest run --profile $(NEXTEST_PROFILE) -p $(CARGO_PACKAGE) --no-capture
 
 test-python:
 	$(MAKE) test-integration
@@ -89,12 +91,12 @@ uninstall:
 	@echo "$(YELLOW)Uninstalling $(PACKAGE_NAME)...$(NC)"
 	@uv pip uninstall -y $(PACKAGE_NAME) 2>/dev/null || true
 
-# help: bench-no-run          - Compile benchmarks without running them
+# help: bench-no-run          - Compile benchmark targets with nextest
 .PHONY: bench-no-run
 
 bench-no-run:
-	@echo "$(GREEN)Compiling benchmarks without running them...$(NC)"
-	$(CARGO) bench --no-run
+	@echo "$(GREEN)Compiling Criterion benchmark targets with nextest...$(NC)"
+	$(CARGO) nextest run --profile $(NEXTEST_PROFILE) -p $(CARGO_PACKAGE) --benches -E 'kind(bench)' --no-run
 
 .PHONY: clean clean-all
 

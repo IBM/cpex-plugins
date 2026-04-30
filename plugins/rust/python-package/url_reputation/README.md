@@ -163,7 +163,7 @@ flowchart LR
 
 **Run tests:**
 ```bash
-cargo test --lib              # Run all unit tests
+cargo nextest run -p url_reputation  # Run Rust unit tests
 cargo llvm-cov --lib --html   # Generate coverage report
 ```
 

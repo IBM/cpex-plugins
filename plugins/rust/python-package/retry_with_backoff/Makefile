@@ -6,6 +6,7 @@ PACKAGE_NAME := cpex-retry-with-backoff
 WHEEL_PREFIX := cpex_retry_with_backoff
 CARGO := cargo
 CARGO_PACKAGE := retry_with_backoff
+NEXTEST_PROFILE ?= default
 PLUGIN_SLUG := retry_with_backoff
 REPO_ROOT := ../../../..
 STUB_FILES := cpex_retry_with_backoff/__init__.pyi cpex_retry_with_backoff/retry_with_backoff_rust/__init__.pyi
@@ -45,13 +46,13 @@ sync:
 
 test-unit:
 	@echo "$(GREEN)Running retry_with_backoff Rust tests...$(NC)"
-	$(CARGO) test
+	$(CARGO) nextest run --profile $(NEXTEST_PROFILE) -p $(CARGO_PACKAGE)
 
 test: test-unit test-integration
 
 test-verbose:
 	@echo "$(GREEN)Running retry_with_backoff Rust tests (verbose)...$(NC)"
-	$(CARGO) test -- --nocapture
+	$(CARGO) nextest run --profile $(NEXTEST_PROFILE) -p $(CARGO_PACKAGE) --no-capture
 
 test-python:
 	$(MAKE) test-integration
@@ -121,17 +122,17 @@ ci-build: check-all verify-stubs build install-wheel
 
 coverage:
 	@echo "$(GREEN)Generating Rust coverage...$(NC)"
-	mkdir -p $(REPO_ROOT)/coverage
 	rustup component add llvm-tools-preview
 	cargo llvm-cov --version >/dev/null 2>&1 || cargo install cargo-llvm-cov --version $(CARGO_LLVM_COV_VERSION) --locked
 	cargo llvm-cov clean --workspace
+	mkdir -p $(REPO_ROOT)/coverage
+	$(CARGO) llvm-cov nextest --no-report -p $(CARGO_PACKAGE) -P $(NEXTEST_PROFILE)
 	eval "$$(cargo llvm-cov show-env --sh)" && \
 	export CARGO_TARGET_DIR="$${CARGO_LLVM_COV_TARGET_DIR}/llvm-cov-target" && \
 	export CARGO_LLVM_COV_BUILD_DIR="$${CARGO_TARGET_DIR}" && \
 	export LLVM_PROFILE_FILE="$${CARGO_TARGET_DIR}/cpex-plugins-%p-%10m.profraw" && \
 	mkdir -p "$${CARGO_TARGET_DIR}" && \
 	uv run maturin develop && \
-	$(CARGO) test -p $(CARGO_PACKAGE) && \
 	$(MAKE) test-integration && \
 	env -u CARGO_TARGET_DIR -u CARGO_LLVM_COV_BUILD_DIR -u CARGO_LLVM_COV_TARGET_DIR -u LLVM_PROFILE_FILE cargo llvm-cov report -p $(CARGO_PACKAGE) --cobertura --output-path $(REPO_ROOT)/$(COVERAGE_REPORT)
 	python3 $(REPO_ROOT)/tools/plugin_catalog.py coverage-check $(REPO_ROOT) $(COVERAGE_REPORT) $(COVERAGE_MIN) '["$(PLUGIN_SLUG)"]'

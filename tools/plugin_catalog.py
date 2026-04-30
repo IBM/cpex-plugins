@@ -19,6 +19,8 @@ MANAGED_ROOT = Path("plugins/rust/python-package")
 REPOSITORY_URL = "https://github.com/IBM/cpex-plugins"
 SHARED_PATH_PREFIXES = (
     "Makefile",
+    ".cargo/",
+    ".config/",
     ".github/workflows/",
     "Cargo.toml",
     "Cargo.lock",
@@ -29,7 +31,6 @@ SHARED_PATH_PREFIXES = (
     "TESTING.md",
     "tools/",
 )
-
 ENTRY_POINT_PATTERN = re.compile(
     r"^(?P<module>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*):(?P<object>[A-Za-z_][A-Za-z0-9_]*)$"
 )
@@ -487,14 +488,13 @@ def _git_changed_paths(root: Path, base: str, head: str) -> list[str]:
 
 def changed_plugins(root: Path, base: str, head: str) -> list[str]:
     plugins = discover_plugins(root)
-    return _changed_plugins_for_records(root, plugins, base, head)
+    return _changed_plugins_for_records(root, plugins, _git_changed_paths(root, base, head))
 
 
 def _changed_plugins_for_records(
-    root: Path, plugins: list[PluginRecord], base: str, head: str
+    root: Path, plugins: list[PluginRecord], changed_paths: list[str]
 ) -> list[str]:
     plugin_lookup = {record.slug: record for record in plugins}
-    changed_paths = _git_changed_paths(root, base, head)
 
     if any(
         path == prefix.rstrip("/") or path.startswith(prefix)
@@ -522,21 +522,76 @@ def _changed_plugins_for_records(
     return sorted(changed)
 
 
+def _plugin_depends_on_crate(root: Path, record: PluginRecord, crate_name: str) -> bool:
+    manifest_path = root / record.path / "Cargo.toml"
+    with manifest_path.open("rb") as handle:
+        manifest = tomllib.load(handle)
+    return crate_name in manifest.get("dependencies", {})
+
+
+def _mutation_jobs_for_records(
+    root: Path, plugins: list[PluginRecord], changed_paths: list[str]
+) -> list[dict[str, object]]:
+    plugin_lookup = {record.slug: record for record in plugins}
+    jobs: dict[str, dict[str, object]] = {}
+    managed_prefix = f"{MANAGED_ROOT.as_posix()}/"
+
+    def add_job(cargo_package: str, *, in_diff: bool, test_packages: list[str] | None = None) -> None:
+        jobs[cargo_package] = {
+            "cargo_package": cargo_package,
+            "in_diff": in_diff,
+            "test_packages": test_packages or [],
+        }
+
+    for path in changed_paths:
+        if not path.endswith(".rs"):
+            continue
+        if path.startswith("crates/framework_bridge/"):
+            test_packages: list[str] = []
+            for record in plugins:
+                if _plugin_depends_on_crate(root, record, "cpex_framework_bridge"):
+                    test_packages.append(record.cargo_package_name)
+            add_job("cpex_framework_bridge", in_diff=True, test_packages=sorted(test_packages))
+            continue
+        if not path.startswith(managed_prefix):
+            continue
+        relative = path[len(managed_prefix):]
+        slug = relative.split("/", maxsplit=1)[0]
+        if slug in plugin_lookup:
+            add_job(plugin_lookup[slug].cargo_package_name, in_diff=True)
+
+    return [jobs[key] for key in sorted(jobs)]
+
+
 def ci_selection(root: Path, mode: str, base: str | None = None, head: str | None = None) -> dict:
     plugins = discover_plugins(root)
     plugin_lookup = {plugin.slug: plugin for plugin in plugins}
     if mode == "all":
         selected = sorted(plugin.slug for plugin in plugins)
+        mutation_jobs = [
+            {
+                "cargo_package": plugin_lookup[slug].cargo_package_name,
+                "in_diff": False,
+                "test_packages": [],
+            }
+            for slug in selected
+        ]
     else:
         if base is None or head is None:
             raise CatalogError("ci-selection diff mode requires base and head revisions")
-        selected = _changed_plugins_for_records(root, plugins, base, head)
+        changed_paths = _git_changed_paths(root, base, head)
+        selected = _changed_plugins_for_records(root, plugins, changed_paths)
+        mutation_jobs = _mutation_jobs_for_records(root, plugins, changed_paths)
     cargo_packages = [plugin_lookup[slug].cargo_package_name for slug in selected]
+    mutation_cargo_packages = [str(job["cargo_package"]) for job in mutation_jobs]
     return {
         "plugins": selected,
         "has_plugins": bool(selected),
         "plugin_count": len(selected),
         "cargo_packages": cargo_packages,
+        "mutation_cargo_packages": mutation_cargo_packages,
+        "has_mutation_cargo_packages": bool(mutation_cargo_packages),
+        "mutation_jobs": mutation_jobs,
     }
 
 
@@ -782,6 +837,9 @@ def build_parser() -> argparse.ArgumentParser:
             "has_plugins",
             "plugin_count",
             "cargo_packages",
+            "mutation_cargo_packages",
+            "has_mutation_cargo_packages",
+            "mutation_jobs",
         ),
     )
 

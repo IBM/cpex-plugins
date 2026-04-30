@@ -5,6 +5,8 @@ help:
 PACKAGE_NAME := cpex-secrets-detection
 WHEEL_PREFIX := cpex_secrets_detection
 CARGO := cargo
+CARGO_PACKAGE := secrets_detection
+NEXTEST_PROFILE ?= default
 STUB_FILES := cpex_secrets_detection/__init__.pyi cpex_secrets_detection/secrets_detection_rust/__init__.pyi
 WHEEL_DIR := ../../../../target/wheels
 
@@ -39,13 +41,13 @@ sync:
 
 test-unit:
 	@echo "$(GREEN)Running secrets_detection Rust tests...$(NC)"
-	$(CARGO) test
+	$(CARGO) nextest run --profile $(NEXTEST_PROFILE) -p $(CARGO_PACKAGE)
 
 test: test-unit test-integration
 
 test-verbose:
 	@echo "$(GREEN)Running secrets_detection Rust tests (verbose)...$(NC)"
-	$(CARGO) test -- --nocapture
+	$(CARGO) nextest run --profile $(NEXTEST_PROFILE) -p $(CARGO_PACKAGE) --no-capture
 
 test-integration:
 	@echo "$(GREEN)Running integration tests...$(NC)"
@@ -87,7 +89,7 @@ uninstall:
 	@uv pip uninstall -y $(PACKAGE_NAME) 2>/dev/null || true
 
 # help: bench                 - Run Criterion benchmarks
-# help: bench-no-run          - Compile Criterion benchmarks without running them
+# help: bench-no-run          - Compile Criterion benchmark targets with nextest
 .PHONY: bench bench-no-run
 
 bench:
@@ -95,8 +97,8 @@ bench:
 	$(CARGO) bench
 
 bench-no-run:
-	@echo "$(GREEN)Compiling benchmarks without running them...$(NC)"
-	$(CARGO) bench --no-run
+	@echo "$(GREEN)Compiling Criterion benchmark targets with nextest...$(NC)"
+	$(CARGO) nextest run --profile $(NEXTEST_PROFILE) -p $(CARGO_PACKAGE) --benches -E 'kind(bench)' --no-run
 
 .PHONY: clean clean-all
 

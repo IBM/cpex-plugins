@@ -523,6 +523,7 @@ mod tests {
 
     #[test]
     fn await_async_tuple_parses_successful_result() -> PyResult<()> {
+        Python::initialize();
         Python::attach(|py| -> PyResult<()> {
             let sys = py.import("sys")?;
             let asyncio = py.import("asyncio")?;

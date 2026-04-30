@@ -5,6 +5,8 @@ help:
 PACKAGE_NAME := cpex-encoded-exfil-detection
 WHEEL_PREFIX := cpex_encoded_exfil_detection
 CARGO := cargo
+CARGO_PACKAGE := encoded_exfil_detection
+NEXTEST_PROFILE ?= default
 STUB_FILES := cpex_encoded_exfil_detection/__init__.pyi cpex_encoded_exfil_detection/encoded_exfil_detection_rust/__init__.pyi
 WHEEL_DIR := ../../../../target/wheels
 
@@ -38,7 +40,7 @@ sync:
 
 test-unit:
 	@echo "$(GREEN)Running encoded_exfil_detection Rust tests...$(NC)"
-	$(CARGO) test
+	$(CARGO) nextest run --profile $(NEXTEST_PROFILE) -p $(CARGO_PACKAGE)
 
 test: test-unit test-integration
 
@@ -85,7 +87,7 @@ uninstall:
 	@uv pip uninstall -y $(PACKAGE_NAME) 2>/dev/null || true
 
 # help: bench                 - Run Criterion benchmarks
-# help: bench-no-run          - Compile Criterion benchmarks without running them
+# help: bench-no-run          - Compile Criterion benchmark targets with nextest
 .PHONY: bench bench-no-run
 
 bench:
@@ -93,8 +95,8 @@ bench:
 	$(CARGO) bench
 
 bench-no-run:
-	@echo "$(GREEN)Compiling benchmarks without running them...$(NC)"
-	$(CARGO) bench --no-run
+	@echo "$(GREEN)Compiling Criterion benchmark targets with nextest...$(NC)"
+	$(CARGO) nextest run --profile $(NEXTEST_PROFILE) -p $(CARGO_PACKAGE) --benches -E 'kind(bench)' --no-run
 
 .PHONY: clean clean-all
 

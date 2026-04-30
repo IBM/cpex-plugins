@@ -5,6 +5,8 @@ help:
 PACKAGE_NAME := {{ package_name }}
 WHEEL_PREFIX := {{ module_name }}
 CARGO := cargo
+CARGO_PACKAGE := {{ plugin_name }}
+NEXTEST_PROFILE ?= default
 STUB_FILES := {{ module_name }}/__init__.pyi {{ module_name }}/{{ rust_lib_name }}/__init__.pyi
 WHEEL_DIR := ../../../../target/wheels
 
@@ -38,11 +40,11 @@ sync:
 
 test:
 	@echo "$(GREEN)Running {{ plugin_name }} Rust tests...$(NC)"
-	$(CARGO) test
+	$(CARGO) nextest run --profile $(NEXTEST_PROFILE) -p $(CARGO_PACKAGE)
 
 test-verbose:
 	@echo "$(GREEN)Running {{ plugin_name }} Rust tests (verbose)...$(NC)"
-	$(CARGO) test -- --nocapture
+	$(CARGO) nextest run --profile $(NEXTEST_PROFILE) -p $(CARGO_PACKAGE) --no-capture
 
 test-python:
 	@echo "$(GREEN)Running Python tests...$(NC)"
@@ -84,12 +86,12 @@ uninstall:
 	@uv pip uninstall -y $(PACKAGE_NAME) 2>/dev/null || true
 
 {% if include_benchmarks -%}
-# help: bench-no-run          - Compile benchmarks without running them
+# help: bench-no-run          - Compile benchmark targets with nextest
 .PHONY: bench-no-run
 
 bench-no-run:
-	@echo "$(GREEN)Compiling benchmarks without running them...$(NC)"
-	$(CARGO) bench --no-run
+	@echo "$(GREEN)Compiling Criterion benchmark targets with nextest...$(NC)"
+	$(CARGO) nextest run --profile $(NEXTEST_PROFILE) -p $(CARGO_PACKAGE) --benches -E 'kind(bench)' --no-run
 
 {% endif -%}
 .PHONY: clean clean-all
