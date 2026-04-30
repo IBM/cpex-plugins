@@ -180,6 +180,68 @@ class TestPublicRustApi:
             if not isinstance(key, str)
         )
 
+    def test_scan_container_redacts_mixed_string_and_non_string_dict_values(self):
+        class BadKey:
+            pass
+
+        class SecretBox:
+            def __init__(self):
+                self.value = "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+                self.__dict__[BadKey()] = (
+                    "AWS_SECRET_ACCESS_KEY=FAKESecretAccessKeyForTestingEXAMPLE0000"
+                )
+
+        payload = SecretBox()
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 2
+        assert findings == [
+            {"type": "aws_access_key_id"},
+            {"type": "aws_secret_access_key"},
+        ]
+        assert redacted is not payload
+        assert isinstance(redacted, SecretBox)
+        assert redacted.value == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        assert any(
+            value == "[REDACTED]"
+            for key, value in redacted.__dict__.items()
+            if not isinstance(key, str)
+        )
+        assert payload.value == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+
+    def test_scan_container_rewrites_non_string_dict_back_edges_on_objects(self):
+        class BadKey:
+            pass
+
+        class SecretBox:
+            def __init__(self):
+                self.__dict__[BadKey()] = "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+                self.__dict__[BadKey()] = self
+
+        payload = SecretBox()
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 1
+        assert findings == [{"type": "aws_access_key_id"}]
+        assert redacted is not payload
+        assert isinstance(redacted, SecretBox)
+        assert any(
+            value == "AWS_ACCESS_KEY_ID=[REDACTED]"
+            for key, value in redacted.__dict__.items()
+            if not isinstance(key, str) and isinstance(value, str)
+        )
+        assert any(
+            value is redacted
+            for key, value in redacted.__dict__.items()
+            if not isinstance(key, str)
+        )
+
     def test_scan_container_omits_match_previews_from_public_findings(self):
         count, _, findings = py_scan_container(
             "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE",

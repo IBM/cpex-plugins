@@ -139,29 +139,22 @@ pub fn apply_object_state(
     Ok(())
 }
 
-pub fn copy_object_with_extra_dict_state(
+pub fn apply_extra_dict_state(
     py: Python<'_>,
-    obj: &Bound<'_, PyAny>,
-    base_state: Option<&Bound<'_, PyDict>>,
+    target: &Bound<'_, PyAny>,
     updates: &Bound<'_, PyDict>,
-) -> PyResult<Py<PyAny>> {
-    let target = prepare_rebuild_target(py, obj)?;
-    if let Some(base_state) = base_state {
-        apply_object_state(py, &target, &base_state.clone().into_any())?;
-    }
-
+) -> PyResult<()> {
     let dict = target.getattr("__dict__")?.cast_into::<PyDict>()?;
     for (key, value) in updates.iter() {
         if key.is_exact_instance_of::<PyString>() {
             let builtins = py.import("builtins")?;
             let object_type = builtins.getattr("object")?;
-            set_attr_without_hooks(&object_type, &target, &key.extract::<String>()?, &value)?;
+            set_attr_without_hooks(&object_type, target, &key.extract::<String>()?, &value)?;
         } else {
             dict.set_item(key, value)?;
         }
     }
-
-    Ok(target.unbind())
+    Ok(())
 }
 
 fn blank_instance<'py>(

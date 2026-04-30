@@ -8,9 +8,9 @@ use pyo3::types::{PyAny, PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyStri
 
 use crate::config::SecretsDetectionConfig;
 use crate::object_model::{
-    InspectedObjectState, apply_object_state, copy_object_with_extra_dict_state,
-    copy_object_with_updates, dict_has_only_exact_string_keys, inspect_object_state,
-    inspect_object_state_without_model_dump, prepare_rebuild_target,
+    InspectedObjectState, apply_extra_dict_state, apply_object_state, copy_object_with_updates,
+    dict_has_only_exact_string_keys, inspect_object_state, inspect_object_state_without_model_dump,
+    prepare_rebuild_target,
 };
 
 use super::cycle_rewrite::replace_placeholder_references;
@@ -162,7 +162,7 @@ fn scan_object_state<'py>(
         .rebuild_state
         .as_ref()
         .map(|state| state.as_any().clone());
-    let rebuild_state_for_extra = object_state.rebuild_state.as_ref().cloned();
+    let mut rebuild_state_for_extra = object_state.rebuild_state.as_ref().cloned();
     let has_rebuild_state = object_state.rebuild_state.is_some();
 
     if let Some(state) = object_state.rebuild_state {
@@ -177,11 +177,21 @@ fn scan_object_state<'py>(
         }
         if count > 0 || !same_safe_value(&redacted_state, &state_any, &mut HashSet::new())? {
             apply_object_state(py, &target, &redacted_state)?;
+            rebuild_state_for_extra = Some(redacted_state.cast::<PyDict>()?.clone());
             rebuilt = Some(target.into_any());
         }
     }
 
     if let Some(scan_state) = object_state.scan_state {
+        if rebuilt.is_none() {
+            let target = prepare_rebuild_target(py, container)?;
+            if let Some(state) = rebuild_state_for_extra.as_ref() {
+                apply_object_state(py, &target, &state.clone().into_any())?;
+            }
+            memo.insert(container.as_ptr() as usize, target.clone().unbind());
+            rebuilt = Some(target.into_any());
+        }
+
         let scan_state_any = scan_state.clone().into_any();
         let (count, redacted_state, child_findings) =
             scan_container_inner(py, &scan_state_any, config, str_type, seen, memo)?;
@@ -190,17 +200,8 @@ fn scan_object_state<'py>(
             findings.append(finding)?;
         }
         if count > 0 {
-            let base = rebuilt.as_ref().unwrap_or(container);
-            rebuilt = Some(
-                copy_object_with_extra_dict_state(
-                    py,
-                    base,
-                    rebuild_state_for_extra.as_ref(),
-                    redacted_state.cast::<PyDict>()?,
-                )?
-                .bind(py)
-                .clone(),
-            );
+            let base = rebuilt.as_ref().expect("scan_state target exists");
+            apply_extra_dict_state(py, base, redacted_state.cast::<PyDict>()?)?;
         }
     }
 
