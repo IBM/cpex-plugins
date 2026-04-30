@@ -39,7 +39,7 @@ pub static PATTERNS: LazyLock<HashMap<&'static str, Regex>> = LazyLock::new(|| {
     );
     patterns.insert(
         "slack_token",
-        Regex::new(r"\bxox[abpqr]-[0-9A-Za-z\-]{10,48}\b").expect("valid slack_token regex"),
+        Regex::new(r"\bxox[abpqr]-[0-9A-Za-z\-]{10,80}\b").expect("valid slack_token regex"),
     );
     patterns.insert(
         "private_key_block",

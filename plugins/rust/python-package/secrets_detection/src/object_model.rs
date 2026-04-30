@@ -2,58 +2,66 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyFrozenSet, PyList, PySet, PyTuple};
+use pyo3::types::{PyAny, PyDict, PyFrozenSet, PyList, PySet, PyString, PyTuple};
 
 pub struct InspectedObjectState<'py> {
     pub rebuild_state: Option<Bound<'py, PyDict>>,
     pub serialized_state: Option<Bound<'py, PyAny>>,
+    pub scan_state: Option<Bound<'py, PyDict>>,
 }
 
 pub fn inspect_object_state<'py>(
     py: Python<'py>,
     container: &Bound<'py, PyAny>,
 ) -> PyResult<InspectedObjectState<'py>> {
+    inspect_object_state_inner(py, container, true)
+}
+
+pub fn inspect_object_state_without_model_dump<'py>(
+    py: Python<'py>,
+    container: &Bound<'py, PyAny>,
+) -> PyResult<InspectedObjectState<'py>> {
+    inspect_object_state_inner(py, container, false)
+}
+
+fn inspect_object_state_inner<'py>(
+    py: Python<'py>,
+    container: &Bound<'py, PyAny>,
+    include_model_dump: bool,
+) -> PyResult<InspectedObjectState<'py>> {
     let mut mappings = MappingStateAccumulator::new(py);
     let mut serialized_state = None;
 
-    if let Ok(model_dump) = container.call_method0("model_dump") {
+    if include_model_dump && let Ok(model_dump) = container.call_method0("model_dump") {
         if let Ok(model_state) = model_dump.cast::<PyDict>() {
             serialized_state = Some(model_state.clone().into_any());
-            mappings.push(model_state)?;
+            if dict_has_only_exact_string_keys(model_state) {
+                mappings.push(model_state)?;
+            }
         } else if !model_dump.is(container) {
             serialized_state = Some(model_dump);
         }
     }
 
+    let mut scan_state = None;
     if let Ok(dict_state) = container.getattr("__dict__")
         && let Ok(dict_state) = dict_state.cast::<PyDict>()
     {
-        mappings.push(dict_state)?;
+        let split_state = split_dict_state(py, dict_state)?;
+        if let Some(dict_state) = split_state.string_keys {
+            mappings.push(&dict_state)?;
+        }
+        scan_state = split_state.non_string_keys;
     }
 
     if let Some(slot_state) = extract_slot_state(py, container)? {
         mappings.push(&slot_state)?;
     }
 
-    let rebuild_state = mappings.finish();
-    if container.hasattr("root")?
-        && serialized_state.is_some()
-        && let Some(rebuild_state) = rebuild_state.as_ref()
-        && rebuild_state.contains("root")?
-        && let Some(serialized) = serialized_state.as_ref()
-        && rebuild_state
-            .get_item("root")?
-            .is_some_and(|root| root.eq(serialized).unwrap_or(false))
-    {
-        return Ok(InspectedObjectState {
-            rebuild_state: Some(rebuild_state.clone()),
-            serialized_state: None,
-        });
-    }
-
     Ok(InspectedObjectState {
-        rebuild_state,
+        rebuild_state: mappings.finish(),
         serialized_state,
+        scan_state,
     })
 }
 
@@ -127,6 +135,24 @@ pub fn apply_object_state(
     let object_type = builtins.getattr("object")?;
     for (key, value) in state.iter() {
         set_attr_without_hooks(&object_type, target, &key.extract::<String>()?, &value)?;
+    }
+    Ok(())
+}
+
+pub fn apply_extra_dict_state(
+    py: Python<'_>,
+    target: &Bound<'_, PyAny>,
+    updates: &Bound<'_, PyDict>,
+) -> PyResult<()> {
+    let dict = target.getattr("__dict__")?.cast_into::<PyDict>()?;
+    for (key, value) in updates.iter() {
+        if key.is_exact_instance_of::<PyString>() {
+            let builtins = py.import("builtins")?;
+            let object_type = builtins.getattr("object")?;
+            set_attr_without_hooks(&object_type, target, &key.extract::<String>()?, &value)?;
+        } else {
+            dict.set_item(key, value)?;
+        }
     }
     Ok(())
 }
@@ -244,6 +270,53 @@ fn merge_state_into(target: &Bound<'_, PyDict>, source: &Bound<'_, PyDict>) -> P
     Ok(())
 }
 
+pub fn dict_has_only_exact_string_keys(dict: &Bound<'_, PyDict>) -> bool {
+    dict.iter()
+        .all(|(key, _)| key.is_exact_instance_of::<PyString>())
+}
+
+struct SplitDictState<'py> {
+    string_keys: Option<Bound<'py, PyDict>>,
+    non_string_keys: Option<Bound<'py, PyDict>>,
+}
+
+fn split_dict_state<'py>(
+    py: Python<'py>,
+    dict: &Bound<'py, PyDict>,
+) -> PyResult<SplitDictState<'py>> {
+    if dict_has_only_exact_string_keys(dict) {
+        return Ok(SplitDictState {
+            string_keys: Some(dict.clone()),
+            non_string_keys: None,
+        });
+    }
+
+    let string_state = PyDict::new(py);
+    let non_string_state = PyDict::new(py);
+    for (key, value) in dict.iter() {
+        if key.is_exact_instance_of::<PyString>() {
+            string_state.set_item(key, value)?;
+        } else {
+            non_string_state.set_item(key, value)?;
+        }
+    }
+
+    let string_state = if string_state.is_empty() {
+        None
+    } else {
+        Some(string_state)
+    };
+    let non_string_state = if non_string_state.is_empty() {
+        None
+    } else {
+        Some(non_string_state)
+    };
+    Ok(SplitDictState {
+        string_keys: string_state,
+        non_string_keys: non_string_state,
+    })
+}
+
 struct MappingStateAccumulator<'py> {
     py: Python<'py>,
     state: Option<Bound<'py, PyDict>>,
@@ -338,7 +411,7 @@ class StateObject:
     }
 
     #[test]
-    fn inspect_root_model_uses_rebuild_state_only_when_root_matches_serialized_state() {
+    fn inspect_root_model_exposes_rebuild_and_serialized_state() {
         Python::initialize();
         Python::attach(|py| -> PyResult<()> {
             let code = CString::new(
@@ -358,7 +431,7 @@ class RootObject:
             let inspected = inspect_object_state(py, &instance)?;
 
             assert!(inspected.rebuild_state.is_some());
-            assert!(inspected.serialized_state.is_none());
+            assert!(inspected.serialized_state.is_some());
             Ok(())
         })
         .unwrap();

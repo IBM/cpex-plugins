@@ -33,6 +33,8 @@ make check-all             # fmt-check + clippy + Rust tests
 
 ## Versioning
 
+Every change to a core plugin must include a plugin version bump.
+
 When bumping a plugin version, update all of these:
 
 1. `Cargo.toml` — the single source of truth for the version number.
