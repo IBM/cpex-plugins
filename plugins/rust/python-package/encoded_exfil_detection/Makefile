@@ -38,7 +38,11 @@ sync:
 
 test-unit:
 	@echo "$(GREEN)Running encoded_exfil_detection Rust tests...$(NC)"
-	$(CARGO) test
+	@if command -v $(CARGO) >/dev/null 2>&1; then \
+		$(CARGO) test; \
+	else \
+		echo "$(YELLOW)cargo not found — skipping Rust unit tests$(NC)"; \
+	fi
 
 test: test-unit test-integration
 
