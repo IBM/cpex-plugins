@@ -29,9 +29,9 @@ pub fn inspect_object_state<'py>(
 
     if let Ok(dict_state) = container.getattr("__dict__")
         && let Ok(dict_state) = dict_state.cast::<PyDict>()
-        && dict_has_only_exact_string_keys(dict_state)
+        && let Some(dict_state) = exact_string_key_state(py, dict_state)?
     {
-        mappings.push(dict_state)?;
+        mappings.push(&dict_state)?;
     }
 
     if let Some(slot_state) = extract_slot_state(py, container)? {
@@ -234,6 +234,28 @@ fn merge_state_into(target: &Bound<'_, PyDict>, source: &Bound<'_, PyDict>) -> P
 pub fn dict_has_only_exact_string_keys(dict: &Bound<'_, PyDict>) -> bool {
     dict.iter()
         .all(|(key, _)| key.is_exact_instance_of::<PyString>())
+}
+
+fn exact_string_key_state<'py>(
+    py: Python<'py>,
+    dict: &Bound<'py, PyDict>,
+) -> PyResult<Option<Bound<'py, PyDict>>> {
+    if dict_has_only_exact_string_keys(dict) {
+        return Ok(Some(dict.clone()));
+    }
+
+    let filtered = PyDict::new(py);
+    for (key, value) in dict.iter() {
+        if key.is_exact_instance_of::<PyString>() {
+            filtered.set_item(key, value)?;
+        }
+    }
+
+    if filtered.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(filtered))
+    }
 }
 
 struct MappingStateAccumulator<'py> {
