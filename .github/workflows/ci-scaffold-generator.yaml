@@ -52,9 +52,10 @@ jobs:
           rustc --version
           cargo --version
 
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest@0.9.133
+      - name: Install cargo-nextest (linux binary)
+        run: |
+          mkdir -p "${CARGO_HOME:-$HOME/.cargo}/bin"
+          curl -LsSf https://get.nexte.st/0.9.133/linux | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
 
       - name: Verify cargo-nextest
         run: cargo nextest --version

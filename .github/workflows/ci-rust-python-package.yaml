@@ -129,9 +129,15 @@ jobs:
           rustc --version
           cargo --version
 
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest@0.9.133
+      - name: Install cargo-nextest (linux binary)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p "${CARGO_HOME:-$HOME/.cargo}/bin"
+          curl -LsSf https://get.nexte.st/0.9.133/linux | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+
+      - name: Install cargo-nextest (cargo install fallback)
+        if: runner.os != 'Linux'
+        run: cargo install cargo-nextest --version 0.9.133 --locked
 
       - name: Verify cargo-nextest
         run: cargo nextest --version
@@ -200,9 +206,13 @@ jobs:
           rustc --version
           cargo --version
 
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest@0.9.133,cargo-mutants@27.0.0
+      - name: Install cargo-nextest (linux binary)
+        run: |
+          mkdir -p "${CARGO_HOME:-$HOME/.cargo}/bin"
+          curl -LsSf https://get.nexte.st/0.9.133/linux | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants --version 27.0.0 --locked
 
       - name: Verify Rust mutation testing tooling
         run: |
@@ -251,9 +261,10 @@ jobs:
           rustup component add llvm-tools-preview
           cargo install cargo-llvm-cov --version 0.8.4 --locked
 
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest@0.9.133
+      - name: Install cargo-nextest (linux binary)
+        run: |
+          mkdir -p "${CARGO_HOME:-$HOME/.cargo}/bin"
+          curl -LsSf https://get.nexte.st/0.9.133/linux | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
 
       - name: Verify cargo-nextest
         run: |
