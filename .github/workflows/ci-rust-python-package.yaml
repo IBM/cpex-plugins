@@ -232,8 +232,7 @@ jobs:
       - name: Create mutation diff
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: git diff "${BASE_SHA}..${HEAD_SHA}" -- '*.rs' > cargo-mutants.diff
+        run: git diff "${BASE_SHA}" -- '*.rs' > cargo-mutants.diff
 
       - name: Run cargo-mutants with nextest
         env:
