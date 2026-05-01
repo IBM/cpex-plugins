@@ -52,13 +52,15 @@ jobs:
           rustc --version
           cargo --version
 
-      - name: Install cargo-nextest (linux binary)
+      - name: Install cargo-nextest
         run: |
-          mkdir -p "${CARGO_HOME:-$HOME/.cargo}/bin"
-          curl -LsSf https://get.nexte.st/0.9.133/linux | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
-
-      - name: Verify cargo-nextest
-        run: cargo nextest --version
+          if [[ "${RUNNER_OS}" == "Linux" ]]; then
+            mkdir -p "${CARGO_HOME:-$HOME/.cargo}/bin"
+            curl -LsSf https://get.nexte.st/0.9.133/linux | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+          else
+            cargo install cargo-nextest --version 0.9.133 --locked
+          fi
+          cargo nextest --version
 
       - name: Generate default plugin (tool_pre_invoke)
         run: |
