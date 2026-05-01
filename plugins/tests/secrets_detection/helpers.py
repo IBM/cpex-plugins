@@ -1,7 +1,9 @@
+from dataclasses import dataclass
+
 from pydantic import BaseModel, RootModel, model_serializer
 
-from mcpgateway.common.models import ResourceContent
-from mcpgateway.plugins.framework import (
+from cpex.framework import (
+    GlobalContext,
     PluginConfig,
     PluginContext,
     PluginManager,
@@ -13,7 +15,6 @@ from mcpgateway.plugins.framework import (
     ToolHookType,
     ToolPostInvokePayload,
 )
-from mcpgateway.plugins.framework.models import GlobalContext
 
 from cpex_secrets_detection.secrets_detection import SecretsDetectionPlugin
 from cpex_secrets_detection.secrets_detection_rust import py_scan_container
@@ -37,6 +38,14 @@ __all__ = [
     "model_serializer",
     "py_scan_container",
 ]
+
+
+@dataclass
+class ResourceContent:
+    type: str
+    id: str
+    uri: str
+    text: str
 
 
 def make_context() -> PluginContext:
