@@ -145,8 +145,8 @@ version of an existing managed plugin to PyPI.
 
    Examples:
 
-   - `rate_limiter` -> `rate-limiter-v`
-   - `secrets_detection` -> `secrets-detection-v`
+   - `rate_limiter` -> `rate-limiter-v0.0.5`
+   - `secrets_detection` -> `secrets-detection-v0.2.2`
 
    Use `make plugins-list` to inspect the current managed plugin slugs and
    package names.
@@ -161,7 +161,7 @@ version of an existing managed plugin to PyPI.
 7. Verify the package exists on PyPI at the new version.
 
    ```bash
-   python -m pip index versions cpex-rate-limiter
+   uv run python -m pip index versions cpex-rate-limiter
    ```
 
    The release page should also exist at
