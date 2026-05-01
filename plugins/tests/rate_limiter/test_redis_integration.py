@@ -1757,3 +1757,81 @@ class TestWipeOnDisable:
             "core.shutdown() must run even when wipe raises — expected the "
             f"Rust core's connection to be released (before={clients_before} after={clients_after})"
         )
+
+    @pytest.mark.asyncio
+    async def test_wipe_skipped_when_another_worker_holds_lock(self, redis_url_for_integration):
+        """Single-flight guard: when another worker is already wiping, this shutdown skips.
+
+        Simulates the lock-already-held state by SETting the lock key
+        externally before invoking shutdown. With the lock held, the wipe
+        path must not run — observable by counters surviving the shutdown
+        despite mode=disabled.
+        """
+        await _flush_redis(redis_url_for_integration)
+        await _seed_rate_limit_counters(redis_url_for_integration, count=5)
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiter", "disabled")
+
+        # Pre-acquire the wipe lock externally — pretend another worker is
+        # already in the middle of wiping. Default redis_key_prefix is "rl",
+        # so the lock key is "rl-wipe-lock".
+        # Third-Party
+        import redis.asyncio as aioredis  # noqa: PLC0415
+
+        client = aioredis.from_url(redis_url_for_integration, decode_responses=True)
+        try:
+            await client.set("rl-wipe-lock", "1", nx=True, ex=30)
+        finally:
+            await client.aclose()
+
+        plugin = _make_redis_plugin(redis_url_for_integration)
+        await plugin.shutdown()
+
+        # Counters survive — proves we did NOT take the wipe path.
+        keys_after = await _keys_in_redis(redis_url_for_integration, "rl:*")
+        assert len(keys_after) == 5, (
+            "shutdown must skip the wipe when another worker holds the lock — "
+            f"expected 5 rl:* keys to survive, got {keys_after}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_wipe_only_deletes_keys_under_configured_prefix(self, redis_url_for_integration):
+        """Wipe respects the plugin's configured ``redis_key_prefix``.
+
+        A regression that hard-coded ``rl:*`` (the default prefix) would still
+        pass every other test in this class, because they all use the default
+        prefix. This test pins the contract: only keys under the plugin's
+        configured prefix are deleted; adjacent namespaces survive.
+        """
+        await _flush_redis(redis_url_for_integration)
+
+        # Seed both: a key under our custom prefix (must be wiped) and a key
+        # under an unrelated prefix (must survive).
+        # Third-Party
+        import redis.asyncio as aioredis  # noqa: PLC0415
+
+        client = aioredis.from_url(redis_url_for_integration, decode_responses=True)
+        try:
+            await client.set("custom_pfx:user:alice:60", "5")
+            await client.set("other_ns:user:bob:60", "5")
+        finally:
+            await client.aclose()
+
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiter", "disabled")
+
+        plugin = _make_redis_plugin_with_config(
+            redis_url_for_integration,
+            {"redis_key_prefix": "custom_pfx"},
+        )
+        await plugin.shutdown()
+
+        custom_keys = await _keys_in_redis(redis_url_for_integration, "custom_pfx:*")
+        other_keys = await _keys_in_redis(redis_url_for_integration, "other_ns:*")
+
+        assert custom_keys == [], (
+            "wipe must delete every key under the configured prefix — "
+            f"expected [], got {custom_keys}"
+        )
+        assert other_keys == ["other_ns:user:bob:60"], (
+            "wipe must NOT touch keys outside the configured prefix — "
+            f"expected ['other_ns:user:bob:60'], got {other_keys}"
+        )
