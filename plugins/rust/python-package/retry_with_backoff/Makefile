@@ -135,7 +135,7 @@ coverage:
 	uv run maturin develop && \
 	$(MAKE) test-integration && \
 	env -u CARGO_TARGET_DIR -u CARGO_LLVM_COV_BUILD_DIR -u CARGO_LLVM_COV_TARGET_DIR -u LLVM_PROFILE_FILE cargo llvm-cov report -p $(CARGO_PACKAGE) --cobertura --output-path $(REPO_ROOT)/$(COVERAGE_REPORT)
-	python3 $(REPO_ROOT)/tools/plugin_catalog.py coverage-check $(REPO_ROOT) $(COVERAGE_REPORT) $(COVERAGE_MIN) '["$(PLUGIN_SLUG)"]'
+	uv run python $(REPO_ROOT)/tools/plugin_catalog.py coverage-check $(REPO_ROOT) $(COVERAGE_REPORT) $(COVERAGE_MIN) '["$(PLUGIN_SLUG)"]'
 
 ci: ci-build test-integration coverage
 	@echo "$(GREEN)CI verification passed$(NC)"

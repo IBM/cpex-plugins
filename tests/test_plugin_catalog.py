@@ -261,10 +261,10 @@ class PluginCatalogTests(unittest.TestCase):
         )
         self.assertEqual(
             workspace_deps["pyo3"],
-            {"version": "0.28.2", "features": ["abi3-py311"]},
+            {"version": "0.28.3", "features": ["abi3-py311"]},
         )
         self.assertEqual(workspace_deps["pyo3-log"], "0.13")
-        self.assertEqual(workspace_deps["pyo3-stub-gen"], "0.22.1")
+        self.assertEqual(workspace_deps["pyo3-stub-gen"], "0.22.2")
         self.assertEqual(workspace_deps["rand"], "0.8")
         self.assertEqual(workspace_deps["regex"], "1.12")
         self.assertEqual(workspace_deps["serde_json"], "1.0")
@@ -1451,7 +1451,7 @@ class PluginCatalogTests(unittest.TestCase):
             self.assertEqual(payload["plugins"], ["pii_filter", "rate_limiter"])
 
     def test_release_info_accepts_canonical_tag(self) -> None:
-        result = run_catalog("release-info", str(REPO_ROOT), "rate-limiter-v0.0.4")
+        result = run_catalog("release-info", str(REPO_ROOT), "rate-limiter-v0.0.5")
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["slug"], "rate_limiter")
@@ -1472,7 +1472,7 @@ class PluginCatalogTests(unittest.TestCase):
         )
 
     def test_release_info_gives_pii_filter_the_same_target_matrix(self) -> None:
-        result = run_catalog("release-info", str(REPO_ROOT), "pii-filter-v0.2.1")
+        result = run_catalog("release-info", str(REPO_ROOT), "pii-filter-v0.2.2")
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["slug"], "pii_filter")
@@ -1489,12 +1489,12 @@ class PluginCatalogTests(unittest.TestCase):
         )
 
     def test_release_info_rejects_noncanonical_tag(self) -> None:
-        result = run_catalog("release-info", str(REPO_ROOT), "rate_limiter-v0.0.4")
+        result = run_catalog("release-info", str(REPO_ROOT), "rate_limiter-v0.0.5")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("canonical", result.stderr.lower())
 
     def test_release_info_field_supports_kind(self) -> None:
-        result = run_catalog("release-info-field", str(REPO_ROOT), "pii-filter-v0.2.1", "kind")
+        result = run_catalog("release-info-field", str(REPO_ROOT), "pii-filter-v0.2.2", "kind")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "cpex_pii_filter.pii_filter.PIIFilterPlugin")
 
@@ -3601,7 +3601,7 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("$(CARGO) llvm-cov nextest --no-report -p $(CARGO_PACKAGE) -P $(NEXTEST_PROFILE)", makefile)
         self.assertIn("cargo llvm-cov report -p $(CARGO_PACKAGE)", makefile)
         self.assertIn(
-            "python3 $(REPO_ROOT)/tools/plugin_catalog.py coverage-check $(REPO_ROOT) $(COVERAGE_REPORT) $(COVERAGE_MIN)",
+            "uv run python $(REPO_ROOT)/tools/plugin_catalog.py coverage-check $(REPO_ROOT) $(COVERAGE_REPORT) $(COVERAGE_MIN)",
             makefile,
         )
 

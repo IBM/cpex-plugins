@@ -20,9 +20,9 @@ cpex_framework_bridge = { path = "crates/framework_bridge" }
 criterion = { version = "0.8", features = ["html_reports"] }
 log = "0.4"
 pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
-pyo3 = { version = "0.28.2", features = ["abi3-py311"] }
+pyo3 = { version = "0.28.3", features = ["abi3-py311"] }
 pyo3-log = "0.13"
-pyo3-stub-gen = "0.22.1"
+pyo3-stub-gen = "0.22.2"
 regex = "1.12"
 serde_json = "1.0"
 thiserror = "2.0"
