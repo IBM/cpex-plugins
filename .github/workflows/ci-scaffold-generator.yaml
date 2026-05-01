@@ -60,7 +60,7 @@ jobs:
           elif [[ "${RUNNER_OS}" == "macOS" ]]; then
             mkdir -p "${CARGO_HOME:-$HOME/.cargo}/bin"
             if [[ "$(uname -m)" == "arm64" ]]; then
-              curl -LsSf https://get.nexte.st/0.9.133/mac-arm | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+              curl -LsSf https://get.nexte.st/0.9.133/mac | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
             else
               curl -LsSf https://get.nexte.st/0.9.133/mac | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
             fi

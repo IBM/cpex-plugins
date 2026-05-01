@@ -2639,6 +2639,8 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("cargo install cargo-llvm-cov --version 0.8.4 --locked", coverage_section)
         self.assertIn("cargo install cargo-nextest --version 0.9.133 --locked", build_test_nextest_install)
         self.assertIn("cargo nextest --version", build_test_nextest_install)
+        self.assertIn("https://get.nexte.st/0.9.133/mac", build_test_nextest_install)
+        self.assertNotIn("mac-arm", workflow)
         self.assertIn("cargo install cargo-nextest --version 0.9.133 --locked", coverage_section)
         self.assertIn("cargo nextest --version", coverage_section)
         self.assertIn("cargo install cargo-nextest --version 0.9.133 --locked", mutants_install_run)
@@ -2764,6 +2766,8 @@ class PluginCatalogTests(unittest.TestCase):
             workflow, "test", step_name="Install cargo-nextest"
         )
         self.assertIn("cargo install cargo-nextest --version 0.9.133 --locked", nextest_install)
+        self.assertIn("https://get.nexte.st/0.9.133/mac", nextest_install)
+        self.assertNotIn("mac-arm", workflow)
         self.assertIn("cargo nextest --version", nextest_install)
 
     def test_testing_docs_include_local_rust_coverage_command(self) -> None:
