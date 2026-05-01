@@ -23,6 +23,9 @@ wheels = [
 [[package]]
 name = "cpex-rate-limiter"
 source = { editable = "." }
+dependencies = [
+    { name = "redis" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -33,6 +36,7 @@ dev = [
 ]
 
 [package.metadata]
+requires-dist = [{ name = "redis", specifier = ">=5.0" }]
 
 [package.metadata.requires-dev]
 dev = [

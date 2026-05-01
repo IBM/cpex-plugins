@@ -1617,3 +1617,182 @@ class TestRedisTlsSupport:
             )
         )
         assert plugin is not None
+
+
+# ---------------------------------------------------------------------------
+# Helpers for wipe-on-disable tests
+# ---------------------------------------------------------------------------
+
+
+async def _set_plugin_mode_key(redis_url: str, plugin_name: str, mode: str | None) -> None:
+    """Set or delete plugin:<name>:mode in Redis.
+
+    ``mode=None`` deletes the key (simulates a fresh deploy where no operator
+    has touched the admin mode API yet).
+    """
+    # Third-Party
+    import redis.asyncio as aioredis  # noqa: PLC0415
+
+    client = aioredis.from_url(redis_url, decode_responses=True)
+    try:
+        key = f"plugin:{plugin_name}:mode"
+        if mode is None:
+            await client.delete(key)
+        else:
+            await client.set(key, mode)
+    finally:
+        await client.aclose()
+
+
+async def _seed_rate_limit_counters(redis_url: str, count: int = 3) -> None:
+    """Drop ``count`` rl:* keys into Redis to simulate accumulated counter state."""
+    # Third-Party
+    import redis.asyncio as aioredis  # noqa: PLC0415
+
+    client = aioredis.from_url(redis_url, decode_responses=True)
+    try:
+        for i in range(count):
+            await client.set(f"rl:test:user:user-{i}:60", "5", ex=60)
+    finally:
+        await client.aclose()
+
+
+class TestWipeOnDisable:
+    """Counter wipe when operator transitions plugin mode to 'disabled'.
+
+    Rationale (team alignment, see README "Disabling resets counters"):
+    when the operator flips the rate limiter to disabled, every rate-limit
+    counter should be cleared so re-enabling starts every user with a
+    fresh window. The plugin signals this transition by reading
+    ``plugin:<name>:mode`` from Redis at shutdown — that key is written by
+    ``publish_plugin_mode_change`` *before* the pub/sub broadcast that
+    triggers the shutdown, so it is authoritative by the time we read it.
+
+    The wipe must NOT fire on:
+      * graceful pod shutdown (mode key unchanged, almost always 'enforce')
+      * non-mode config edits (mode key unchanged)
+      * Redis-unreachable shutdown paths (fail-safe: don't accidentally wipe)
+    """
+
+    @pytest.mark.asyncio
+    async def test_wipe_fires_when_mode_key_says_disabled(self, redis_url_for_integration):
+        """mode='disabled' in Redis → all rl:* keys are deleted on shutdown."""
+        await _flush_redis(redis_url_for_integration)
+        await _seed_rate_limit_counters(redis_url_for_integration, count=5)
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiter", "disabled")
+
+        keys_before = await _keys_in_redis(redis_url_for_integration, "rl:*")
+        assert len(keys_before) == 5, "seeding should have produced 5 rl:* keys"
+
+        plugin = _make_redis_plugin(redis_url_for_integration)
+        await plugin.shutdown()
+
+        keys_after = await _keys_in_redis(redis_url_for_integration, "rl:*")
+        assert keys_after == [], (
+            "shutdown with mode='disabled' must wipe every rl:* key — "
+            f"expected [], got {keys_after}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_wipe_when_mode_key_says_enforce(self, redis_url_for_integration):
+        """mode='enforce' in Redis → counters survive shutdown (config-only edit)."""
+        await _flush_redis(redis_url_for_integration)
+        await _seed_rate_limit_counters(redis_url_for_integration, count=3)
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiter", "enforce")
+
+        plugin = _make_redis_plugin(redis_url_for_integration)
+        await plugin.shutdown()
+
+        keys_after = await _keys_in_redis(redis_url_for_integration, "rl:*")
+        assert len(keys_after) == 3, (
+            "shutdown with mode='enforce' must NOT wipe counters — "
+            f"expected 3 rl:* keys, got {keys_after}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_wipe_when_mode_key_absent(self, redis_url_for_integration):
+        """No mode key in Redis → graceful shutdown safety: counters survive."""
+        await _flush_redis(redis_url_for_integration)
+        await _seed_rate_limit_counters(redis_url_for_integration, count=3)
+        # Explicitly ensure the mode key does not exist (fresh-deploy / pod-restart shape).
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiter", None)
+
+        plugin = _make_redis_plugin(redis_url_for_integration)
+        await plugin.shutdown()
+
+        keys_after = await _keys_in_redis(redis_url_for_integration, "rl:*")
+        assert len(keys_after) == 3, (
+            "shutdown with no mode key must NOT wipe counters (graceful shutdown safety) — "
+            f"expected 3 rl:* keys, got {keys_after}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_wipe_when_redis_unreachable_for_mode_lookup(self):
+        """Redis unreachable → mode lookup fails → fail-safe: no wipe attempted, no exception escapes."""
+        # The plugin's redis_url points nowhere. We never connect to set up
+        # state — there is no state to set up. We just need shutdown to
+        # complete cleanly without raising.
+        plugin = _make_redis_plugin(_DEAD_REDIS_URL)
+
+        # Must not raise; must not hang. Any error inside the wipe path
+        # should be swallowed and core.shutdown() should still run.
+        await plugin.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_wipe_is_idempotent_under_concurrent_shutdown(self, redis_url_for_integration):
+        """Multiple plugin instances calling shutdown() in parallel all succeed and converge."""
+        await _flush_redis(redis_url_for_integration)
+        await _seed_rate_limit_counters(redis_url_for_integration, count=10)
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiter", "disabled")
+
+        plugins = [_make_redis_plugin(redis_url_for_integration) for _ in range(5)]
+
+        results = await asyncio.gather(
+            *(p.shutdown() for p in plugins),
+            return_exceptions=True,
+        )
+        for i, r in enumerate(results):
+            assert not isinstance(r, BaseException), (
+                f"plugin[{i}].shutdown() raised under concurrent wipe — got {r!r}"
+            )
+
+        keys_after = await _keys_in_redis(redis_url_for_integration, "rl:*")
+        assert keys_after == [], (
+            "concurrent shutdowns must converge to all keys deleted — "
+            f"expected [], got {keys_after}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_core_shutdown_runs_even_when_wipe_raises(self, redis_url_for_integration):
+        """If wipe raises mid-shutdown, core.shutdown() must still execute and release the Redis connection.
+
+        Verified via the same client-count delta pattern used by
+        TestRedisLifecycle.test_shutdown_releases_redis_connection.
+        """
+        await _flush_redis(redis_url_for_integration)
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiter", "disabled")
+
+        plugin = _make_redis_plugin(redis_url_for_integration)
+        ctx = PluginContext(global_context=GlobalContext(request_id="r1", user="alice"))
+        payload = ToolPreInvokePayload(name="tool", arguments={})
+
+        # Warm the Rust core's cached Redis connection.
+        await plugin.tool_pre_invoke(payload, ctx)
+        clients_before = await _count_redis_clients(redis_url_for_integration)
+
+        # Force the wipe path to raise.
+        async def _boom() -> None:
+            raise RuntimeError("simulated wipe failure")
+
+        plugin._wipe_my_counters = _boom  # type: ignore[method-assign]
+
+        # Must not raise — the shutdown contract swallows wipe errors and
+        # still runs core.shutdown() inside finally.
+        await plugin.shutdown()
+
+        await asyncio.sleep(0.2)
+        clients_after = await _count_redis_clients(redis_url_for_integration)
+        assert clients_after < clients_before, (
+            "core.shutdown() must run even when wipe raises — expected the "
+            f"Rust core's connection to be released (before={clients_before} after={clients_after})"
+        )

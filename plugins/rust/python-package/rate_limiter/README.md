@@ -205,6 +205,16 @@ The plugin participates in the plugin manager's lifecycle contract:
 
 Without `shutdown`, the cached Redis connection would leak across plugin re-instantiation, producing connection churn on the server.
 
+### Disabling resets counters
+
+When an operator sets the plugin's mode to `disabled` via the gateway's admin mode API, every Redis key matching the plugin's configured `redis_key_prefix` (default `rl:*`) is deleted on shutdown. Re-enabling the plugin starts every user with a fresh window — counters do **not** resume from the pre-disable state.
+
+This makes the rate limiter behave like a stateless plugin from the operator's perspective across mode transitions: flipping `disabled` ⇄ `enforce` is the equivalent of a fresh deploy, not a paused-and-resumed counter. Frequent toggling is therefore discouraged — every flip discards counter history.
+
+The wipe is conditional on the admin mode API path: `publish_plugin_mode_change` writes `plugin:<name>:mode` to Redis *before* publishing the pub/sub broadcast that triggers shutdown. The plugin's `shutdown()` reads that key and only wipes when its value is exactly `"disabled"`. On a graceful pod shutdown the key is unchanged (it stays at whatever the operator last set, almost always `enforce`), so counters survive restarts.
+
+**Known limitation:** mode changes made through the per-tenant binding API (`POST /v1/tools/plugin_bindings`) do **not** currently trigger a wipe — the binding-API path stores the mode in the database rather than in `plugin:<name>:mode`, so the shutdown-time check returns False. Tracked for a follow-up.
+
 ## Limitations
 
 | Limitation | Severity | Status |

@@ -17,6 +17,9 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
+dependencies = [
+    "redis>=5.0",
+]
 
 [project.entry-points."cpex.plugins"]
 rate_limiter = "cpex_rate_limiter.rate_limiter:RateLimiterPlugin"
