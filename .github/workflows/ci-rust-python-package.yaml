@@ -81,23 +81,20 @@ jobs:
             selection="$(python3 tools/plugin_catalog.py ci-selection . diff "${{ github.event.before }}" "${{ github.sha }}")"
           fi
 
-          selection="$(printf '%s' "${selection}" | python3 -c 'import json, re, sys; payload = json.load(sys.stdin); slug_re = re.compile(r"^[a-z0-9_]+$"); plugins = payload.get("plugins"); cargo_packages = payload.get("cargo_packages"); mutation_cargo_packages = payload.get("mutation_cargo_packages"); mutation_jobs = payload.get("mutation_jobs"); has_plugins = payload.get("has_plugins"); plugin_count = payload.get("plugin_count"); assert isinstance(plugins, list) and all(isinstance(item, str) and slug_re.fullmatch(item) for item in plugins); assert isinstance(cargo_packages, list) and all(isinstance(item, str) and slug_re.fullmatch(item) for item in cargo_packages); assert isinstance(mutation_cargo_packages, list) and all(isinstance(item, str) and slug_re.fullmatch(item) for item in mutation_cargo_packages); assert isinstance(mutation_jobs, list); [(_ for _ in ()).throw(AssertionError()) for job in mutation_jobs if not (isinstance(job, dict) and isinstance(job.get("cargo_package"), str) and slug_re.fullmatch(job["cargo_package"]) and isinstance(job.get("in_diff"), bool) and isinstance(job.get("test_packages"), list) and all(isinstance(item, str) and slug_re.fullmatch(item) for item in job["test_packages"]))]; assert isinstance(has_plugins, bool); assert isinstance(plugin_count, int) and plugin_count == len(plugins); print(json.dumps({"plugins": plugins, "has_plugins": has_plugins, "plugin_count": plugin_count, "cargo_packages": cargo_packages, "mutation_cargo_packages": mutation_cargo_packages, "mutation_jobs": mutation_jobs}))')"
+          selection="$(printf '%s' "${selection}" | python3 tools/validate_ci_selection.py)"
           plugins="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["plugins"]))')"
           has_plugins="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(str(json.load(sys.stdin)["has_plugins"]).lower())')"
           plugin_count="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["plugin_count"])')"
           cargo_packages="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["cargo_packages"]))')"
           mutation_cargo_packages="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["mutation_cargo_packages"]))')"
           mutation_jobs="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["mutation_jobs"]))')"
+          has_mutation_cargo_packages="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(str(json.load(sys.stdin)["has_mutation_cargo_packages"]).lower())')"
           if [[ "${has_plugins}" == "false" ]]; then
             has_plugins_output="false"
           else
             has_plugins_output="true"
           fi
-          if [[ "${mutation_cargo_packages}" == "[]" ]]; then
-            has_mutation_cargo_packages_output="false"
-          else
-            has_mutation_cargo_packages_output="true"
-          fi
+          has_mutation_cargo_packages_output="${has_mutation_cargo_packages}"
           {
             echo "plugins=${plugins}"
             echo "plugin_count=${plugin_count}"
@@ -132,10 +129,12 @@ jobs:
           rustc --version
           cargo --version
 
-      - name: Install cargo-nextest
-        run: |
-          cargo install cargo-nextest --version 0.9.133 --locked
-          cargo nextest --version
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.133
+
+      - name: Verify cargo-nextest
+        run: cargo nextest --version
 
       - name: Install uv
         run: python -m pip install uv==0.9.30 maturin==1.12.6
@@ -201,11 +200,13 @@ jobs:
           rustc --version
           cargo --version
 
-      - name: Install Rust mutation testing tooling
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.133,cargo-mutants@27.0.0
+
+      - name: Verify Rust mutation testing tooling
         run: |
-          cargo install cargo-nextest --version 0.9.133 --locked
           cargo nextest --version
-          cargo install cargo-mutants --version 27.0.0 --locked
           cargo mutants --version
 
       - name: Create mutation diff
@@ -249,7 +250,13 @@ jobs:
         run: |
           rustup component add llvm-tools-preview
           cargo install cargo-llvm-cov --version 0.8.4 --locked
-          cargo install cargo-nextest --version 0.9.133 --locked
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.133
+
+      - name: Verify cargo-nextest
+        run: |
           cargo nextest --version
 
       - name: Install Python build tooling

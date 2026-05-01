@@ -52,10 +52,12 @@ jobs:
           rustc --version
           cargo --version
 
-      - name: Install cargo-nextest
-        run: |
-          cargo install cargo-nextest --version 0.9.133 --locked
-          cargo nextest --version
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.133
+
+      - name: Verify cargo-nextest
+        run: cargo nextest --version
 
       - name: Generate default plugin (tool_pre_invoke)
         run: |
