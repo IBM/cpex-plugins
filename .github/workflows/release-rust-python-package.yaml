@@ -213,7 +213,8 @@ jobs:
           if [[ ! -f "${venv_python}" ]]; then
             venv_python="${tmpdir}/venv/Scripts/python.exe"
           fi
-          "${venv_python}" -m pip install dist/*.whl pytest pytest-asyncio PyYAML
+          uv pip install --python "${venv_python}" --group dev PyYAML
+          "${venv_python}" -m pip install dist/*.whl
           if [[ -d "${GITHUB_WORKSPACE}/plugins/tests/${{ needs.resolve.outputs.slug }}" ]]; then
             mkdir -p "${tmpdir}/tests"
             cp -R "${GITHUB_WORKSPACE}/plugins/tests/${{ needs.resolve.outputs.slug }}" "${tmpdir}/tests/${{ needs.resolve.outputs.slug }}"
@@ -265,7 +266,8 @@ jobs:
           if [[ ! -f "${venv_python}" ]]; then
             venv_python="${tmpdir}/venv/Scripts/python.exe"
           fi
-          "${venv_python}" -m pip install dist/*.tar.gz pytest pytest-asyncio PyYAML
+          uv pip install --python "${venv_python}" --group dev PyYAML
+          "${venv_python}" -m pip install dist/*.tar.gz
           if [[ -d "${GITHUB_WORKSPACE}/plugins/tests/${{ needs.resolve.outputs.slug }}" ]]; then
             mkdir -p "${tmpdir}/tests"
             cp -R "${GITHUB_WORKSPACE}/plugins/tests/${{ needs.resolve.outputs.slug }}" "${tmpdir}/tests/${{ needs.resolve.outputs.slug }}"

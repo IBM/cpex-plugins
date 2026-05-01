@@ -48,9 +48,14 @@ def main() -> int:
         payload.get("mutation_cargo_packages"), "mutation_cargo_packages"
     )
     mutation_jobs = _assert_mutation_jobs(payload.get("mutation_jobs"))
+    release_validation_tags = payload.get("release_validation_tags")
     has_plugins = payload.get("has_plugins")
     plugin_count = payload.get("plugin_count")
 
+    if not isinstance(release_validation_tags, list) or any(
+        not isinstance(item, str) for item in release_validation_tags
+    ):
+        raise AssertionError("release_validation_tags must be a string list")
     if not isinstance(has_plugins, bool):
         raise AssertionError("has_plugins must be bool")
     if not isinstance(plugin_count, int) or plugin_count != len(plugins):
@@ -66,6 +71,8 @@ def main() -> int:
                 "mutation_cargo_packages": mutation_cargo_packages,
                 "mutation_jobs": mutation_jobs,
                 "has_mutation_cargo_packages": bool(mutation_cargo_packages),
+                "release_validation_tags": release_validation_tags,
+                "has_release_validation_tags": bool(release_validation_tags),
             }
         )
     )

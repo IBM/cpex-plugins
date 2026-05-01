@@ -486,6 +486,31 @@ def _git_changed_paths(root: Path, base: str, head: str) -> list[str]:
     return [line for line in completed.stdout.splitlines() if line.strip()]
 
 
+def _git_file_text(root: Path, revision: str, path: str) -> str | None:
+    completed = subprocess.run(
+        ["git", "show", f"{revision}:{path}"],
+        cwd=root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return None
+    return completed.stdout
+
+
+def _cargo_version_from_text(text: str) -> str | None:
+    try:
+        payload = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return None
+    package = payload.get("package", {})
+    if not isinstance(package, dict):
+        return None
+    version = package.get("version")
+    return version if isinstance(version, str) else None
+
+
 def changed_plugins(root: Path, base: str, head: str) -> list[str]:
     plugins = discover_plugins(root)
     return _changed_plugins_for_records(root, plugins, _git_changed_paths(root, base, head))
@@ -563,6 +588,21 @@ def _mutation_jobs_for_records(
     return [jobs[key] for key in sorted(jobs)]
 
 
+def _release_validation_tags_for_records(
+    root: Path, plugins: list[PluginRecord], changed_paths: list[str], base: str
+) -> list[str]:
+    tags: list[str] = []
+    for plugin in plugins:
+        cargo_path = f"{plugin.path}/Cargo.toml"
+        if cargo_path not in changed_paths:
+            continue
+        old_text = _git_file_text(root, base, cargo_path)
+        old_version = _cargo_version_from_text(old_text) if old_text is not None else None
+        if old_version is not None and old_version != plugin.version:
+            tags.append(f"{plugin.slug.replace('_', '-')}-v{plugin.version}")
+    return sorted(tags)
+
+
 def ci_selection(root: Path, mode: str, base: str | None = None, head: str | None = None) -> dict:
     plugins = discover_plugins(root)
     plugin_lookup = {plugin.slug: plugin for plugin in plugins}
@@ -576,12 +616,16 @@ def ci_selection(root: Path, mode: str, base: str | None = None, head: str | Non
             }
             for slug in selected
         ]
+        release_validation_tags: list[str] = []
     else:
         if base is None or head is None:
             raise CatalogError("ci-selection diff mode requires base and head revisions")
         changed_paths = _git_changed_paths(root, base, head)
         selected = _changed_plugins_for_records(root, plugins, changed_paths)
         mutation_jobs = _mutation_jobs_for_records(root, plugins, changed_paths)
+        release_validation_tags = _release_validation_tags_for_records(
+            root, plugins, changed_paths, base
+        )
     cargo_packages = [plugin_lookup[slug].cargo_package_name for slug in selected]
     mutation_cargo_packages = [str(job["cargo_package"]) for job in mutation_jobs]
     return {
@@ -592,6 +636,8 @@ def ci_selection(root: Path, mode: str, base: str | None = None, head: str | Non
         "mutation_cargo_packages": mutation_cargo_packages,
         "has_mutation_cargo_packages": bool(mutation_cargo_packages),
         "mutation_jobs": mutation_jobs,
+        "release_validation_tags": release_validation_tags,
+        "has_release_validation_tags": bool(release_validation_tags),
     }
 
 
@@ -840,6 +886,8 @@ def build_parser() -> argparse.ArgumentParser:
             "mutation_cargo_packages",
             "has_mutation_cargo_packages",
             "mutation_jobs",
+            "release_validation_tags",
+            "has_release_validation_tags",
         ),
     )
 

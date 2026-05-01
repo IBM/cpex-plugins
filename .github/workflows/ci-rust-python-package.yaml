@@ -58,6 +58,8 @@ jobs:
       mutation_cargo_packages: ${{ steps.detect.outputs.mutation_cargo_packages }}
       mutation_jobs: ${{ steps.detect.outputs.mutation_jobs }}
       has_mutation_cargo_packages: ${{ steps.detect.outputs.has_mutation_cargo_packages }}
+      release_validation_tags: ${{ steps.detect.outputs.release_validation_tags }}
+      has_release_validation_tags: ${{ steps.detect.outputs.has_release_validation_tags }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -89,6 +91,8 @@ jobs:
           mutation_cargo_packages="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["mutation_cargo_packages"]))')"
           mutation_jobs="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["mutation_jobs"]))')"
           has_mutation_cargo_packages="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(str(json.load(sys.stdin)["has_mutation_cargo_packages"]).lower())')"
+          release_validation_tags="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["release_validation_tags"]))')"
+          has_release_validation_tags="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(str(json.load(sys.stdin)["has_release_validation_tags"]).lower())')"
           if [[ "${has_plugins}" == "false" ]]; then
             has_plugins_output="false"
           else
@@ -103,6 +107,8 @@ jobs:
             echo "mutation_cargo_packages=${mutation_cargo_packages}"
             echo "mutation_jobs=${mutation_jobs}"
             echo "has_mutation_cargo_packages=${has_mutation_cargo_packages_output}"
+            echo "release_validation_tags=${release_validation_tags}"
+            echo "has_release_validation_tags=${has_release_validation_tags}"
           } >> "$GITHUB_OUTPUT"
 
   build-test:
@@ -360,14 +366,18 @@ jobs:
           cargo doc "${cargo_args[@]}" --lib --no-deps --document-private-items
 
   release-validation:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && needs.validate-and-detect.outputs.has_release_validation_tags == 'true'
     needs: validate-and-detect
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: ${{ fromJson(needs.validate-and-detect.outputs.release_validation_tags) }}
     permissions:
       contents: read
       pull-requests: read
       id-token: write
     uses: ./.github/workflows/release-rust-python-package.yaml
     with:
-      tag: retry-with-backoff-v0.2.0
+      tag: ${{ matrix.tag }}
       repository: testpypi
       publish_enabled: false

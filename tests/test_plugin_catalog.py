@@ -1537,8 +1537,47 @@ class PluginCatalogTests(unittest.TestCase):
                     "mutation_cargo_packages": [],
                     "has_mutation_cargo_packages": False,
                     "mutation_jobs": [],
+                    "release_validation_tags": [],
+                    "has_release_validation_tags": False,
                 },
             )
+
+    def test_ci_selection_detects_plugin_version_bump_for_release_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            git = lambda *args: subprocess.run(  # noqa: E731
+                ["git", *args],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            git("init")
+            git("config", "user.name", "Test User")
+            git("config", "user.email", "test@example.com")
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/rate_limiter", "plugins/rust/python-package/pii_filter"]\n'
+            )
+            rate_limiter = self._create_plugin(root, "rate_limiter")
+            self._create_plugin(root, "pii_filter")
+            git("add", ".")
+            git("commit", "--no-verify", "-m", "seed layout")
+            base_sha = git("rev-parse", "HEAD").stdout.strip()
+
+            (rate_limiter / "Cargo.toml").write_text(
+                '[package]\nname = "rate_limiter"\nversion = "0.0.2"\nrepository = "https://github.com/IBM/cpex-plugins"\n'
+            )
+            (rate_limiter / "cpex_rate_limiter" / "plugin-manifest.yaml").write_text(
+                'description: "rate_limiter"\nauthor: "ContextForge Team"\nversion: "0.0.2"\nkind: "cpex_rate_limiter.rate_limiter.RateLimiterPlugin"\navailable_hooks:\n  - "tool_pre_invoke"\n'
+            )
+            git("add", ".")
+            git("commit", "--no-verify", "-m", "bump rate limiter")
+
+            result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["release_validation_tags"], ["rate-limiter-v0.0.2"])
+            self.assertTrue(payload["has_release_validation_tags"])
 
     def test_ci_selection_treats_catalog_test_change_as_not_shared(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1581,6 +1620,8 @@ class PluginCatalogTests(unittest.TestCase):
                     "mutation_cargo_packages": [],
                     "has_mutation_cargo_packages": False,
                     "mutation_jobs": [],
+                "release_validation_tags": [],
+                "has_release_validation_tags": False,
                 },
             )
 
@@ -1625,6 +1666,8 @@ class PluginCatalogTests(unittest.TestCase):
                     "mutation_cargo_packages": [],
                     "has_mutation_cargo_packages": False,
                     "mutation_jobs": [],
+                "release_validation_tags": [],
+                "has_release_validation_tags": False,
                 },
             )
 
@@ -1671,6 +1714,8 @@ class PluginCatalogTests(unittest.TestCase):
                             "mutation_cargo_packages": [],
                             "has_mutation_cargo_packages": False,
                             "mutation_jobs": [],
+                        "release_validation_tags": [],
+                        "has_release_validation_tags": False,
                         },
                     )
 
@@ -1749,6 +1794,8 @@ class PluginCatalogTests(unittest.TestCase):
                     "mutation_cargo_packages": [],
                     "has_mutation_cargo_packages": False,
                     "mutation_jobs": [],
+                "release_validation_tags": [],
+                "has_release_validation_tags": False,
                 },
             )
 
@@ -1792,6 +1839,8 @@ class PluginCatalogTests(unittest.TestCase):
                     "mutation_cargo_packages": [],
                     "has_mutation_cargo_packages": False,
                     "mutation_jobs": [],
+                "release_validation_tags": [],
+                "has_release_validation_tags": False,
                 },
             )
 
@@ -1837,6 +1886,8 @@ class PluginCatalogTests(unittest.TestCase):
                     "mutation_cargo_packages": [],
                     "has_mutation_cargo_packages": False,
                     "mutation_jobs": [],
+                "release_validation_tags": [],
+                "has_release_validation_tags": False,
                 },
             )
 
@@ -1882,6 +1933,8 @@ class PluginCatalogTests(unittest.TestCase):
                     "mutation_cargo_packages": [],
                     "has_mutation_cargo_packages": False,
                     "mutation_jobs": [],
+                "release_validation_tags": [],
+                "has_release_validation_tags": False,
                 },
             )
 
@@ -1937,6 +1990,8 @@ class PluginCatalogTests(unittest.TestCase):
                             "test_packages": ["rate_limiter"],
                         }
                     ],
+                    "release_validation_tags": [],
+                    "has_release_validation_tags": False,
                 },
             )
 
@@ -2177,6 +2232,8 @@ class PluginCatalogTests(unittest.TestCase):
                     "mutation_cargo_packages": [],
                     "has_mutation_cargo_packages": False,
                     "mutation_jobs": [],
+                "release_validation_tags": [],
+                "has_release_validation_tags": False,
                 },
             )
 
@@ -2225,6 +2282,8 @@ class PluginCatalogTests(unittest.TestCase):
                     "mutation_jobs": [
                         {"cargo_package": "rate_limiter", "in_diff": True, "test_packages": []}
                     ],
+                    "release_validation_tags": [],
+                    "has_release_validation_tags": False,
                 },
             )
 
@@ -2270,6 +2329,14 @@ class PluginCatalogTests(unittest.TestCase):
         result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "has_mutation_cargo_packages")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "true")
+
+        result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "release_validation_tags")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), [])
+
+        result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "has_release_validation_tags")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "false")
 
     def test_ci_selection_field_supports_diff_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2498,7 +2565,7 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("working-directory: plugins/rust/python-package/${{ matrix.plugin }}", workflow)
         self.assertIn("release-validation:", workflow)
         self.assertIn("uses: ./.github/workflows/release-rust-python-package.yaml", workflow)
-        self.assertIn("tag: retry-with-backoff-v0.2.0", workflow)
+        self.assertIn("tag: ${{ matrix.tag }}", workflow)
         self.assertIn("repository: testpypi", workflow)
         self.assertIn("publish_enabled: false", workflow)
         self.assertNotIn("tools/plugin_catalog.py ci-selection-field", workflow)
@@ -2574,6 +2641,9 @@ class PluginCatalogTests(unittest.TestCase):
         documentation_section = self._extract_workflow_job_section(
             workflow, "documentation"
         )
+        release_validation_section = self._extract_workflow_job_section(
+            workflow, "release-validation"
+        )
         detect_run = self._extract_workflow_step_run(
             workflow, "validate-and-detect", step_id="detect"
         )
@@ -2621,6 +2691,8 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("mutation_cargo_packages: ${{ steps.detect.outputs.mutation_cargo_packages }}", workflow)
         self.assertIn("mutation_jobs: ${{ steps.detect.outputs.mutation_jobs }}", workflow)
         self.assertIn("has_mutation_cargo_packages: ${{ steps.detect.outputs.has_mutation_cargo_packages }}", workflow)
+        self.assertIn("release_validation_tags: ${{ steps.detect.outputs.release_validation_tags }}", workflow)
+        self.assertIn("has_release_validation_tags: ${{ steps.detect.outputs.has_release_validation_tags }}", workflow)
         self.assertIn("security-policy:", workflow)
         self.assertIn("mutation-testing:", workflow)
         self.assertIn("coverage:", workflow)
@@ -2630,6 +2702,8 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("if: github.event_name == 'pull_request' && needs.validate-and-detect.outputs.has_mutation_cargo_packages == 'true'", mutants_section)
         self.assertIn("if: needs.validate-and-detect.outputs.has_plugins == 'true'", coverage_section)
         self.assertIn("if: needs.validate-and-detect.outputs.has_plugins == 'true'", documentation_section)
+        self.assertIn("if: github.event_name == 'pull_request' && needs.validate-and-detect.outputs.has_release_validation_tags == 'true'", release_validation_section)
+        self.assertIn("tag: ${{ fromJson(needs.validate-and-detect.outputs.release_validation_tags) }}", release_validation_section)
         self.assertNotIn("cargo-audit", security_section)
         self.assertNotIn("cargo audit", security_section)
         self.assertIn("cargo install cargo-deny", security_section)
@@ -3259,7 +3333,9 @@ class PluginCatalogTests(unittest.TestCase):
             'venv_python="${tmpdir}/venv/Scripts/python.exe"',
             workflow,
         )
+        self.assertIn('uv pip install --python "${venv_python}" --group dev PyYAML', workflow)
         self.assertIn('"${venv_python}" -m pip install', workflow)
+        self.assertNotIn('pytest pytest-asyncio PyYAML', workflow)
         self.assertIn('"${venv_python}" -m pytest', workflow)
         self.assertIn(
             "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
