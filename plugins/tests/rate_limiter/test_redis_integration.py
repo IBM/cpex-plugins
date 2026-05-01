@@ -1578,3 +1578,42 @@ class TestConfigHardening:
             "engine must warn on unknown config keys so misspellings are visible — "
             f"captured records: {[(r.levelname, r.getMessage()) for r in caplog.records]}"
         )
+
+
+class TestRedisTlsSupport:
+    """TLS / rediss:// scheme support.
+
+    Regression coverage for wo-tracker #68217: managed Redis services
+    (AWS ElastiCache with in-transit encryption, Redis Cloud, etc.) require
+    a `rediss://` URL. The Rust engine must be built with the redis crate's
+    TLS feature so that constructing a client with a `rediss://` URL parses
+    successfully — without it the engine raises `InvalidClientConfig: can't
+    connect with TLS, the feature is not enabled` at plugin init and the
+    plugin is silently skipped.
+    """
+
+    @pytest.mark.asyncio
+    async def test_rediss_url_does_not_fail_with_tls_not_enabled(self):
+        """Constructing the plugin with a rediss:// URL must not raise InvalidClientConfig.
+
+        Construction is independent of connectivity: the redis crate parses
+        the URL and creates a lazy client. We point at a port nothing is
+        listening on so the test never opens a real TLS handshake.
+        """
+        # rediss:// = TLS scheme. Port 1 has no listener; we never attempt
+        # a real connection here — the regression is at URL/feature parsing.
+        plugin = RateLimiterPlugin(
+            PluginConfig(
+                name="RateLimiter",
+                kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
+                hooks=["tool_pre_invoke"],
+                priority=100,
+                config={
+                    "by_user": "3/s",
+                    "backend": "redis",
+                    "redis_url": "rediss://127.0.0.1:1/15",
+                    "algorithm": "fixed_window",
+                },
+            )
+        )
+        assert plugin is not None
