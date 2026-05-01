@@ -1662,17 +1662,21 @@ class TestRedisTlsSupport:
             f"backend is unreachable; got result={result!r}"
         )
 
-        # The error logged must indicate connectivity failure (the lazy
-        # handshake reached the network and the network refused / timed out)
-        # — NOT the InvalidClientConfig shape that means rustls itself is
-        # not compiled in. The latter is the failure mode of wo-tracker
-        # #68217 and must never recur.
+        # Negative assertion — pins the wo-tracker #68217 regression.
+        #
+        # The original sev-1 fingerprint was rustls panicking at plugin init
+        # with `InvalidClientConfig: can't connect with TLS, the feature is
+        # not enabled`. After the redis crate is built with `tls-rustls` and
+        # the rustls crypto provider is installed, that signature must never
+        # appear again. This test asserts its absence.
+        #
+        # A positive "the lazy handshake reached the network" assertion
+        # would also be valuable — but the Rust core's log_exception()
+        # currently surfaces only a generic "error; allowing request"
+        # message, dropping the underlying redis::RedisError text. Surfacing
+        # those details requires a Rust core logging change; tracked as a
+        # follow-up alongside the real TLS Redis fixture work.
         all_messages = " ".join(r.getMessage() for r in caplog.records).lower()
-        assert "tls" not in all_messages or "connect" in all_messages or "refused" in all_messages or "timed out" in all_messages, (
-            "rediss:// failure must surface as a connectivity error, not a "
-            f"TLS feature/config error. Captured logs: "
-            f"{[(r.levelname, r.getMessage()) for r in caplog.records]}"
-        )
         assert "feature is not enabled" not in all_messages and "invalidclientconfig" not in all_messages, (
             "rediss:// failure looks like the wo-tracker #68217 regression "
             f"(TLS feature not compiled). Captured logs: "

@@ -63,7 +63,6 @@ allow = [
     "CC0-1.0",
     "CDDL-1.0",
     "CDDL-1.1",
-    "CDLA-Permissive-2.0",
     "ClArtistic",
     "CPL-1.0",
     "curl",
