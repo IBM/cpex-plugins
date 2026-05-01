@@ -17,13 +17,15 @@ This is a monorepo of standalone plugin packages for the ContextForge Plugin Ext
 
 ### Test Location by Type
 
-- **Unit tests**: Located in `cpex-plugins/tests/`
+- **Unit tests**: Located within each plugin's own directory
+  - Python: `plugins/rust/python-package/<slug>/tests/` (current hybrid) or `plugins/python/<slug>/tests/` (pure Python)
+  - Rust: inline `mod tests` within source files (e.g., `src/lib.rs`)
   - Test individual plugin functionality in isolation
   - Fast, deterministic tests
   - Run during plugin development and CI
   - Scope: Plugin logic, Rust functions, Python bindings
 
-- **Plugin-framework integration tests**: Located in `cpex-plugins/tests/`
+- **Plugin-framework integration tests**: Located in `plugins/rust/python-package/<slug>/tests/`
   - Test plugin integration with the local plugin framework (PyO3 bindings, Python ↔ Rust interface)
   - Run via `make test-integration` within the plugin directory
   - Scope: PyO3 entry points, plugin loading by the Python framework, hook dispatch
@@ -44,7 +46,7 @@ This is a monorepo of standalone plugin packages for the ContextForge Plugin Ext
 
 When developing a plugin:
 
-1. Write unit tests and plugin-framework integration tests in `cpex-plugins/tests/` alongside plugin code
+1. Write unit tests in the plugin's own directory (Rust: inline `mod tests`; Python: `plugins/rust/python-package/<slug>/tests/`) and plugin-framework integration tests in `plugins/rust/python-package/<slug>/tests/`
 2. Run local tests: `make test-all` and `make test-integration` from plugin directory
 3. After plugin PR is merged, coordinate with `mcp-context-forge` team
 4. Write gateway integration/E2E tests in `mcp-context-forge/tests/`
@@ -78,10 +80,10 @@ The plugin framework is currently implemented in Python (`mcpgateway/plugins/fra
    - Implement Python bindings in `cpex_<slug>/plugin.py`
    - Update `plugin-manifest.yaml`
 
-3. **Write Tests** (in `cpex-plugins/tests/`):
+3. **Write Tests**:
    ```bash
    cd plugins/rust/python-package/<slug>
-   # Add Rust unit tests in src/
+   # Add Rust unit tests inline in src/ using mod tests
    # Add Python unit tests in tests/
    # Add plugin-framework integration tests in tests/ (run via make test-integration)
    make test-all          # Run Rust + Python unit tests
@@ -139,7 +141,7 @@ The plugin framework is currently implemented in Python (`mcpgateway/plugins/fra
    - Implement plugin traits from Rust framework
    - Update `Cargo.toml`
 
-3. **Write Unit Tests** (in `cpex-plugins/tests/`):
+3. **Write Unit Tests** (inline `mod tests` in source files):
    ```bash
    cd plugins/rust/<slug>
    cargo test  # Run Rust tests

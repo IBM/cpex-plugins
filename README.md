@@ -28,12 +28,12 @@ Rust crates are owned by the top-level workspace in `Cargo.toml`. Python package
 
 Testing spans two repositories:
 
-- **Unit tests**: `cpex-plugins/tests/` — test plugin logic in isolation
-- **Plugin-framework integration tests**: `cpex-plugins/tests/` — test PyO3 bindings and plugin loading by the Python framework (`make test-integration`)
+- **Unit tests**: within each plugin's own directory — Python in `plugins/rust/python-package/<slug>/tests/`, Rust inline via `mod tests` in source files
+- **Plugin-framework integration tests**: `plugins/rust/python-package/<slug>/tests/` — test PyO3 bindings and plugin loading by the Python framework (`make test-integration`)
 - **Gateway integration tests**: `mcp-context-forge/tests/integration/` — test plugin integration with the full gateway
 - **E2E tests**: `mcp-context-forge/tests/e2e/` — test complete workflows with plugins
 
-`cpex-plugins/tests/` covers both unit and plugin-framework integration tests. Gateway integration and E2E tests live in `mcp-context-forge`.
+Unit tests and plugin-framework integration tests live in the plugin's own directory. Gateway integration and E2E tests live in `mcp-context-forge`.
 
 See [TESTING.md](TESTING.md) for detailed testing guidelines and cross-repository coordination.
 

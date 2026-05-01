@@ -6,7 +6,9 @@ Testing spans two repositories. `cpex-plugins` owns unit tests and plugin-framew
 
 ### Unit Tests (cpex-plugins)
 
-**Location**: `cpex-plugins/tests/` and plugin-specific `tests/` directories
+**Location**: Within each plugin's own directory
+- Python: `plugins/rust/python-package/<slug>/tests/` (current hybrid) or `plugins/python/<slug>/tests/` (pure Python)
+- Rust: inline `mod tests` within source files (e.g., `src/lib.rs`)
 
 **Scope**:
 - Individual plugin functionality in isolation
