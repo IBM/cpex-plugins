@@ -453,6 +453,44 @@ class Model:
 }
 
 #[test]
+fn scan_container_returns_original_for_clean_scan_state_and_clean_serialized_path() {
+    Python::initialize();
+    Python::attach(|py| -> PyResult<()> {
+        let code = CString::new(
+            r#"
+class BadKey:
+    pass
+
+class Model:
+    def __init__(self):
+        self.text = "clean"
+        self.__dict__[BadKey()] = "side-channel"
+
+    def model_dump(self):
+        return {"text": "also clean"}
+"#,
+        )
+        .unwrap();
+        let module = PyModule::from_code(py, code.as_c_str(), c"test_module.py", c"test_module")?;
+        let instance = module.getattr("Model")?.call0()?;
+        let config = SecretsDetectionConfig {
+            redact: true,
+            redaction_text: "[REDACTED]".to_string(),
+            ..Default::default()
+        };
+
+        let (count, redacted, findings) = scan_container(py, &instance, &config)?;
+
+        assert_eq!(count, 0);
+        assert_eq!(findings.len(), 0);
+        assert!(redacted.is(&instance));
+
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
 fn scan_container_preserves_clean_scan_state_after_serialized_redaction() {
     Python::initialize();
     Python::attach(|py| -> PyResult<()> {
