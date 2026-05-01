@@ -1,8 +1,6 @@
 import subprocess
 import sys
 
-import pytest
-
 from secrets_detection.helpers import *  # noqa: F403,F405
 
 

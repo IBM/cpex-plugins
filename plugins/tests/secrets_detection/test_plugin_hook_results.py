@@ -7,7 +7,7 @@ from secrets_detection.helpers import *  # noqa: F403,F405
 class TestPluginHookResults:
     @pytest.fixture
     def plugin(self):
-        return SecretsDetectionPlugin(_make_config())
+        return SecretsDetectionPlugin(make_config())
 
     async def test_tool_post_invoke_redacts_mcp_content_payload(self, plugin):
         payload = ToolPostInvokePayload(
@@ -23,7 +23,7 @@ class TestPluginHookResults:
             },
         )
 
-        result = await plugin.tool_post_invoke(payload, _make_context())
+        result = await plugin.tool_post_invoke(payload, make_context())
 
         assert result.continue_processing is True
         assert result.modified_payload is not None
@@ -40,7 +40,7 @@ class TestPluginHookResults:
             result=("safe", "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"),
         )
 
-        result = await plugin.tool_post_invoke(payload, _make_context())
+        result = await plugin.tool_post_invoke(payload, make_context())
 
         assert result.continue_processing is True
         assert result.modified_payload is not None
@@ -58,7 +58,7 @@ class TestPluginHookResults:
             result=NonReplayableBox("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"),
         )
 
-        result = await plugin.tool_post_invoke(payload, _make_context())
+        result = await plugin.tool_post_invoke(payload, make_context())
 
         assert result.continue_processing is True
         assert result.modified_payload is not None
@@ -83,7 +83,7 @@ class TestPluginHookResults:
             ),
         )
 
-        result = await plugin.tool_post_invoke(payload, _make_context())
+        result = await plugin.tool_post_invoke(payload, make_context())
 
         assert result.continue_processing is True
         assert result.modified_payload is not None
@@ -113,7 +113,7 @@ class TestPluginHookResults:
             ),
         )
 
-        result = await plugin.tool_post_invoke(payload, _make_context())
+        result = await plugin.tool_post_invoke(payload, make_context())
 
         assert result.continue_processing is True
         assert result.modified_payload is not None
@@ -133,7 +133,7 @@ class TestPluginHookResults:
             result=MappingSlotSecretBox("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"),
         )
 
-        result = await plugin.tool_post_invoke(payload, _make_context())
+        result = await plugin.tool_post_invoke(payload, make_context())
 
         assert result.continue_processing is True
         assert result.modified_payload is not None
@@ -149,13 +149,13 @@ class TestPluginHookResults:
             def serialize_model(self):
                 return f"{self.prefix}{self.suffix}"
 
-        plugin = SecretsDetectionPlugin(_make_config(block_on_detection=True, redact=False))
+        plugin = SecretsDetectionPlugin(make_config(block_on_detection=True, redact=False))
         payload = ToolPostInvokePayload(
             name="writer",
             result=SplitSecretModel(prefix="AKIA", suffix="FAKE12345EXAMPLE"),
         )
 
-        result = await plugin.tool_post_invoke(payload, _make_context())
+        result = await plugin.tool_post_invoke(payload, make_context())
 
         assert result.continue_processing is False
         assert result.violation is not None
@@ -166,14 +166,14 @@ class TestPluginHookResults:
             text: str
 
         plugin = SecretsDetectionPlugin(
-            _make_config(block_on_detection=True, redact=False, min_findings_to_block=2)
+            make_config(block_on_detection=True, redact=False, min_findings_to_block=2)
         )
         payload = ToolPostInvokePayload(
             name="writer",
             result=SecretModel(text="AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"),
         )
 
-        result = await plugin.tool_post_invoke(payload, _make_context())
+        result = await plugin.tool_post_invoke(payload, make_context())
 
         assert result.continue_processing is True
         assert result.violation is None
@@ -187,14 +187,32 @@ class TestPluginHookResults:
             items: list[str]
 
         plugin = SecretsDetectionPlugin(
-            _make_config(block_on_detection=True, redact=False, min_findings_to_block=2)
+            make_config(block_on_detection=True, redact=False, min_findings_to_block=2)
         )
         payload = ToolPostInvokePayload(
             name="writer",
             result=SecretListModel(items=["AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"]),
         )
 
-        result = await plugin.tool_post_invoke(payload, _make_context())
+        result = await plugin.tool_post_invoke(payload, make_context())
+
+        assert result.continue_processing is True
+        assert result.violation is None
+        assert result.metadata == {
+            "count": 1,
+            "secrets_findings": [{"type": "aws_access_key_id"}],
+        }
+
+    async def test_tool_post_invoke_does_not_double_count_root_model(self):
+        plugin = SecretsDetectionPlugin(
+            make_config(block_on_detection=True, redact=False, min_findings_to_block=2)
+        )
+        payload = ToolPostInvokePayload(
+            name="writer",
+            result=RootModel[str]("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"),
+        )
+
+        result = await plugin.tool_post_invoke(payload, make_context())
 
         assert result.continue_processing is True
         assert result.violation is None
@@ -217,7 +235,7 @@ class TestPluginHookResults:
             result=SplitSecretModel(prefix="AKIA", suffix="FAKE12345EXAMPLE"),
         )
 
-        result = await plugin.tool_post_invoke(payload, _make_context())
+        result = await plugin.tool_post_invoke(payload, make_context())
 
         assert result.continue_processing is True
         assert result.modified_payload is not None
@@ -232,7 +250,7 @@ class TestPluginHookResults:
             result=RootModel[str]("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"),
         )
 
-        result = await plugin.tool_post_invoke(payload, _make_context())
+        result = await plugin.tool_post_invoke(payload, make_context())
 
         assert result.continue_processing is True
         assert result.modified_payload is not None
@@ -248,7 +266,7 @@ class TestPluginHookResults:
             },
         )
 
-        result = await plugin.tool_post_invoke(payload, _make_context())
+        result = await plugin.tool_post_invoke(payload, make_context())
 
         assert result.continue_processing is True
         assert result.violation is None
@@ -266,7 +284,7 @@ class TestPluginHookResults:
             ),
         )
 
-        result = await plugin.resource_post_fetch(payload, _make_context())
+        result = await plugin.resource_post_fetch(payload, make_context())
 
         assert result.continue_processing is True
         assert result.modified_payload is not None
@@ -284,7 +302,7 @@ class TestPluginHookResults:
             ),
         )
 
-        result = await plugin.resource_post_fetch(payload, _make_context())
+        result = await plugin.resource_post_fetch(payload, make_context())
 
         assert result.continue_processing is True
         assert result.violation is None
@@ -293,7 +311,7 @@ class TestPluginHookResults:
 
     async def test_resource_post_fetch_blocks_when_threshold_met(self):
         plugin = SecretsDetectionPlugin(
-            _make_config(block_on_detection=True, redact=False, min_findings_to_block=1)
+            make_config(block_on_detection=True, redact=False, min_findings_to_block=1)
         )
         payload = ResourcePostFetchPayload(
             uri="file:///tmp/secret.txt",
@@ -305,7 +323,7 @@ class TestPluginHookResults:
             ),
         )
 
-        result = await plugin.resource_post_fetch(payload, _make_context())
+        result = await plugin.resource_post_fetch(payload, make_context())
 
         assert result.continue_processing is False
         assert result.violation is not None

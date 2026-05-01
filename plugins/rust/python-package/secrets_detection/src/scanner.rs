@@ -89,6 +89,23 @@ mod tests {
     }
 
     #[test]
+    fn detects_slack_tokens_around_legacy_length_boundary() {
+        let config = SecretsDetectionConfig::default();
+        for body_len in [48, 49] {
+            let token = format!("{}{}", "xoxb-", "a".repeat(body_len));
+            let (findings, redacted) = detect_and_redact(&token, &config);
+
+            assert!(
+                findings
+                    .iter()
+                    .any(|finding| finding.pii_type == "slack_token"),
+                "{body_len}: {findings:?}"
+            );
+            assert_eq!(redacted, token);
+        }
+    }
+
+    #[test]
     fn redaction_works() {
         let config = SecretsDetectionConfig {
             redact: true,

@@ -3,6 +3,7 @@ import pytest
 from secrets_detection.helpers import *  # noqa: F403,F405
 
 
+# Top-level async tests rely on asyncio_mode=auto in plugins/tests/pytest.ini.
 async def test_prompt_pre_fetch_rebuilds_frozen_payload_on_redaction():
     plugin = SecretsDetectionPlugin(make_config())
     payload = PromptPrehookPayload(

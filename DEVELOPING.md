@@ -32,6 +32,18 @@ make test-all
 
 Swap `rate_limiter` for any other managed plugin slug.
 
+## Secrets Detection Count Semantics
+
+`secrets_detection` reports one finding per non-overlapping secret span. When
+multiple enabled patterns match the same bytes, or overlapping bytes, the scanner
+redacts the merged span once and reports the most specific matching detector
+type. Distinct non-overlapping secrets in the same payload still count
+separately.
+
+This changed older behavior that could count overlapping broad and specific
+pattern matches as multiple findings. Operators using `min_findings_to_block`
+values greater than `1` should audit thresholds when upgrading.
+
 ## Repo-Level Commands
 
 ```bash

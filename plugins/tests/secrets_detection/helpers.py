@@ -32,8 +32,6 @@ __all__ = [
     "SecretsDetectionPlugin",
     "ToolHookType",
     "ToolPostInvokePayload",
-    "_make_config",
-    "_make_context",
     "make_config",
     "make_context",
     "model_serializer",
@@ -59,11 +57,3 @@ def make_config(**overrides) -> PluginConfig:
         kind="cpex_secrets_detection.secrets_detection.SecretsDetectionPlugin",
         config=config,
     )
-
-
-def _make_context() -> PluginContext:
-    return make_context()
-
-
-def _make_config(**overrides) -> PluginConfig:
-    return make_config(**overrides)

@@ -976,3 +976,36 @@ class Model:
     })
     .unwrap();
 }
+
+#[test]
+fn serialized_result_returns_non_string_key_dict_without_object_update() {
+    Python::initialize();
+    Python::attach(|py| -> PyResult<()> {
+        let code = CString::new(
+            r#"
+class BadKey:
+    pass
+
+class Model:
+    def __init__(self):
+        self.text = "clean"
+
+    def model_copy(self, update=None):
+        raise RuntimeError("model_copy should not run for non-string-key serialized dict")
+"#,
+        )
+        .unwrap();
+        let module = PyModule::from_code(py, code.as_c_str(), c"test_module.py", c"test_module")?;
+        let instance = module.getattr("Model")?.call0()?;
+        let state = PyDict::new(py);
+        state.set_item(module.getattr("BadKey")?.call0()?, "[REDACTED]")?;
+
+        let result = serialized_result(py, &instance, &state.clone().into_any())?;
+
+        assert!(result.is(&state));
+        assert_eq!(instance.getattr("text")?.extract::<String>()?, "clean");
+
+        Ok(())
+    })
+    .unwrap();
+}

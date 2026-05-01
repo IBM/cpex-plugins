@@ -17,7 +17,7 @@ pub fn inspect_object_state<'py>(
     inspect_object_state_inner(py, container, true)
 }
 
-pub fn inspect_object_state_without_model_dump<'py>(
+pub(crate) fn inspect_object_state_without_model_dump<'py>(
     py: Python<'py>,
     container: &Bound<'py, PyAny>,
 ) -> PyResult<InspectedObjectState<'py>> {
@@ -134,7 +134,7 @@ pub fn apply_object_state(
     let builtins = py.import("builtins")?;
     let object_type = builtins.getattr("object")?;
     for (key, value) in state.iter() {
-        set_attr_without_hooks(&object_type, target, &key.extract::<String>()?, &value)?;
+        set_dict_or_attr_without_hooks(&object_type, target, &key.extract::<String>()?, &value)?;
     }
     Ok(())
 }
@@ -145,11 +145,16 @@ pub fn apply_extra_dict_state(
     updates: &Bound<'_, PyDict>,
 ) -> PyResult<()> {
     let dict = target.getattr("__dict__")?.cast_into::<PyDict>()?;
+    let builtins = py.import("builtins")?;
+    let object_type = builtins.getattr("object")?;
     for (key, value) in updates.iter() {
         if key.is_exact_instance_of::<PyString>() {
-            let builtins = py.import("builtins")?;
-            let object_type = builtins.getattr("object")?;
-            set_attr_without_hooks(&object_type, target, &key.extract::<String>()?, &value)?;
+            set_dict_or_attr_without_hooks(
+                &object_type,
+                target,
+                &key.extract::<String>()?,
+                &value,
+            )?;
         } else {
             dict.set_item(key, value)?;
         }
@@ -172,6 +177,25 @@ fn set_attr_without_hooks(
 ) -> PyResult<()> {
     object_type.call_method1("__setattr__", (target, name, value))?;
     Ok(())
+}
+
+fn set_dict_or_attr_without_hooks(
+    object_type: &Bound<'_, PyAny>,
+    target: &Bound<'_, PyAny>,
+    name: &str,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<()> {
+    if name.starts_with("__")
+        && name.ends_with("__")
+        && let Ok(dict) = target.getattr("__dict__")
+        && let Ok(dict) = dict.cast_into::<PyDict>()
+    {
+        // Keep dunder keys as inert instance-dict entries instead of routing
+        // them through object.__setattr__ on a blank reconstructed object.
+        dict.set_item(name, value)?;
+        return Ok(());
+    }
+    set_attr_without_hooks(object_type, target, name, value)
 }
 
 fn extract_slot_state<'py>(
@@ -516,6 +540,43 @@ class KwargsOnly:
                 copied.bind(py).getattr("value")?.extract::<String>()?,
                 "new"
             );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn apply_state_keeps_dunder_names_in_instance_dict() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let code = CString::new(
+                r#"
+class DunderState:
+    pass
+"#,
+            )
+            .unwrap();
+            let module =
+                PyModule::from_code(py, code.as_c_str(), c"dunder_test.py", c"dunder_test")?;
+            let instance = module.getattr("DunderState")?.call0()?;
+            let target = prepare_rebuild_target(py, &instance)?;
+            let state = PyDict::new(py);
+            state.set_item("__reduce__", "safe")?;
+            state.set_item("value", "normal")?;
+
+            apply_object_state(py, &target, &state.into_any())?;
+
+            assert_eq!(target.getattr("value")?.extract::<String>()?, "normal");
+            assert_eq!(
+                target
+                    .getattr("__dict__")?
+                    .cast_into::<PyDict>()?
+                    .get_item("__reduce__")?
+                    .unwrap()
+                    .extract::<String>()?,
+                "safe"
+            );
+            assert!(!target.getattr("__reduce__")?.is(&PyString::new(py, "safe")));
             Ok(())
         })
         .unwrap();

@@ -181,7 +181,7 @@ fn scan_object_state<'py>(
         for finding in child_findings.iter() {
             findings.append(finding)?;
         }
-        if count > 0 || !same_safe_value(&redacted_state, &state_any, &mut HashSet::new())? {
+        if count > 0 || !values_equal(&redacted_state, &state_any)? {
             apply_object_state(py, &target, &redacted_state)?;
             rebuild_state_for_extra = Some(redacted_state.cast::<PyDict>()?.clone());
             rebuilt = Some(target.into_any());
@@ -324,6 +324,9 @@ fn serialized_scan_target<'py>(
     if let Some(rebuild_state) = rebuild_state
         && serialized_duplicates_rebuild_root(serialized_state, rebuild_state)?
     {
+        log::debug!(
+            "duplicate gate: serialized root duplicates rebuild state; skipping serialized scan"
+        );
         return Ok(None);
     }
 
@@ -332,6 +335,9 @@ fn serialized_scan_target<'py>(
             && rebuild_state.is_exact_instance_of::<PyString>()
             && serialized_state.eq(rebuild_state)?
         {
+            log::debug!(
+                "duplicate gate: serialized string duplicates rebuild state; skipping serialized scan"
+            );
             return Ok(None);
         }
         return Ok(Some(SerializedScanTarget {
@@ -344,6 +350,9 @@ fn serialized_scan_target<'py>(
         if let Some(rebuild_state) = rebuild_state
             && serialized_dict_duplicates_rebuild_state(serialized_state, rebuild_state)?
         {
+            log::debug!(
+                "duplicate gate: serialized dict duplicates rebuild state; skipping serialized scan"
+            );
             return Ok(None);
         }
         return Ok(Some(SerializedScanTarget {
@@ -368,6 +377,9 @@ fn serialized_scan_target<'py>(
 
     if !has_rebuild_state {
         if serialized_state.get_type().is(container.get_type()) {
+            log::debug!(
+                "duplicate gate: same-type serialized state without rebuild state; skipping serialized scan"
+            );
             return Ok(None);
         }
         return Ok(Some(SerializedScanTarget {
@@ -389,16 +401,18 @@ fn serialized_scan_target<'py>(
         inspect_object_state(py, serialized_state)?
     };
     let Some(serialized_rebuild_state) = serialized_object_state.rebuild_state.as_ref() else {
+        log::debug!(
+            "duplicate gate: same-type serialized object has no rebuild state; skipping serialized scan"
+        );
         return Ok(None);
     };
     let Some(rebuild_state) = rebuild_state else {
+        log::debug!(
+            "duplicate gate: same-type serialized object has no original rebuild state; skipping serialized scan"
+        );
         return Ok(None);
     };
-    let duplicates = same_safe_value(
-        serialized_rebuild_state.as_any(),
-        rebuild_state,
-        &mut HashSet::new(),
-    )?;
+    let duplicates = values_equal(serialized_rebuild_state.as_any(), rebuild_state)?;
     if duplicates {
         if let Some(nested_serialized_state) = serialized_object_state.serialized_state.as_ref()
             && !nested_serialized_state
@@ -411,6 +425,9 @@ fn serialized_scan_target<'py>(
             }));
         }
         if serialized_object_state.scan_state.is_none() {
+            log::debug!(
+                "duplicate gate: same-type serialized rebuild state duplicates original rebuild state; skipping serialized scan"
+            );
             return Ok(None);
         }
     }
@@ -437,7 +454,7 @@ fn serialized_duplicates_rebuild_root(
     let Some(root) = rebuild_dict.get_item("root")? else {
         return Ok(false);
     };
-    same_safe_value(serialized_state, &root, &mut HashSet::new())
+    values_equal(serialized_state, &root)
 }
 
 fn serialized_dict_duplicates_rebuild_state(
@@ -459,12 +476,16 @@ fn serialized_dict_duplicates_rebuild_state(
         let Some(rebuild_value) = rebuild_dict.get_item(&key)? else {
             return Ok(false);
         };
-        if !same_safe_value(&serialized_value, &rebuild_value, &mut HashSet::new())? {
+        if !values_equal(&serialized_value, &rebuild_value)? {
             return Ok(false);
         }
     }
 
     Ok(true)
+}
+
+fn values_equal(left: &Bound<'_, PyAny>, right: &Bound<'_, PyAny>) -> PyResult<bool> {
+    same_safe_value(left, right, &mut HashSet::new())
 }
 
 fn same_safe_value(

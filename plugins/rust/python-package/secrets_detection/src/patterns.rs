@@ -39,6 +39,9 @@ pub static PATTERNS: LazyLock<HashMap<&'static str, Regex>> = LazyLock::new(|| {
     );
     patterns.insert(
         "slack_token",
+        // Slack documents token prefixes such as `xoxb-` and warns that token
+        // lengths are not fixed:
+        // https://docs.slack.dev/changelog/2016/08/23/token-lengthening/
         Regex::new(r"\bxox[abpqr]-[0-9A-Za-z\-]{10,80}\b").expect("valid slack_token regex"),
     );
     patterns.insert(
