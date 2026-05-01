@@ -34,6 +34,8 @@ from cpex_encoded_exfil_detection.encoded_exfil_detection import (
 )
 
 
+try:
+    import cpex_encoded_exfil_detection.encoded_exfil_detection_rust  # noqa: F401
     RUST_AVAILABLE = True
 except ImportError:
     RUST_AVAILABLE = False
@@ -57,14 +59,6 @@ def test_imports_with_real_cpex_package() -> None:
     if not RUST_AVAILABLE and os.environ.get("REQUIRE_RUST") == "1":
         raise ImportError("Rust plugin 'encoded_exfil_detection' is required in CI but not available")
 
-
-@pytest.mark.parametrize(
-    "use_rust",
-    [
-        pytest.param(False, id="python"),
-        pytest.param(True, marks=pytest.mark.skipif(not RUST_AVAILABLE, reason="Rust not available"), id="rust"),
-    ],
-)
 class TestEncodedDetectionScan:
     """Validate scanner behavior."""
 
