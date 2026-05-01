@@ -72,7 +72,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
-            selection="$(python3 tools/plugin_catalog.py ci-selection . diff "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}")"
+            selection="$(python3 tools/plugin_catalog.py ci-selection . diff "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}")"
           elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
             selection="$(python3 tools/plugin_catalog.py ci-selection . all '' '')"
           elif [[ "${{ github.event.before }}" == "0000000000000000000000000000000000000000" ]]; then
@@ -232,7 +232,7 @@ jobs:
       - name: Create mutation diff
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: git diff "${BASE_SHA}..${HEAD_SHA}" -- '*.rs' > cargo-mutants.diff
 
       - name: Run cargo-mutants with nextest

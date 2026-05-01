@@ -2611,6 +2611,10 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("workflow_dispatch:", workflow)
         self.assertIn('elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then', detect_run)
         self.assertIn("ci-selection . all '' ''", detect_run)
+        self.assertIn(
+            "ci-selection . diff \"${{ github.event.pull_request.base.sha }}\" \"${{ github.event.pull_request.head.sha }}\"",
+            detect_run,
+        )
         self.assertIn("plugin_count: ${{ steps.detect.outputs.plugin_count }}", workflow)
         self.assertNotIn("single_cargo_package", workflow)
         self.assertIn("cargo_packages: ${{ steps.detect.outputs.cargo_packages }}", workflow)
@@ -2650,7 +2654,7 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("fetch-depth: 0", mutants_section)
         self.assertEqual('git diff "${BASE_SHA}..${HEAD_SHA}" -- \'*.rs\' > cargo-mutants.diff\n', mutants_diff_run)
         self.assertIn("BASE_SHA: ${{ github.event.pull_request.base.sha }}", mutants_section)
-        self.assertIn("HEAD_SHA: ${{ github.sha }}", mutants_section)
+        self.assertIn("HEAD_SHA: ${{ github.event.pull_request.head.sha }}", mutants_section)
         self.assertIn("mutation_job: ${{ fromJson(needs.validate-and-detect.outputs.mutation_jobs) }}", mutants_section)
         self.assertIn("CARGO_PACKAGE: ${{ matrix.mutation_job.cargo_package }}", mutants_section)
         self.assertIn("IN_DIFF: ${{ matrix.mutation_job.in_diff }}", mutants_section)
