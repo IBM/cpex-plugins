@@ -540,8 +540,28 @@ fn log_exception(py: Python<'_>, message: &str) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::await_async_tuple;
+    use super::ensure_crypto_provider;
     use pyo3::prelude::*;
     use pyo3::types::{PyAnyMethods, PyDictMethods, PyModule};
+
+    #[test]
+    fn ensure_crypto_provider_installs_a_default() {
+        // Mutation guard: cargo-mutants tries replacing the body of
+        // `ensure_crypto_provider` with `()`. Under that mutation no rustls
+        // crypto provider is installed by us, and (since no other code path
+        // in this crate installs one) `CryptoProvider::get_default()` returns
+        // None — surfacing the wo-tracker #68217 runtime-time signature
+        // ("Call CryptoProvider::install_default() before this point...")
+        // the function exists to prevent.
+        //
+        // OnceLock makes the call idempotent; this test is safe to run in
+        // any order alongside other tests in the same process.
+        ensure_crypto_provider();
+        assert!(
+            rustls::crypto::CryptoProvider::get_default().is_some(),
+            "ensure_crypto_provider() must leave a default rustls crypto provider installed",
+        );
+    }
 
     #[test]
     fn await_async_tuple_parses_successful_result() -> PyResult<()> {
