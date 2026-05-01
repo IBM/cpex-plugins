@@ -14,7 +14,7 @@ pub fn inspect_object_state<'py>(
     py: Python<'py>,
     container: &Bound<'py, PyAny>,
 ) -> PyResult<InspectedObjectState<'py>> {
-    inspect_object_state_inner(py, container, true)
+    inspect_object_state_inner(py, container, include_model_dump_by_default())
 }
 
 pub(crate) fn inspect_object_state_without_model_dump<'py>(
@@ -22,6 +22,10 @@ pub(crate) fn inspect_object_state_without_model_dump<'py>(
     container: &Bound<'py, PyAny>,
 ) -> PyResult<InspectedObjectState<'py>> {
     inspect_object_state_inner(py, container, false)
+}
+
+fn include_model_dump_by_default() -> bool {
+    true
 }
 
 fn inspect_object_state_inner<'py>(
