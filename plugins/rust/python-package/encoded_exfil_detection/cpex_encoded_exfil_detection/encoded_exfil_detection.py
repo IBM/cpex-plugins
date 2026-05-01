@@ -35,10 +35,16 @@ from mcpgateway.plugins.framework import (
     ToolPostInvokeResult,
 )
 
-from cpex_encoded_exfil_detection.encoded_exfil_detection_rust import (
-    ExfilDetectorEngine,
-    py_scan_container as _py_scan_container,
-)
+try:
+    from cpex_encoded_exfil_detection.encoded_exfil_detection_rust import (
+        ExfilDetectorEngine,
+        py_scan_container as _py_scan_container,
+    )
+    _RUST_IMPORT_ERROR: ImportError | None = None
+except ImportError as _err:
+    ExfilDetectorEngine = None  # type: ignore[assignment,misc]
+    _py_scan_container = None  # type: ignore[assignment]
+    _RUST_IMPORT_ERROR = _err
 
 logger = logging.getLogger(__name__)
 
@@ -128,9 +134,12 @@ def _scan_container(
     container: Any,
     cfg: EncodedExfilDetectorConfig,
     path: str = "",
-    **_kwargs: Any,
 ) -> tuple[int, Any, list[dict[str, Any]]]:
     """Scan a container for encoded exfiltration patterns via the Rust engine."""
+    if _RUST_IMPORT_ERROR is not None:
+        raise ImportError(
+            "Rust extension not built — run 'make install' before using this plugin"
+        ) from _RUST_IMPORT_ERROR
     count, redacted, findings = _py_scan_container(container, cfg)
     normalized = _prefix_finding_paths(
         [f for f in findings if isinstance(f, dict)],
@@ -143,7 +152,6 @@ def _scan_text(
     text: str,
     cfg: EncodedExfilDetectorConfig,
     path: str = "",
-    **_kwargs: Any,
 ) -> tuple[str, list[dict[str, Any]]]:
     """Scan a single text value via the Rust engine."""
     _count, redacted, findings = _scan_container(text, cfg, path=path)
@@ -160,6 +168,10 @@ class EncodedExfilDetectorPlugin(Plugin):
             config: Plugin configuration.
         """
         super().__init__(config)
+        if _RUST_IMPORT_ERROR is not None:
+            raise ImportError(
+                "Rust extension not built — run 'make install' before using this plugin"
+            ) from _RUST_IMPORT_ERROR
         self._cfg = EncodedExfilDetectorConfig(**(config.config or {}))
         try:
             self._rust_engine = ExfilDetectorEngine(self._cfg)

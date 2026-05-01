@@ -412,15 +412,27 @@ class TestAllowlisting:
         assert count >= 1, "Non-allowlisted pattern should still be flagged"
 
     def test_invalid_allowlist_regex_rejected_at_init(self):
-        """An invalid regex in allowlist_patterns should raise at config or plugin init."""
-        with pytest.raises((ValidationError, Exception)):
-            EncodedExfilDetectorConfig(allowlist_patterns=["[invalid"])
+        """A regex invalid in both Python and Rust should raise at plugin init."""
+        with pytest.raises(ValueError, match="allowlist_patterns"):
             EncodedExfilDetectorPlugin(
                 PluginConfig(
                     name="EncodedExfilDetector",
                     kind="plugins.encoded_exfil_detection.encoded_exfil_detector.EncodedExfilDetectorPlugin",
                     hooks=[PromptHookType.PROMPT_PRE_FETCH, ToolHookType.TOOL_POST_INVOKE],
                     config={"allowlist_patterns": ["[invalid"]},
+                )
+            )
+
+    def test_python_valid_rust_invalid_allowlist_regex_rejected_at_init(self):
+        """A Python-valid but Rust-incompatible regex should fail at plugin init with a clear error."""
+        # (?<=foo)bar uses lookbehind — valid Python regex, unsupported by Rust's regex crate
+        with pytest.raises(ValueError, match="allowlist_patterns"):
+            EncodedExfilDetectorPlugin(
+                PluginConfig(
+                    name="EncodedExfilDetector",
+                    kind="plugins.encoded_exfil_detection.encoded_exfil_detector.EncodedExfilDetectorPlugin",
+                    hooks=[PromptHookType.PROMPT_PRE_FETCH, ToolHookType.TOOL_POST_INVOKE],
+                    config={"allowlist_patterns": ["(?<=foo)bar"]},
                 )
             )
 
