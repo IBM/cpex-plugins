@@ -39,9 +39,11 @@ See [TESTING.md](TESTING.md) for detailed testing guidelines and cross-repositor
 
 ### Current Architecture (Transitional)
 
-Plugins are currently developed using a **Rust + Python hybrid** approach:
-- Core logic implemented in Rust
-- Python entry point via PyO3/maturin bindings
+Plugins are implemented as **pure Python** or **pure Rust** — each plugin uses one language for its logic. There is no dual-path where a plugin ships both Rust and Python implementations with a Rust fallback.
+
+For Rust plugins, the current approach wraps the Rust implementation with PyO3/maturin bindings as a packaging layer:
+- Plugin logic implemented entirely in Rust
+- Python entry points (PyO3/maturin) are a packaging and distribution layer only, not a parallel implementation
 - Published as Python packages to PyPI
 - Loaded by Python-based plugin framework in `mcp-context-forge`
 

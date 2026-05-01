@@ -8,7 +8,7 @@
 
 This is a monorepo of standalone plugin packages for the ContextForge Plugin Extensibility (CPEX) Framework. Each plugin lives in its own top-level directory with independent build configuration.
 
-- Plugins are Rust+Python (PyO3/maturin) or pure Python.
+- Plugins are implemented as **pure Python** or **pure Rust**. Each plugin uses one language for its core logic — there is no dual-path where a plugin ships both Rust and Python implementations with a Rust fallback. For Rust plugins, Python entry points (PyO3/maturin) are a packaging and distribution layer only, not a parallel implementation.
 - Each plugin has its own `pyproject.toml`, `Cargo.toml`, `Makefile`, and `tests/`.
 - Package names follow the pattern `cpex-<plugin-name>` (e.g., `cpex-rate-limiter`).
 - `mcpgateway` is a runtime dependency provided by the host gateway — never declare it in `pyproject.toml`.
@@ -52,13 +52,13 @@ See `mcp-context-forge/tests/AGENTS.md` for integration/E2E test conventions.
 ### Current Workflow: Rust + Python Hybrid
 
 **Architecture:**
-- Plugins implemented in Rust (core logic)
-- Python entry point via PyO3/maturin bindings
+- Plugin logic implemented entirely in Rust — no Python fallback implementation
+- Python entry points (PyO3/maturin) are a packaging and distribution layer only
 - Published as Python packages to PyPI
 - Loaded by Python-based plugin framework in gateway
 
 **Why Python Entry Points?**
-The plugin framework is currently implemented in Python (`mcpgateway/plugins/framework/`). Python entry points allow the framework to discover and load plugins dynamically. This is a transitional architecture.
+The plugin framework is currently implemented in Python (`mcpgateway/plugins/framework/`). Python entry points allow the framework to discover and load plugins dynamically. This is a transitional packaging layer — all plugin logic remains in Rust. This is not a dual-path architecture.
 
 **Development Steps:**
 
