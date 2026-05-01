@@ -1,6 +1,6 @@
 description: "Detect likely credentials and secrets in prompt input, tool output, and resource content"
 author: "ContextForge Contributors"
-version: "0.2.0"
+version: "0.2.1"
 kind: "cpex_secrets_detection.secrets_detection.SecretsDetectionPlugin"
 available_hooks:
   - "prompt_pre_fetch"

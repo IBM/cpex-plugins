@@ -1,1 +1,0 @@
-"""Mock mcpgateway.plugins package."""

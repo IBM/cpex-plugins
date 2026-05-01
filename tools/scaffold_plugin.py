@@ -24,12 +24,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-try:
-    from jinja2 import Environment, FileSystemLoader, select_autoescape
-except ImportError:
-    print("Error: jinja2 is required. Install with: pip install jinja2", file=sys.stderr)
-    sys.exit(1)
-
 # Constants
 PLUGIN_ROOT = Path("plugins/rust/python-package")
 TEMPLATE_DIR = Path("tools/templates/plugin")
@@ -69,6 +63,12 @@ class PluginScaffolder:
     """Handles plugin scaffolding operations."""
 
     def __init__(self, root: Path):
+        try:
+            from jinja2 import Environment, FileSystemLoader, select_autoescape
+        except ImportError:
+            print("Error: jinja2 is required. Install with: pip install jinja2", file=sys.stderr)
+            sys.exit(1)
+
         self.root = root
         self.plugin_root = root / PLUGIN_ROOT
         self.template_dir = root / TEMPLATE_DIR
@@ -85,6 +85,7 @@ class PluginScaffolder:
             autoescape=select_autoescape(),
             trim_blocks=True,
             lstrip_blocks=True,
+            keep_trailing_newline=True,
         )
 
     def validate_plugin_name(self, name: str) -> tuple[bool, str]:
@@ -216,6 +217,8 @@ class PluginScaffolder:
             "has_prompt_hooks": any("prompt" in h for h in metadata["hooks"]),
             "has_tool_hooks": any("tool" in h for h in metadata["hooks"]),
             "has_resource_hooks": any("resource" in h for h in metadata["hooks"]),
+            "has_agent_hooks": any("agent" in h for h in metadata["hooks"]),
+            "has_http_hooks": any("http" in h for h in metadata["hooks"]),
         }
 
         return derived
@@ -251,10 +254,6 @@ class PluginScaffolder:
             output_path = plugin_dir / output_name
             output_path.write_text(content)
             print(f"  {GREEN}✓{NC} {output_name}")
-
-        # Create empty uv.lock
-        (plugin_dir / "uv.lock").touch()
-        print(f"  {GREEN}✓{NC} uv.lock")
 
         # Python package
         module_name = metadata["module_name"]
@@ -479,12 +478,22 @@ Examples:
                 print(f"{RED}Error: --name is required in non-interactive mode{NC}", file=sys.stderr)
                 return 1
 
+            hooks = [h.strip() for h in args.hooks.split(",")] if args.hooks else ["tool_pre_invoke"]
+            invalid_hooks = [h for h in hooks if h not in VALID_HOOKS]
+            if invalid_hooks:
+                print(
+                    f"{RED}Error: Invalid hooks: {', '.join(invalid_hooks)}{NC}\n"
+                    f"Valid hooks: {', '.join(VALID_HOOKS)}{NC}",
+                    file=sys.stderr,
+                )
+                return 1
+
             metadata = {
                 "plugin_name": args.name,
                 "description": args.description or f"A CPEX plugin for {args.name.replace('_', ' ')}",
                 "author": args.author or "ContextForge Contributors",
                 "version": args.version or "0.1.0",
-                "hooks": args.hooks.split(",") if args.hooks else ["tool_pre_invoke"],
+                "hooks": hooks,
                 "use_framework_bridge": not args.no_framework_bridge,
                 "include_benchmarks": args.benchmarks,
             }

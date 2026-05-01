@@ -89,6 +89,23 @@ mod tests {
     }
 
     #[test]
+    fn detects_slack_tokens_around_legacy_length_boundary() {
+        let config = SecretsDetectionConfig::default();
+        for body_len in [48, 49] {
+            let token = format!("{}{}", "xoxb-", "a".repeat(body_len));
+            let (findings, redacted) = detect_and_redact(&token, &config);
+
+            assert!(
+                findings
+                    .iter()
+                    .any(|finding| finding.pii_type == "slack_token"),
+                "{body_len}: {findings:?}"
+            );
+            assert_eq!(redacted, token);
+        }
+    }
+
+    #[test]
     fn redaction_works() {
         let config = SecretsDetectionConfig {
             redact: true,
@@ -99,6 +116,91 @@ mod tests {
             detect_and_redact("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE", &config);
         assert_eq!(findings.len(), 1);
         assert_eq!(redacted, "AWS_ACCESS_KEY_ID=[REDACTED]");
+    }
+
+    #[test]
+    fn redacts_each_supported_secret_as_one_replacement_with_all_patterns_enabled() {
+        let config = SecretsDetectionConfig {
+            enabled: crate::patterns::PATTERNS
+                .keys()
+                .map(|&name| (name.to_string(), true))
+                .collect(),
+            redact: true,
+            redaction_text: "[TESTING-REDACTED]".to_string(),
+            ..Default::default()
+        };
+
+        for (name, secret) in [
+            ("aws_access_key_id", "AKIAFAKE12345EXAMPLE".to_string()),
+            (
+                "aws_secret_access_key",
+                "AWS_SECRET_ACCESS_KEY=FAKESecretAccessKeyForTestingEXAMPLE0000".to_string(),
+            ),
+            (
+                "google_api_key",
+                "AIzaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
+            ),
+            (
+                "github_token",
+                "ghp_abcdefghijklmnopqrstuvwxyz0123456789".to_string(),
+            ),
+            (
+                "stripe_secret_key",
+                "sk_test_abcdefghijklmnopqrstuvwxyz".to_string(),
+            ),
+            (
+                "generic_api_key_assignment",
+                "api_key=test12345678901234567890".to_string(),
+            ),
+            (
+                "slack_token",
+                [
+                    "xoxb",
+                    "123456789012",
+                    "123456789012",
+                    "abcdefghijklmnopqrstuvwx",
+                ]
+                .join("-"),
+            ),
+            (
+                "private_key_block",
+                "-----BEGIN RSA PRIVATE KEY-----".to_string(),
+            ),
+            (
+                "jwt_like",
+                "eyJaaaaaaaaaaa.eyJbbbbbbbbbbb.cccccccccccccc".to_string(),
+            ),
+            (
+                "hex_secret_32",
+                "0123456789abcdef0123456789abcdef".to_string(),
+            ),
+            ("base64_24", "QUJDREVGR0hJSktMTU5PUFFSU1RVVldY".to_string()),
+        ] {
+            let (findings, redacted) = detect_and_redact(&secret, &config);
+            assert_eq!(findings.len(), 1, "{name}: {findings:?}");
+            assert_eq!(findings[0].pii_type, name, "{name}: {findings:?}");
+            assert_eq!(redacted, config.redaction_text, "{name}");
+        }
+    }
+
+    #[test]
+    fn overlapping_broad_match_keeps_specific_finding_type() {
+        let config = SecretsDetectionConfig {
+            enabled: crate::patterns::PATTERNS
+                .keys()
+                .map(|&name| (name.to_string(), true))
+                .collect(),
+            redact: true,
+            redaction_text: "[TESTING-REDACTED]".to_string(),
+            ..Default::default()
+        };
+        let secret = "AIzaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/BBBBBBBB";
+
+        let (findings, redacted) = detect_and_redact(secret, &config);
+
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].pii_type, "google_api_key", "{findings:?}");
+        assert_eq!(redacted, config.redaction_text);
     }
 
     #[test]

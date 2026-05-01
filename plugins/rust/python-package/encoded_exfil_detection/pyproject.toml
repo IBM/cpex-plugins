@@ -29,14 +29,6 @@ module-name = "cpex_encoded_exfil_detection.encoded_exfil_detection_rust"
 python-source = "."
 features = ["pyo3/extension-module"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["tests"]
-asyncio_mode = "auto"
-markers = [
-    "integration: end-to-end tests exercising the full plugin pipeline",
-]
-
 [dependency-groups]
 dev = [
     "maturin>=1.12.6",

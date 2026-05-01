@@ -13,6 +13,8 @@ help:
 PACKAGE_NAME := cpex-rate-limiter
 WHEEL_PREFIX := cpex_rate_limiter
 CARGO := cargo
+CARGO_PACKAGE := rate_limiter
+NEXTEST_PROFILE ?= default
 STUB_FILES := cpex_rate_limiter/__init__.pyi cpex_rate_limiter/rate_limiter_rust/__init__.pyi
 WHEEL_DIR := ../../../../target/wheels
 
@@ -41,32 +43,34 @@ clippy:
 # 🧪 TESTS
 # =============================================================================
 # help: sync                  - Install plugin development dependencies
-# help: test                  - Run Rust unit tests
+# help: test                  - Run Rust unit tests and Python integration tests
+# help: test-unit             - Run Rust unit tests
 # help: test-verbose          - Run Rust tests with verbose output
-# help: test-python           - Run Python wrapper tests
-# help: test-all              - Run both Rust and Python tests
-.PHONY: sync test test-verbose test-python test-all test-integration verify-stubs
+# help: test-integration      - Run repo-level integration tests for rate_limiter
+# help: test-all              - Alias for test
+.PHONY: sync test test-unit test-verbose test-python test-all test-integration verify-stubs
 
 sync:
 	uv sync --dev
 
-test:
+test-unit:
 	@echo "$(GREEN)Running rate_limiter Rust tests...$(NC)"
-	$(CARGO) test
+	$(CARGO) nextest run --profile $(NEXTEST_PROFILE) -p $(CARGO_PACKAGE)
+
+test: test-unit test-integration
 
 test-verbose:
 	@echo "$(GREEN)Running rate_limiter Rust tests (verbose)...$(NC)"
-	$(CARGO) test -- --nocapture
+	$(CARGO) nextest run --profile $(NEXTEST_PROFILE) -p $(CARGO_PACKAGE) --no-capture
 
 test-python:
-	@echo "$(GREEN)Running Python tests...$(NC)"
-	uv run pytest tests/ -v
+	$(MAKE) test-integration
 
 test-integration:
 	@echo "$(GREEN)Running integration tests (Redis tests auto-skip without Docker)...$(NC)"
-	uv run pytest tests/integration/ -v
+	CPEX_TEST_PLUGIN_HOOKS=1 uv run pytest ../../../tests/rate_limiter -v --asyncio-mode=auto
 
-test-all: test test-python
+test-all: test
 
 verify-stubs: stub-gen
 	@git diff --exit-code -- $(STUB_FILES)
@@ -108,7 +112,7 @@ uninstall:
 # 📊 BENCHMARKS
 # =============================================================================
 # help: bench                 - Run Criterion benchmarks
-# help: bench-no-run          - Compile Criterion benchmarks without running them
+# help: bench-no-run          - Compile Criterion benchmark targets with nextest
 # help: bench-compare         - Compare against saved baseline
 .PHONY: bench bench-no-run bench-baseline bench-compare
 
@@ -117,8 +121,8 @@ bench:
 	$(CARGO) bench
 
 bench-no-run:
-	@echo "$(GREEN)Compiling benchmarks without running them...$(NC)"
-	$(CARGO) bench --no-run
+	@echo "$(GREEN)Compiling Criterion benchmark targets with nextest...$(NC)"
+	$(CARGO) nextest run --profile $(NEXTEST_PROFILE) -p $(CARGO_PACKAGE) --benches -E 'kind(bench)' --no-run
 
 bench-baseline:
 	$(CARGO) bench --bench rate_limiter -- --save-baseline main
@@ -153,17 +157,20 @@ doc-open: doc
 # 🔧 DEVELOPMENT HELPERS
 # =============================================================================
 # help: verify                - Verify plugin installation
-# help: check-all             - Run fmt-check + clippy + test
+# help: check-all             - Run fmt-check + clippy + Rust tests
+# help: ci-build              - Run CI build/static verification without integration tests
 # help: ci                    - Run the full CI-equivalent plugin verification flow
-.PHONY: verify check-all ci pre-commit
+.PHONY: verify check-all ci-build ci pre-commit
 
 verify:
 	@uv run python -c "from cpex_rate_limiter import rate_limiter_rust; print('rate_limiter_rust available')" || echo "rate_limiter_rust not installed — run: make install"
 
-check-all: fmt-check clippy test
+check-all: fmt-check clippy test-unit
 	@echo "$(GREEN)All checks passed$(NC)"
 
-ci: check-all verify-stubs build bench-no-run install-wheel test-python
+ci-build: check-all verify-stubs build bench-no-run install-wheel
+
+ci: ci-build test-integration
 	@echo "$(GREEN)CI verification passed$(NC)"
 
 pre-commit: check-all

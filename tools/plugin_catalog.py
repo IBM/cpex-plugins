@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import tomllib
+import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -18,15 +19,18 @@ MANAGED_ROOT = Path("plugins/rust/python-package")
 REPOSITORY_URL = "https://github.com/IBM/cpex-plugins"
 SHARED_PATH_PREFIXES = (
     "Makefile",
+    ".cargo/",
+    ".config/",
     ".github/workflows/",
     "Cargo.toml",
+    "Cargo.lock",
+    "deny.toml",
     "crates/",
     "README.md",
     "DEVELOPING.md",
     "TESTING.md",
     "tools/",
 )
-
 ENTRY_POINT_PATTERN = re.compile(
     r"^(?P<module>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*):(?P<object>[A-Za-z_][A-Za-z0-9_]*)$"
 )
@@ -40,7 +44,7 @@ REQUIRED_WORKSPACE_DEPENDENCIES = {
     "pyo3-async-runtimes": {"version": "0.28", "features": ["tokio-runtime"]},
     "pyo3": {"version": "0.28.2", "features": ["abi3-py311"]},
     "pyo3-log": "0.13",
-    "pyo3-stub-gen": "0.20.0",
+    "pyo3-stub-gen": "0.22.1",
     "rand": "0.8",
     "regex": "1.12",
     "serde_json": "1.0",
@@ -107,6 +111,7 @@ REQUIRED_PLUGIN_WORKSPACE_DEPENDENCIES = {
         "dev-dependencies": ("criterion",),
     },
 }
+SLUG_PATTERN = re.compile(r"^[a-z0-9_]+$")
 
 
 class CatalogError(Exception):
@@ -118,6 +123,7 @@ class PluginRecord:
     slug: str
     path: str
     package_name: str
+    cargo_package_name: str
     module_name: str
     kind: str
     version: str
@@ -350,6 +356,10 @@ def validate_plugin_dir(
     workspace_package: dict,
 ) -> PluginRecord:
     slug = plugin_dir.name
+    if SLUG_PATTERN.fullmatch(slug) is None:
+        raise CatalogError(
+            f"{plugin_dir}: plugin slug must match {SLUG_PATTERN.pattern}, got {slug}"
+        )
     expected_package_name = _expected_package_name(slug)
     expected_module_name = _expected_module_name(slug)
     module_dir = plugin_dir / expected_module_name
@@ -380,7 +390,7 @@ def validate_plugin_dir(
     package = cargo.get("package", {})
     if not isinstance(package, dict):
         raise CatalogError(f"{plugin_dir}: Cargo.toml [package] must be a table")
-    relative_plugin_path = str(plugin_dir.relative_to(root))
+    relative_plugin_path = plugin_dir.relative_to(root).as_posix()
 
     if relative_plugin_path not in workspace_members:
         raise CatalogError(
@@ -428,6 +438,12 @@ def validate_plugin_dir(
     if not isinstance(version, str) or not version:
         raise CatalogError(f"{plugin_dir}: Cargo.toml must define a non-empty package.version")
 
+    cargo_package_name = package.get("name")
+    if cargo_package_name != slug:
+        raise CatalogError(
+            f"{plugin_dir}: Cargo.toml [package].name must be {slug}, got {cargo_package_name}"
+        )
+
     manifest_version = _manifest_version(manifest_path)
     if manifest_version != version:
         raise CatalogError(
@@ -449,6 +465,7 @@ def validate_plugin_dir(
         slug=slug,
         path=relative_plugin_path,
         package_name=expected_package_name,
+        cargo_package_name=cargo_package_name,
         module_name=expected_module_name,
         kind=manifest_kind,
         version=version,
@@ -469,16 +486,40 @@ def _git_changed_paths(root: Path, base: str, head: str) -> list[str]:
     return [line for line in completed.stdout.splitlines() if line.strip()]
 
 
+def _git_file_text(root: Path, revision: str, path: str) -> str | None:
+    completed = subprocess.run(
+        ["git", "show", f"{revision}:{path}"],
+        cwd=root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return None
+    return completed.stdout
+
+
+def _cargo_version_from_text(text: str) -> str | None:
+    try:
+        payload = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return None
+    package = payload.get("package", {})
+    if not isinstance(package, dict):
+        return None
+    version = package.get("version")
+    return version if isinstance(version, str) else None
+
+
 def changed_plugins(root: Path, base: str, head: str) -> list[str]:
     plugins = discover_plugins(root)
-    return _changed_plugins_for_records(root, plugins, base, head)
+    return _changed_plugins_for_records(root, plugins, _git_changed_paths(root, base, head))
 
 
 def _changed_plugins_for_records(
-    root: Path, plugins: list[PluginRecord], base: str, head: str
+    root: Path, plugins: list[PluginRecord], changed_paths: list[str]
 ) -> list[str]:
     plugin_lookup = {record.slug: record for record in plugins}
-    changed_paths = _git_changed_paths(root, base, head)
 
     if any(
         path == prefix.rstrip("/") or path.startswith(prefix)
@@ -495,6 +536,9 @@ def _changed_plugins_for_records(
             if not path.startswith(integration_prefix):
                 continue
             relative = path[len(integration_prefix):]
+            slug = relative.split("/", maxsplit=1)[0]
+            if slug not in plugin_lookup:
+                return sorted(plugin_lookup)
         else:
             relative = path[len(managed_prefix):]
         slug = relative.split("/", maxsplit=1)[0]
@@ -503,15 +547,191 @@ def _changed_plugins_for_records(
     return sorted(changed)
 
 
+def _plugin_depends_on_crate(root: Path, record: PluginRecord, crate_name: str) -> bool:
+    manifest_path = root / record.path / "Cargo.toml"
+    with manifest_path.open("rb") as handle:
+        manifest = tomllib.load(handle)
+    return crate_name in manifest.get("dependencies", {})
+
+
+def _mutation_jobs_for_records(
+    root: Path, plugins: list[PluginRecord], changed_paths: list[str]
+) -> list[dict[str, object]]:
+    plugin_lookup = {record.slug: record for record in plugins}
+    jobs: dict[str, dict[str, object]] = {}
+    managed_prefix = f"{MANAGED_ROOT.as_posix()}/"
+
+    def add_job(cargo_package: str, *, in_diff: bool, test_packages: list[str] | None = None) -> None:
+        jobs[cargo_package] = {
+            "cargo_package": cargo_package,
+            "in_diff": in_diff,
+            "test_packages": test_packages or [],
+        }
+
+    for path in changed_paths:
+        if not path.endswith(".rs"):
+            continue
+        if path.startswith("crates/framework_bridge/"):
+            test_packages: list[str] = []
+            for record in plugins:
+                if _plugin_depends_on_crate(root, record, "cpex_framework_bridge"):
+                    test_packages.append(record.cargo_package_name)
+            add_job("cpex_framework_bridge", in_diff=True, test_packages=sorted(test_packages))
+            continue
+        if not path.startswith(managed_prefix):
+            continue
+        relative = path[len(managed_prefix):]
+        slug = relative.split("/", maxsplit=1)[0]
+        if slug in plugin_lookup:
+            add_job(plugin_lookup[slug].cargo_package_name, in_diff=True)
+
+    return [jobs[key] for key in sorted(jobs)]
+
+
+def _release_validation_tags_for_records(
+    root: Path, plugins: list[PluginRecord], changed_paths: list[str], base: str
+) -> list[str]:
+    tags: list[str] = []
+    for plugin in plugins:
+        cargo_path = f"{plugin.path}/Cargo.toml"
+        if cargo_path not in changed_paths:
+            continue
+        old_text = _git_file_text(root, base, cargo_path)
+        old_version = _cargo_version_from_text(old_text) if old_text is not None else None
+        if old_version is not None and old_version != plugin.version:
+            tags.append(f"{plugin.slug.replace('_', '-')}-v{plugin.version}")
+    return sorted(tags)
+
+
 def ci_selection(root: Path, mode: str, base: str | None = None, head: str | None = None) -> dict:
     plugins = discover_plugins(root)
+    plugin_lookup = {plugin.slug: plugin for plugin in plugins}
     if mode == "all":
         selected = sorted(plugin.slug for plugin in plugins)
+        mutation_jobs = [
+            {
+                "cargo_package": plugin_lookup[slug].cargo_package_name,
+                "in_diff": False,
+                "test_packages": [],
+            }
+            for slug in selected
+        ]
+        release_validation_tags: list[str] = []
     else:
         if base is None or head is None:
             raise CatalogError("ci-selection diff mode requires base and head revisions")
-        selected = _changed_plugins_for_records(root, plugins, base, head)
-    return {"plugins": selected, "has_plugins": bool(selected)}
+        changed_paths = _git_changed_paths(root, base, head)
+        selected = _changed_plugins_for_records(root, plugins, changed_paths)
+        mutation_jobs = _mutation_jobs_for_records(root, plugins, changed_paths)
+        release_validation_tags = _release_validation_tags_for_records(
+            root, plugins, changed_paths, base
+        )
+    cargo_packages = [plugin_lookup[slug].cargo_package_name for slug in selected]
+    mutation_cargo_packages = [str(job["cargo_package"]) for job in mutation_jobs]
+    return {
+        "plugins": selected,
+        "has_plugins": bool(selected),
+        "plugin_count": len(selected),
+        "cargo_packages": cargo_packages,
+        "mutation_cargo_packages": mutation_cargo_packages,
+        "has_mutation_cargo_packages": bool(mutation_cargo_packages),
+        "mutation_jobs": mutation_jobs,
+        "release_validation_tags": release_validation_tags,
+        "has_release_validation_tags": bool(release_validation_tags),
+    }
+
+
+def coverage_check(
+    root: Path,
+    report_path: Path,
+    minimum_line_rate: float,
+    expected_plugins: list[str] | None = None,
+) -> dict:
+    if not report_path.is_absolute():
+        report_path = root / report_path
+    if not report_path.exists():
+        raise CatalogError(f"Coverage report not found: {report_path}")
+
+    try:
+        coverage = ET.parse(report_path).getroot()
+    except ET.ParseError as exc:
+        raise CatalogError(f"Invalid coverage XML in {report_path}: {exc}") from exc
+
+    known_plugins = {plugin.slug for plugin in discover_plugins(root)}
+    expected_plugin_set = set(expected_plugins) if expected_plugins is not None else known_plugins
+    unknown_expected = sorted(expected_plugin_set - known_plugins)
+    if unknown_expected:
+        raise CatalogError(f"Unknown expected coverage plugins: {unknown_expected}")
+
+    plugin_lines: dict[str, dict[str, int]] = {}
+    prefix = MANAGED_ROOT.as_posix() + "/"
+    for class_node in coverage.findall(".//class"):
+        filename = class_node.attrib.get("filename", "").replace("\\", "/")
+        if filename.startswith(prefix):
+            relative = filename[len(prefix) :]
+        elif f"/{prefix}" in filename:
+            relative = filename.split(f"/{prefix}", maxsplit=1)[1]
+        else:
+            continue
+        slug = relative.split("/", maxsplit=1)[0]
+        counts = plugin_lines.setdefault(slug, {"covered_lines": 0, "valid_lines": 0})
+        for line_node in class_node.findall("./lines/line"):
+            counts["valid_lines"] += 1
+            raw_hits = line_node.attrib.get("hits", "0")
+            try:
+                hits = int(raw_hits)
+            except ValueError as exc:
+                raise CatalogError(
+                    f"Invalid coverage hit count {raw_hits!r} in {filename}"
+                ) from exc
+            if hits > 0:
+                counts["covered_lines"] += 1
+
+    if not plugin_lines:
+        raise CatalogError(f"No plugin coverage found in {report_path}")
+
+    covered_plugin_set = set(plugin_lines)
+    unknown_covered = sorted(covered_plugin_set - known_plugins)
+    if unknown_covered:
+        raise CatalogError(f"unknown plugin coverage entries: {unknown_covered}")
+    if expected_plugins is not None:
+        unexpected_covered = sorted(covered_plugin_set - expected_plugin_set)
+        if unexpected_covered:
+            raise CatalogError(
+                f"unexpected plugin coverage entries: {unexpected_covered}"
+            )
+    missing_expected = sorted(expected_plugin_set - covered_plugin_set)
+    if missing_expected:
+        raise CatalogError(f"missing plugin coverage entries: {missing_expected}")
+
+    plugins: dict[str, dict[str, float | int]] = {}
+    minimum_plugin = ""
+    minimum_rate = 101.0
+    for slug, counts in sorted(plugin_lines.items()):
+        valid_lines = counts["valid_lines"]
+        if valid_lines == 0:
+            raise CatalogError(f"{slug} has no counted coverage lines")
+        line_rate = counts["covered_lines"] / valid_lines * 100.0
+        plugins[slug] = {
+            "covered_lines": counts["covered_lines"],
+            "valid_lines": valid_lines,
+            "line_rate": round(line_rate, 2),
+        }
+        if line_rate < minimum_rate:
+            minimum_plugin = slug
+            minimum_rate = line_rate
+
+    payload = {
+        "minimum_plugin": minimum_plugin,
+        "minimum_line_rate": round(minimum_rate, 2),
+        "threshold": minimum_line_rate,
+        "plugins": plugins,
+    }
+    if minimum_rate + 1e-9 < minimum_line_rate:
+        raise CatalogError(
+            f"{minimum_plugin} line coverage {minimum_rate:.2f}% is below {minimum_line_rate:.2f}%"
+        )
+    return payload
 
 
 def release_info(root: Path, tag: str) -> PluginRecord:
@@ -587,6 +807,28 @@ def _command_ci_selection_field(
     return _print_field(payload[field])
 
 
+def _command_coverage_check(
+    root: Path,
+    report_path: Path,
+    minimum_line_rate: float,
+    expected_plugins: str | None,
+) -> int:
+    parsed_expected: list[str] | None = None
+    if expected_plugins is not None:
+        try:
+            candidate = json.loads(expected_plugins)
+        except json.JSONDecodeError as exc:
+            raise CatalogError(f"Invalid expected plugin JSON: {exc}") from exc
+        if not isinstance(candidate, list) or any(
+            not isinstance(plugin, str) for plugin in candidate
+        ):
+            raise CatalogError("Expected plugin coverage list must be a JSON string array")
+        parsed_expected = candidate
+    payload = coverage_check(root, report_path, minimum_line_rate, parsed_expected)
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -615,6 +857,7 @@ def build_parser() -> argparse.ArgumentParser:
             "slug",
             "path",
             "package_name",
+            "cargo_package_name",
             "module_name",
             "kind",
             "version",
@@ -633,7 +876,26 @@ def build_parser() -> argparse.ArgumentParser:
     ci_field_parser.add_argument("mode", choices=("all", "diff"))
     ci_field_parser.add_argument("base", nargs="?")
     ci_field_parser.add_argument("head", nargs="?")
-    ci_field_parser.add_argument("field", choices=("plugins", "has_plugins"))
+    ci_field_parser.add_argument(
+        "field",
+        choices=(
+            "plugins",
+            "has_plugins",
+            "plugin_count",
+            "cargo_packages",
+            "mutation_cargo_packages",
+            "has_mutation_cargo_packages",
+            "mutation_jobs",
+            "release_validation_tags",
+            "has_release_validation_tags",
+        ),
+    )
+
+    coverage_parser = subparsers.add_parser("coverage-check")
+    coverage_parser.add_argument("root", nargs="?", default=".")
+    coverage_parser.add_argument("report")
+    coverage_parser.add_argument("minimum_line_rate", type=float)
+    coverage_parser.add_argument("expected_plugins", nargs="?")
 
     return parser
 
@@ -657,6 +919,13 @@ def main() -> int:
             return _command_ci_selection(root, args.mode, args.base, args.head)
         if args.command == "ci-selection-field":
             return _command_ci_selection_field(root, args.mode, args.base, args.head, args.field)
+        if args.command == "coverage-check":
+            return _command_coverage_check(
+                root,
+                Path(args.report),
+                args.minimum_line_rate,
+                args.expected_plugins,
+            )
     except CatalogError as exc:
         print(str(exc), file=sys.stderr)
         return 1

@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+
+nextest-version = "0.9.133"
+
+[profile.ci]
+fail-fast = false
+failure-output = "immediate-final"
+
+[profile.mutants]
+fail-fast = true
+failure-output = "final"

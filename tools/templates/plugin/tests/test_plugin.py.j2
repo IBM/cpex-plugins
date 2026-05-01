@@ -22,32 +22,27 @@ class Test{{ engine_class }}:
         engine = {{ engine_class }}(config.model_dump())
         assert engine is not None
 
-    {% for hook in hooks -%}
-    {% if hook == "tool_pre_invoke" -%}
+    {% for hook in hooks %}
+    {% if hook == "tool_pre_invoke" %}
     def test_tool_pre_invoke_allows_by_default(self):
         """Test tool_pre_invoke allows execution by default."""
         config = {{ config_class }}()
         engine = {{ engine_class }}(config.model_dump())
-        
         # TODO: Create proper test payload and context
-        # For now, this is a placeholder
         # result = engine.tool_pre_invoke(payload, context)
         # assert result.continue_processing is True
         pass
-
-    {% elif hook == "resource_pre_fetch" -%}
+    {% elif hook == "resource_pre_fetch" %}
     def test_resource_pre_fetch_allows_by_default(self):
         """Test resource_pre_fetch allows fetch by default."""
         config = {{ config_class }}()
         engine = {{ engine_class }}(config.model_dump())
-        
         # TODO: Create proper test payload and context
         # result = engine.resource_pre_fetch(payload, context)
         # assert result.continue_processing is True
         pass
-
-    {% endif -%}
-    {% endfor -%}
+    {% endif %}
+    {% endfor %}
 
 
 class Test{{ plugin_class }}:

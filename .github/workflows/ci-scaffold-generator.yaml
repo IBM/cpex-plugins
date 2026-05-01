@@ -1,0 +1,110 @@
+name: CI Scaffold Generator
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tools/scaffold_plugin.py"
+      - "tools/templates/**"
+      - "Makefile"
+      - ".github/workflows/ci-scaffold-generator.yaml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "tools/scaffold_plugin.py"
+      - "tools/templates/**"
+      - "Makefile"
+      - ".github/workflows/ci-scaffold-generator.yaml"
+
+concurrency:
+  group: ci-scaffold-generator-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+
+      - name: Install scaffold dependencies
+        run: python3 -m pip install jinja2
+
+      - name: Test --help
+        run: python3 tools/scaffold_plugin.py --help
+
+      - name: Reject invalid hook names
+        run: |
+          python3 tools/scaffold_plugin.py --non-interactive --name reject_test \
+            --hooks typo_hook && exit 1 || true
+
+      - name: Install uv and maturin
+        run: python3 -m pip install uv==0.9.30 maturin==1.12.6
+
+      - name: Verify Rust toolchain
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Install cargo-nextest
+        run: |
+          if [[ "${RUNNER_OS}" == "Linux" ]]; then
+            mkdir -p "${CARGO_HOME:-$HOME/.cargo}/bin"
+            curl -LsSf https://get.nexte.st/0.9.133/linux | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+          elif [[ "${RUNNER_OS}" == "macOS" ]]; then
+            mkdir -p "${CARGO_HOME:-$HOME/.cargo}/bin"
+            if [[ "$(uname -m)" == "arm64" ]]; then
+              curl -LsSf https://get.nexte.st/0.9.133/mac | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+            else
+              curl -LsSf https://get.nexte.st/0.9.133/mac | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+            fi
+          else
+            cargo install cargo-nextest --version 0.9.133 --locked
+          fi
+          cargo nextest --version
+
+      - name: Generate default plugin (tool_pre_invoke)
+        run: |
+          python3 tools/scaffold_plugin.py --non-interactive \
+            --name ci_scaffold_default \
+            --description "CI scaffold default test plugin" \
+            --author "CI"
+
+      - name: Sync default plugin
+        working-directory: plugins/rust/python-package/ci_scaffold_default
+        run: make sync
+
+      - name: Build and CI-check default plugin
+        working-directory: plugins/rust/python-package/ci_scaffold_default
+        run: make ci
+
+      - name: Generate all-hooks plugin
+        run: |
+          python3 tools/scaffold_plugin.py --non-interactive \
+            --name ci_scaffold_all_hooks \
+            --description "CI scaffold all-hooks test plugin" \
+            --author "CI" \
+            --hooks prompt_pre_fetch,prompt_post_fetch,tool_pre_invoke,tool_post_invoke,resource_pre_fetch,resource_post_fetch,agent_pre_invoke,agent_post_invoke,http_pre_request,http_post_request,http_auth_resolve_user,http_auth_check_permission
+
+      - name: Sync all-hooks plugin
+        working-directory: plugins/rust/python-package/ci_scaffold_all_hooks
+        run: make sync
+
+      - name: Build and CI-check all-hooks plugin
+        working-directory: plugins/rust/python-package/ci_scaffold_all_hooks
+        run: make ci
+
+      - name: Clean up generated plugins
+        if: always()
+        run: |
+          rm -rf plugins/rust/python-package/ci_scaffold_default
+          rm -rf plugins/rust/python-package/ci_scaffold_all_hooks
+          # Remove scaffold-added workspace members from Cargo.toml
+          sed -i '/ci_scaffold_default/d' Cargo.toml
+          sed -i '/ci_scaffold_all_hooks/d' Cargo.toml

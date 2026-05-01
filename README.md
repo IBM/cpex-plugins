@@ -17,9 +17,10 @@ Each managed plugin must include:
 - `Cargo.toml`
 - `Makefile`
 - `README.md`
-- `tests/`
 - `cpex_<slug>/__init__.py`
 - `cpex_<slug>/plugin-manifest.yaml`
+
+Python integration tests live under `plugins/tests/<slug>/`; Rust unit tests live in the plugin crate.
 
 Rust crates are owned by the top-level workspace in `Cargo.toml`. Python package names follow `cpex-<slug>`, Python modules follow `cpex_<slug>`, plugin manifests must declare a top-level `kind` in `module.object` form, and `pyproject.toml` must publish the matching `module:object` reference under `[project.entry-points."cpex.plugins"]`. Release tags use the hyphenated slug form `<slug-with-hyphens>-v<version>`, for example `rate-limiter-v0.0.2`.
 
@@ -57,6 +58,7 @@ After the plugin framework is migrated to Rust:
 
 See [DEVELOPING.md](DEVELOPING.md) for detailed workflows for both current and future development.
 
+
 ## Creating a New Plugin
 
 Use the plugin scaffold generator to create a new plugin with all required files and structure:
@@ -88,7 +90,7 @@ python3 tools/scaffold_plugin.py --non-interactive \
   --name my_plugin \
   --description "My plugin description" \
   --author "Your Name" \
-  --hooks prompt_pre_fetch tool_pre_invoke
+  --hooks prompt_pre_fetch,tool_pre_invoke
 ```
 
 ## Helper Commands

@@ -523,6 +523,10 @@ mod tests {
 
     #[test]
     fn await_async_tuple_parses_successful_result() -> PyResult<()> {
+        // Ensure the embedded interpreter is initialized for this test process.
+        // `cargo-nextest` runs tests in separate processes, so this cannot rely
+        // on another test having already touched Python.
+        Python::initialize();
         Python::attach(|py| -> PyResult<()> {
             let sys = py.import("sys")?;
             let asyncio = py.import("asyncio")?;

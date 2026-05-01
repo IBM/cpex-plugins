@@ -85,7 +85,7 @@ Blocking responses use the `ENCODED_EXFIL_DETECTED` violation code.
 
 ## Security Notes
 
-- Guardrails reject invalid allowlist regexes at configuration time.
+- Guardrails reject Rust-incompatible allowlist regexes at engine initialization time (during plugin construction). Features such as lookaround and backreferences are not supported.
 - Scan and recursion caps exist to keep detection bounded on large payloads.
 - Detailed findings can be reduced or sanitized before metadata emission depending on configuration.
 

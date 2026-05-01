@@ -29,11 +29,6 @@ module-name = "cpex_retry_with_backoff.retry_with_backoff_rust"
 python-source = "."
 features = ["pyo3/extension-module"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["tests"]
-asyncio_mode = "auto"
-
 [dependency-groups]
 dev = [
     "maturin>=1.12.6",

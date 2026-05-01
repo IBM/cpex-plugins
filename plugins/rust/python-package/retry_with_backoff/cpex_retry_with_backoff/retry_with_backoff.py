@@ -9,35 +9,20 @@ import math
 import random
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-try:
-    from mcpgateway.config import get_settings
-except ModuleNotFoundError:
-    from mcpgateway_mock.config import get_settings  # type: ignore[no-redef]
-
-try:
-    from mcpgateway.plugins.framework import (
-        Plugin,
-        PluginConfig,
-        PluginContext,
-        ResourcePostFetchPayload,
-        ResourcePostFetchResult,
-        ToolPostInvokePayload,
-        ToolPostInvokeResult,
-    )
-except ModuleNotFoundError:
-    from mcpgateway_mock.plugins.framework import (  # type: ignore[no-redef]
-        Plugin,
-        PluginConfig,
-        PluginContext,
-        ResourcePostFetchPayload,
-        ResourcePostFetchResult,
-        ToolPostInvokePayload,
-        ToolPostInvokeResult,
-    )
+from mcpgateway.config import get_settings
+from mcpgateway.plugins.framework import (
+    Plugin,
+    PluginConfig,
+    PluginContext,
+    ResourcePostFetchPayload,
+    ResourcePostFetchResult,
+    ToolPostInvokePayload,
+    ToolPostInvokeResult,
+)
 
 from cpex_retry_with_backoff.retry_with_backoff_rust import RetryStateManager
 
@@ -181,6 +166,24 @@ class RetryWithBackoffPlugin(Plugin):
                 overrides.get("retry_on_status", self._cfg.retry_on_status),
             )
             for tool_name, overrides in self._cfg.tool_overrides.items()
+        }
+
+    def to_rust_native_policy(self, tool_name: str, ceiling: int) -> Optional[dict[str, Any]]:
+        raw_cfg = RetryConfig(**(self.config.config or {}))
+        cfg = _cfg_for(raw_cfg, tool_name)
+        if cfg.max_retries > ceiling:
+            cfg = cfg.model_copy(update={"max_retries": ceiling})
+
+        if cfg.check_text_content:
+            return None
+
+        return {
+            "kind": "retry_with_backoff",
+            "maxRetries": int(cfg.max_retries),
+            "backoffBaseMs": int(cfg.backoff_base_ms),
+            "maxBackoffMs": int(cfg.max_backoff_ms),
+            "retryOnStatus": list(cfg.retry_on_status),
+            "jitter": bool(cfg.jitter),
         }
 
     async def tool_post_invoke(

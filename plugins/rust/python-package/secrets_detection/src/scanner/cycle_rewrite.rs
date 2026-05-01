@@ -174,7 +174,7 @@ fn append_slot_names(slot_names: &Bound<'_, PyList>, slots: &Bound<'_, PyAny>) -
 mod tests {
     use std::ffi::CString;
 
-    use pyo3::types::{PyModule, PyString, PyTuple};
+    use pyo3::types::{PyDict, PyFrozenSet, PyList, PyModule, PySet, PyString, PyTuple};
 
     use super::*;
     use crate::config::SecretsDetectionConfig;
@@ -238,6 +238,139 @@ class CleanObject:
                 "[REDACTED]"
             );
 
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn rewrites_placeholder_in_dict_and_list_cycles() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let placeholder = PyString::new(py, "placeholder");
+            let replacement = PyString::new(py, "replacement");
+            let dict = PyDict::new(py);
+            let list = PyList::empty(py);
+            dict.set_item("direct", placeholder.clone())?;
+            dict.set_item("nested", &list)?;
+            list.append(placeholder.clone())?;
+            list.append(&dict)?;
+
+            let replaced = replace_placeholder_references(
+                py,
+                dict.as_any(),
+                placeholder.as_any(),
+                replacement.as_any(),
+                &mut HashSet::new(),
+            )?;
+
+            assert!(replaced);
+            assert_eq!(
+                dict.get_item("direct")?.unwrap().extract::<String>()?,
+                "replacement"
+            );
+            assert_eq!(list.get_item(0)?.extract::<String>()?, "replacement");
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn rewrites_placeholder_in_object_dict_and_slots() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let code = CString::new(
+                r#"
+class SlotObject:
+    __slots__ = ("slot_value", "missing")
+
+    def __init__(self, value):
+        self.slot_value = value
+
+class DictObject:
+    def __init__(self, value):
+        self.value = value
+"#,
+            )
+            .unwrap();
+            let module =
+                PyModule::from_code(py, code.as_c_str(), c"rewrite_test.py", c"rewrite_test")?;
+            let placeholder = PyString::new(py, "placeholder");
+            let replacement = PyString::new(py, "replacement");
+            let slot_obj = module
+                .getattr("SlotObject")?
+                .call1((placeholder.clone(),))?;
+            let dict_obj = module
+                .getattr("DictObject")?
+                .call1((placeholder.clone(),))?;
+
+            assert!(replace_placeholder_references(
+                py,
+                &slot_obj,
+                placeholder.as_any(),
+                replacement.as_any(),
+                &mut HashSet::new(),
+            )?);
+            assert!(replace_placeholder_references(
+                py,
+                &dict_obj,
+                placeholder.as_any(),
+                replacement.as_any(),
+                &mut HashSet::new(),
+            )?);
+
+            assert_eq!(
+                slot_obj.getattr("slot_value")?.extract::<String>()?,
+                "replacement"
+            );
+            assert_eq!(
+                dict_obj.getattr("value")?.extract::<String>()?,
+                "replacement"
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn append_slot_names_accepts_python_collection_shapes() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let code = CString::new(
+                r#"
+def names():
+    yield "iter_slot"
+"#,
+            )
+            .unwrap();
+            let module = PyModule::from_code(py, code.as_c_str(), c"slots_test.py", c"slots_test")?;
+            let slot_names = PyList::empty(py);
+            let dict = PyDict::new(py);
+            dict.set_item("dict_slot", py.None())?;
+
+            append_slot_names(&slot_names, PyString::new(py, "one_slot").as_any())?;
+            append_slot_names(&slot_names, dict.as_any())?;
+            append_slot_names(
+                &slot_names,
+                PyTuple::new(py, [PyString::new(py, "tuple_slot").into_any().unbind()])?.as_any(),
+            )?;
+            append_slot_names(&slot_names, PyList::new(py, ["list_slot"])?.as_any())?;
+            append_slot_names(&slot_names, PySet::new(py, ["set_slot"])?.as_any())?;
+            append_slot_names(&slot_names, PyFrozenSet::new(py, ["frozen_slot"])?.as_any())?;
+            append_slot_names(&slot_names, module.getattr("names")?.call0()?.as_any())?;
+
+            let names = slot_names.extract::<Vec<String>>()?;
+            for expected in [
+                "one_slot",
+                "dict_slot",
+                "tuple_slot",
+                "list_slot",
+                "set_slot",
+                "frozen_slot",
+                "iter_slot",
+            ] {
+                assert!(names.iter().any(|name| name == expected), "{expected}");
+            }
             Ok(())
         })
         .unwrap();

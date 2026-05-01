@@ -5,8 +5,15 @@ help:
 PACKAGE_NAME := cpex-retry-with-backoff
 WHEEL_PREFIX := cpex_retry_with_backoff
 CARGO := cargo
+CARGO_PACKAGE := retry_with_backoff
+NEXTEST_PROFILE ?= default
+PLUGIN_SLUG := retry_with_backoff
+REPO_ROOT := ../../../..
 STUB_FILES := cpex_retry_with_backoff/__init__.pyi cpex_retry_with_backoff/retry_with_backoff_rust/__init__.pyi
 WHEEL_DIR := ../../../../target/wheels
+COVERAGE_REPORT := coverage/cobertura.xml
+COVERAGE_MIN := 90.00
+CARGO_LLVM_COV_VERSION := 0.8.4
 
 GREEN := \033[0;32m
 YELLOW := \033[0;33m
@@ -27,28 +34,34 @@ clippy:
 	$(CARGO) clippy -- -D warnings
 
 # help: sync                  - Install plugin development dependencies
-# help: test                  - Run Rust unit tests
+# help: test                  - Run Rust unit tests and Python integration tests
+# help: test-unit             - Run Rust unit tests
 # help: test-verbose          - Run Rust tests with verbose output
-# help: test-python           - Run Python tests
-# help: test-all              - Run both Rust and Python tests
-.PHONY: sync test test-verbose test-python test-all verify-stubs
+# help: test-integration      - Run repo-level integration tests for retry_with_backoff
+# help: test-all              - Alias for test
+.PHONY: sync test test-unit test-verbose test-python test-integration test-all verify-stubs
 
 sync:
 	uv sync --dev
 
-test:
+test-unit:
 	@echo "$(GREEN)Running retry_with_backoff Rust tests...$(NC)"
-	$(CARGO) test
+	$(CARGO) nextest run --profile $(NEXTEST_PROFILE) -p $(CARGO_PACKAGE)
+
+test: test-unit test-integration
 
 test-verbose:
 	@echo "$(GREEN)Running retry_with_backoff Rust tests (verbose)...$(NC)"
-	$(CARGO) test -- --nocapture
+	$(CARGO) nextest run --profile $(NEXTEST_PROFILE) -p $(CARGO_PACKAGE) --no-capture
 
 test-python:
-	@echo "$(GREEN)Running Python tests...$(NC)"
-	uv run pytest tests/ -v
+	$(MAKE) test-integration
 
-test-all: test test-python
+test-integration:
+	@echo "$(GREEN)Running integration tests...$(NC)"
+	CPEX_TEST_PLUGIN_HOOKS=1 uv run pytest ../../../tests/retry_with_backoff -v --asyncio-mode=auto
+
+test-all: test
 
 verify-stubs: stub-gen
 	@git diff --exit-code -- $(STUB_FILES)
@@ -94,16 +107,37 @@ clean-all: clean
 
 # help: verify                - Verify plugin installation
 # help: check-all             - Run fmt-check + clippy + Rust tests
+# help: ci-build              - Run CI build/static verification without integration tests
+# help: coverage              - Generate Rust coverage and enforce the 90% floor
 # help: ci                    - Run the full CI-equivalent plugin verification flow
-.PHONY: verify check-all ci pre-commit
+.PHONY: verify check-all ci-build coverage ci pre-commit
 
 verify:
 	@uv run python -c "from cpex_retry_with_backoff import retry_with_backoff_rust; print('retry_with_backoff_rust available')" || echo "retry_with_backoff_rust not installed — run: make install"
 
-check-all: fmt-check clippy test
+check-all: fmt-check clippy test-unit
 	@echo "$(GREEN)All checks passed$(NC)"
 
-ci: check-all verify-stubs build install-wheel test-python
+ci-build: check-all verify-stubs build install-wheel
+
+coverage:
+	@echo "$(GREEN)Generating Rust coverage...$(NC)"
+	rustup component add llvm-tools-preview
+	cargo llvm-cov --version >/dev/null 2>&1 || cargo install cargo-llvm-cov --version $(CARGO_LLVM_COV_VERSION) --locked
+	cargo llvm-cov clean --workspace
+	mkdir -p $(REPO_ROOT)/coverage
+	$(CARGO) llvm-cov nextest --no-report -p $(CARGO_PACKAGE) -P $(NEXTEST_PROFILE)
+	eval "$$(cargo llvm-cov show-env --sh)" && \
+	export CARGO_TARGET_DIR="$${CARGO_LLVM_COV_TARGET_DIR}/llvm-cov-target" && \
+	export CARGO_LLVM_COV_BUILD_DIR="$${CARGO_TARGET_DIR}" && \
+	export LLVM_PROFILE_FILE="$${CARGO_TARGET_DIR}/cpex-plugins-%p-%10m.profraw" && \
+	mkdir -p "$${CARGO_TARGET_DIR}" && \
+	uv run maturin develop && \
+	$(MAKE) test-integration && \
+	env -u CARGO_TARGET_DIR -u CARGO_LLVM_COV_BUILD_DIR -u CARGO_LLVM_COV_TARGET_DIR -u LLVM_PROFILE_FILE cargo llvm-cov report -p $(CARGO_PACKAGE) --cobertura --output-path $(REPO_ROOT)/$(COVERAGE_REPORT)
+	python3 $(REPO_ROOT)/tools/plugin_catalog.py coverage-check $(REPO_ROOT) $(COVERAGE_REPORT) $(COVERAGE_MIN) '["$(PLUGIN_SLUG)"]'
+
+ci: ci-build test-integration coverage
 	@echo "$(GREEN)CI verification passed$(NC)"
 
 pre-commit: check-all
