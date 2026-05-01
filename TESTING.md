@@ -95,7 +95,7 @@ pytest tests/e2e/
 
 ## Testing Layers
 
-Testing is split into two layers:
+`cpex-plugins` has three local testing layers. Gateway integration and E2E tests live in `mcp-context-forge`.
 
 ### 1. Repo Contract Tests
 
@@ -118,9 +118,9 @@ They verify:
 - changed-plugin detection for CI
 - canonical release tag resolution
 
-### 2. Plugin Tests
+### 2. Plugin Unit Tests
 
-Each plugin has its own Rust and Python test suite.
+Each plugin has its own Rust and Python unit test suite.
 
 ```bash
 cd plugins/rust/python-package/rate_limiter
@@ -140,7 +140,18 @@ make plugin-test PLUGIN=rate_limiter
 
 `make plugin-test` runs the selected plugin's `make ci` target, including stub verification, build, bench compilation where configured, install, and Python tests.
 
-## 3. Rust Coverage
+### 3. Plugin-Framework Integration Tests
+
+Each plugin also has integration tests between the plugin and the Python plugin framework. These live in the plugin's `tests/` directory alongside unit tests and test the PyO3 interface — ensuring the Rust implementation is correctly exposed through Python bindings and that the framework can discover, load, and invoke the plugin.
+
+```bash
+cd plugins/rust/python-package/rate_limiter
+make test-integration
+```
+
+These tests are distinct from gateway integration tests in `mcp-context-forge`: they exercise the plugin ↔ framework boundary within this repository, without requiring a running gateway.
+
+## 4. Rust Coverage
 
 CI enforces at least 90% line coverage for each Rust plugin selected by the plugin catalog. The coverage job instruments Rust, runs Rust unit tests, then runs each plugin's repo-level Python integration tests so PyO3 paths are counted.
 
@@ -180,7 +191,7 @@ Rust unit tests use `cargo nextest run`. Coverage uses `cargo llvm-cov nextest -
 
 Criterion benchmarks are verified in CI with `cargo nextest run --benches -E 'kind(bench)' --no-run`, which compiles benchmark test targets without rerunning normal unit tests or collecting noisy performance measurements on shared CI runners.
 
-## 4. Mutation Testing
+## 5. Mutation Testing
 
 Mutation testing runs in PR CI on Ubuntu for Rust code touched by the pull request diff. It is also available locally through cargo-mutants and runs Rust tests with nextest.
 
@@ -349,11 +360,12 @@ Release CI validates the tag and plugin metadata before any artifact is publishe
 ```bash
 # In cpex-plugins
 cd plugins/rust/python-package/<slug>
-make test-all              # Run all plugin tests
+make test-all              # Run unit tests (Rust + Python)
+make test-integration      # Run plugin-framework integration tests
 
 # In mcp-context-forge
 cd mcp-context-forge
-pytest tests/integration/  # Run integration tests
+pytest tests/integration/  # Run gateway integration tests
 pytest tests/e2e/          # Run E2E tests
 ```
 
@@ -361,12 +373,13 @@ pytest tests/e2e/          # Run E2E tests
 
 ```bash
 # cpex-plugins CI
-make plugins-validate      # Validate repo structure
-make plugin-test PLUGIN=<slug>  # Test specific plugin
+make plugins-validate           # Validate repo structure
+make plugin-test PLUGIN=<slug>  # Run unit tests for specific plugin
+# make test-integration is run as part of the coverage job
 
 # mcp-context-forge CI
 make test                  # Run unit tests
-pytest tests/integration/  # Run integration tests
+pytest tests/integration/  # Run gateway integration tests
 pytest tests/e2e/          # Run E2E tests
 ```
 
@@ -379,7 +392,14 @@ pytest tests/e2e/          # Run E2E tests
 3. Check Python test output: `pytest -v`
 4. Use debugger: `rust-gdb` or `pdb`
 
-### Integration Test Failures (mcp-context-forge)
+### Plugin-Framework Integration Test Failures (cpex-plugins)
+
+1. Run tests locally: `make test-integration`
+2. Check PyO3 binding output: `pytest -v tests/`
+3. Verify Rust extension is built: `make install`
+4. Check framework loading: `pytest -vv tests/`
+
+### Gateway Integration Test Failures (mcp-context-forge)
 
 1. Check plugin installation: `pip list | grep cpex`
 2. Verify plugin configuration: `cat plugins/config.yaml`
