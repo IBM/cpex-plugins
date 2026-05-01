@@ -119,7 +119,7 @@ version of an existing managed plugin to PyPI.
    ```bash
    $EDITOR plugins/rust/python-package/rate_limiter/Cargo.toml
    $EDITOR plugins/rust/python-package/rate_limiter/cpex_rate_limiter/plugin-manifest.yaml
-   cargo update -p cpex-rate-limiter --precise 0.0.5
+   cargo update -p rate_limiter --precise 0.0.5
    ```
 
 3. Run local validation.
@@ -143,14 +143,13 @@ version of an existing managed plugin to PyPI.
    git push origin rate-limiter-v0.0.5
    ```
 
-   Current managed plugin tag prefixes:
+   Examples:
 
-   - `encoded_exfil_detection` -> `encoded-exfil-detection-v`
-   - `pii_filter` -> `pii-filter-v`
    - `rate_limiter` -> `rate-limiter-v`
-   - `retry_with_backoff` -> `retry-with-backoff-v`
    - `secrets_detection` -> `secrets-detection-v`
-   - `url_reputation` -> `url-reputation-v`
+
+   Use `make plugins-list` to inspect the current managed plugin slugs and
+   package names.
 
 6. Watch the release workflow and confirm publish success.
 
