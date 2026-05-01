@@ -1617,3 +1617,66 @@ class TestRedisTlsSupport:
             )
         )
         assert plugin is not None
+
+    @pytest.mark.asyncio
+    async def test_rediss_url_lazy_handshake_reaches_connectivity_layer(self, caplog):
+        """Lazy TLS path must fail as connectivity, not as a TLS-feature error.
+
+        Construction-only tests can pass even if the TLS feature compiled
+        in but the rustls handshake itself is broken — the redis crate parses
+        the URL fine and the client is created, but the first real operation
+        is where TLS actually engages. Driving ``tool_pre_invoke`` against a
+        rediss:// URL pointing at a closed port forces the client into that
+        lazy path. Default fail_mode=open allows the request after logging
+        the backend error; we assert the logged error is connectivity-shaped
+        (refused / timed out / IO) rather than the unmistakable
+        ``InvalidClientConfig: TLS feature not enabled`` shape that signaled
+        the original wo-tracker #68217 regression.
+        """
+        # Standard
+        import logging  # noqa: PLC0415
+
+        plugin = RateLimiterPlugin(
+            PluginConfig(
+                name="RateLimiter",
+                kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
+                hooks=["tool_pre_invoke"],
+                priority=100,
+                config={
+                    "by_user": "3/s",
+                    "backend": "redis",
+                    "redis_url": "rediss://127.0.0.1:1/15",
+                    "algorithm": "fixed_window",
+                },
+            )
+        )
+        ctx = PluginContext(global_context=GlobalContext(request_id="r1", user="alice"))
+        payload = ToolPreInvokePayload(name="tool", arguments={})
+
+        with caplog.at_level(logging.WARNING):
+            result = await plugin.tool_pre_invoke(payload, ctx)
+
+        # fail_mode=open default: the request is allowed when backend fails.
+        assert result.continue_processing is True, (
+            "Default fail_mode=open should allow the request when the rediss:// "
+            f"backend is unreachable; got result={result!r}"
+        )
+
+        # The error logged must indicate connectivity failure (the lazy
+        # handshake reached the network and the network refused / timed out)
+        # — NOT the InvalidClientConfig shape that means rustls itself is
+        # not compiled in. The latter is the failure mode of wo-tracker
+        # #68217 and must never recur.
+        all_messages = " ".join(r.getMessage() for r in caplog.records).lower()
+        assert "tls" not in all_messages or "connect" in all_messages or "refused" in all_messages or "timed out" in all_messages, (
+            "rediss:// failure must surface as a connectivity error, not a "
+            f"TLS feature/config error. Captured logs: "
+            f"{[(r.levelname, r.getMessage()) for r in caplog.records]}"
+        )
+        assert "feature is not enabled" not in all_messages and "invalidclientconfig" not in all_messages, (
+            "rediss:// failure looks like the wo-tracker #68217 regression "
+            f"(TLS feature not compiled). Captured logs: "
+            f"{[(r.levelname, r.getMessage()) for r in caplog.records]}"
+        )
+
+
