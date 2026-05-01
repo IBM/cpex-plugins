@@ -23,11 +23,16 @@ This is a monorepo of standalone plugin packages for the ContextForge Plugin Ext
   - Run during plugin development and CI
   - Scope: Plugin logic, Rust functions, Python bindings
 
-- **Integration tests**: Located in `mcp-context-forge/tests/integration/`
-  - Test plugin integration with the gateway framework
+- **Plugin-framework integration tests**: Located in `cpex-plugins/tests/`
+  - Test plugin integration with the local plugin framework (PyO3 bindings, Python ↔ Rust interface)
+  - Run via `make test-integration` within the plugin directory
+  - Scope: PyO3 entry points, plugin loading by the Python framework, hook dispatch
+
+- **Gateway integration tests**: Located in `mcp-context-forge/tests/integration/`
+  - Test plugin integration with the full gateway
   - Test cross-plugin interactions
   - Test plugin lifecycle management
-  - Scope: Plugin loading, hook execution, framework interaction
+  - Scope: Plugin loading in gateway context, hook execution, framework interaction
 
 - **E2E tests**: Located in `mcp-context-forge/tests/e2e/`
   - Test complete workflows with plugins enabled
@@ -39,10 +44,10 @@ This is a monorepo of standalone plugin packages for the ContextForge Plugin Ext
 
 When developing a plugin:
 
-1. Write unit tests in `cpex-plugins/tests/` alongside plugin code
-2. Run local tests: `make test-all` from plugin directory
+1. Write unit tests and plugin-framework integration tests in `cpex-plugins/tests/` alongside plugin code
+2. Run local tests: `make test-all` and `make test-integration` from plugin directory
 3. After plugin PR is merged, coordinate with `mcp-context-forge` team
-4. Write integration/E2E tests in `mcp-context-forge/tests/`
+4. Write gateway integration/E2E tests in `mcp-context-forge/tests/`
 5. Ensure both repositories' CI passes before release
 
 See `mcp-context-forge/tests/AGENTS.md` for integration/E2E test conventions.
@@ -73,12 +78,14 @@ The plugin framework is currently implemented in Python (`mcpgateway/plugins/fra
    - Implement Python bindings in `cpex_<slug>/plugin.py`
    - Update `plugin-manifest.yaml`
 
-3. **Write Unit Tests** (in `cpex-plugins/tests/`):
+3. **Write Tests** (in `cpex-plugins/tests/`):
    ```bash
    cd plugins/rust/python-package/<slug>
-   # Add Rust tests in src/
-   # Add Python tests in tests/
-   make test-all  # Run both Rust and Python tests
+   # Add Rust unit tests in src/
+   # Add Python unit tests in tests/
+   # Add plugin-framework integration tests in tests/ (run via make test-integration)
+   make test-all          # Run Rust + Python unit tests
+   make test-integration  # Run plugin-framework integration tests
    ```
 
 4. **Build and Install**:
@@ -88,11 +95,11 @@ The plugin framework is currently implemented in Python (`mcpgateway/plugins/fra
    ```
 
 5. **Create PR in cpex-plugins**:
-   - Include unit tests
+   - Include unit tests and plugin-framework integration tests
    - Ensure `make ci` passes
    - Tag release: `<slug>-v<version>`
 
-6. **Integration Testing** (in `mcp-context-forge`):
+6. **Gateway Integration Testing** (in `mcp-context-forge`):
    - Install plugin: `pip install cpex-<slug>`
    - Configure in `plugins/config.yaml`
    - Write integration tests in `tests/integration/`

@@ -2,7 +2,7 @@
 
 ## Testing Architecture
 
-Testing is split across two repositories to maintain clear separation of concerns:
+Testing spans two repositories. `cpex-plugins` owns unit tests and plugin-framework integration tests; `mcp-context-forge` owns gateway integration and E2E tests.
 
 ### Unit Tests (cpex-plugins)
 
@@ -24,23 +24,44 @@ Testing is split across two repositories to maintain clear separation of concern
 **Run Locally**:
 ```bash
 cd plugins/rust/python-package/<slug>
-make test-all  # Runs both Rust and Python tests
+make test-all  # Runs both Rust and Python unit tests
 ```
 
-### Integration Tests (mcp-context-forge)
+### Plugin-Framework Integration Tests (cpex-plugins)
+
+**Location**: `cpex-plugins/tests/` (plugin-specific `tests/` directories)
+
+**Scope**:
+- PyO3 entry points and Python ↔ Rust interface
+- Plugin loading by the Python plugin framework
+- Hook dispatch through the framework layer
+- Coverage of PyO3 paths (run as part of Rust coverage)
+
+**Purpose**:
+- Validate that the Rust implementation is correctly exposed through PyO3 bindings
+- Ensure the plugin framework can discover, load, and invoke the plugin
+- Keep PyO3 code paths covered without requiring a full gateway
+
+**Run Locally**:
+```bash
+cd plugins/rust/python-package/<slug>
+make test-integration  # Runs plugin-framework integration tests
+```
+
+### Gateway Integration Tests (mcp-context-forge)
 
 **Location**: `mcp-context-forge/tests/integration/`
 
 **Scope**:
-- Plugin integration with gateway framework
-- Plugin loading and initialization
-- Hook execution within framework
+- Plugin integration with the full gateway
+- Plugin loading and initialization in gateway context
+- Hook execution within the gateway framework
 - Cross-plugin interactions
 - Plugin lifecycle management
 
 **Purpose**:
 - Validate plugin behavior within the gateway
-- Test framework-plugin contracts
+- Test framework-plugin contracts at the gateway level
 - Ensure plugins work together correctly
 - Test plugin configuration and registration
 
@@ -181,11 +202,13 @@ make plugin-mutants PLUGIN=retry_with_backoff
    cd cpex-plugins/plugins/rust/python-package/<slug>
    # Implement plugin logic
    # Write unit tests in tests/
-   make test-all
+   # Write plugin-framework integration tests in tests/
+   make test-all          # Run unit tests
+   make test-integration  # Run plugin-framework integration tests
    ```
 
 2. **Create PR in cpex-plugins**:
-   - Include comprehensive unit tests
+   - Include unit tests and plugin-framework integration tests
    - Ensure `make ci` passes
    - Get PR reviewed and merged
 
@@ -229,9 +252,15 @@ make plugin-mutants PLUGIN=retry_with_backoff
 - Testing configuration validation
 - Testing error handling and edge cases
 
-**When to Write Integration Tests (mcp-context-forge)**:
-- Testing plugin loading and initialization
-- Testing hook execution in framework
+**When to Write Plugin-Framework Integration Tests (cpex-plugins)**:
+- Testing PyO3 entry points end-to-end
+- Testing plugin loading by the Python framework
+- Testing hook dispatch through the framework layer
+- Ensuring PyO3 paths are covered in Rust coverage
+
+**When to Write Gateway Integration Tests (mcp-context-forge)**:
+- Testing plugin loading and initialization in the gateway
+- Testing hook execution in the full gateway framework
 - Testing plugin interactions with gateway services
 - Testing cross-plugin behavior
 - Testing plugin lifecycle (enable/disable/reload)
@@ -248,6 +277,7 @@ make plugin-mutants PLUGIN=retry_with_backoff
 **cpex-plugins CI**:
 - Runs repo contract tests
 - Runs plugin unit tests
+- Runs plugin-framework integration tests (`make test-integration`)
 - Builds and packages plugins
 - Publishes to PyPI on release tags
 

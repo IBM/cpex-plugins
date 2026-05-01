@@ -26,13 +26,14 @@ Rust crates are owned by the top-level workspace in `Cargo.toml`. Python package
 
 ## Testing Strategy
 
-Testing is split across two repositories:
+Testing spans two repositories:
 
-- **Unit tests**: Located in `cpex-plugins/tests/` - Test plugin logic in isolation
-- **Integration tests**: Located in `mcp-context-forge/tests/integration/` - Test plugin integration with gateway
-- **E2E tests**: Located in `mcp-context-forge/tests/e2e/` - Test complete workflows with plugins
+- **Unit tests**: `cpex-plugins/tests/` — test plugin logic in isolation
+- **Plugin-framework integration tests**: `cpex-plugins/tests/` — test PyO3 bindings and plugin loading by the Python framework (`make test-integration`)
+- **Gateway integration tests**: `mcp-context-forge/tests/integration/` — test plugin integration with the full gateway
+- **E2E tests**: `mcp-context-forge/tests/e2e/` — test complete workflows with plugins
 
-This separation allows fast feedback during plugin development while ensuring system-level validation.
+`cpex-plugins/tests/` covers both unit and plugin-framework integration tests. Gateway integration and E2E tests live in `mcp-context-forge`.
 
 See [TESTING.md](TESTING.md) for detailed testing guidelines and cross-repository coordination.
 
@@ -115,15 +116,24 @@ make install               # Build Rust extension
 make test-all              # Run unit tests
 ```
 
-### Integration Testing
+### Plugin-Framework Integration Testing
 
-After unit tests pass, coordinate with `mcp-context-forge`:
+After unit tests pass, run plugin-framework integration tests within `cpex-plugins`:
+
+```bash
+cd plugins/rust/python-package/<slug>
+make test-integration  # Test PyO3 bindings and framework loading
+```
+
+### Gateway Integration Testing
+
+After the plugin PR is merged, coordinate with `mcp-context-forge`:
 
 ```bash
 cd mcp-context-forge
 pip install /path/to/cpex-plugins/plugins/rust/python-package/<slug>
 # Configure plugin in plugins/config.yaml
-pytest tests/integration/  # Run integration tests
+pytest tests/integration/  # Run gateway integration tests
 pytest tests/e2e/          # Run E2E tests
 ```
 
