@@ -102,13 +102,76 @@ If you prefer to create a plugin manually:
 
 ## Releasing
 
-Releases are per plugin and tag-driven:
+Releases are per plugin and tag-driven. Use this process to publish a new
+version of an existing managed plugin to PyPI.
 
-Release tags must use the hyphenated plugin slug, not the directory/module underscore form:
+1. Pick the plugin slug and new version.
 
-```bash
-git tag rate-limiter-v0.0.2
-git tag pii-filter-v0.1.0
-```
+   The plugin slug is the directory name under
+   `plugins/rust/python-package/<slug>/`, for example `rate_limiter`. The tag
+   slug is the hyphenated form, for example `rate-limiter`.
 
-The release workflow resolves the tag back to the managed plugin path, validates metadata and versions, then builds and publishes only that plugin.
+2. Update the version files.
+
+   `Cargo.toml` is the version source of truth. The plugin manifest and
+   top-level lockfile must stay consistent with it.
+
+   ```bash
+   $EDITOR plugins/rust/python-package/rate_limiter/Cargo.toml
+   $EDITOR plugins/rust/python-package/rate_limiter/cpex_rate_limiter/plugin-manifest.yaml
+   cargo update -p cpex-rate-limiter --precise 0.0.5
+   ```
+
+3. Run local validation.
+
+   ```bash
+   make plugins-validate
+   make plugin-test PLUGIN=rate_limiter
+   ```
+
+4. Merge the version bump to `main`.
+
+5. Create and push the release tag from `main`.
+
+   Release tags must use the hyphenated plugin slug, not the directory/module
+   underscore form:
+
+   ```bash
+   git switch main
+   git pull --ff-only
+   git tag rate-limiter-v0.0.5
+   git push origin rate-limiter-v0.0.5
+   ```
+
+   Current managed plugin tag prefixes:
+
+   - `encoded_exfil_detection` -> `encoded-exfil-detection-v`
+   - `pii_filter` -> `pii-filter-v`
+   - `rate_limiter` -> `rate-limiter-v`
+   - `retry_with_backoff` -> `retry-with-backoff-v`
+   - `secrets_detection` -> `secrets-detection-v`
+   - `url_reputation` -> `url-reputation-v`
+
+6. Watch the release workflow and confirm publish success.
+
+   ```bash
+   gh run list --workflow release-rust-python-package.yaml --limit 5
+   gh run watch <run-id> --exit-status
+   ```
+
+7. Verify the package exists on PyPI at the new version.
+
+   ```bash
+   python -m pip index versions cpex-rate-limiter
+   ```
+
+   The release page should also exist at
+   `https://pypi.org/project/cpex-rate-limiter/0.0.5/`.
+
+The release workflow `.github/workflows/release-rust-python-package.yaml`
+resolves the tag back to the managed plugin path, validates metadata and
+versions, then builds and publishes only that plugin. PyPI publishing is allowed
+only for release tags that point at `main`.
+
+Dependency refresh work is separate from the release process. Track broader
+dependency or ContextForge updates outside a plugin release PR.
