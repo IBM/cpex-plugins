@@ -1,6 +1,6 @@
 [package]
 name = "rate_limiter"
-version = "0.0.4"
+version = "0.0.5"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -24,7 +24,7 @@ pyo3-stub-gen = { workspace = true }
 pyo3-log = { workspace = true }
 parking_lot = "0.12"
 thiserror = { workspace = true }
-redis = { version = "0.27", features = ["aio", "tokio-comp"] }
+redis = { version = "0.27", features = ["aio", "tokio-comp", "tls-rustls", "tls-rustls-webpki-roots", "tokio-rustls-comp"] }
 tokio = { workspace = true }
 
 [dev-dependencies]
