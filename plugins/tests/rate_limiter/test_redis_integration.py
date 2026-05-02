@@ -1684,3 +1684,319 @@ class TestRedisTlsSupport:
         )
 
 
+# =============================================================================
+# Real TLS Redis handshake test
+# =============================================================================
+# The TestRedisTlsSupport class above only verifies that the redis crate was
+# compiled with TLS support and that the wo-tracker #68217 InvalidClientConfig
+# signature does not appear — neither test drives a real TLS handshake.
+# A handshake regression (missing crypto provider, bad cert chain, broken
+# rustls-native-certs lookup) could pass those tests while failing in
+# production.
+#
+# This fixture spins up a Redis container listening on TLS only, behind a
+# self-signed CA generated fresh in /tmp.  SSL_CERT_FILE is exported so both
+# rustls-native-certs (the Rust core's TLS path) and Python's ssl module
+# (test-side helpers) trust the test CA without touching the OS trust store.
+# The container is module-scoped and torn down on teardown.
+#
+# The whole stack skips cleanly when openssl or docker are unavailable, so
+# laptops without docker stay green while Linux CI runners exercise the full
+# end-to-end path.
+# =============================================================================
+
+
+_TEST_TLS_REDIS_CONTAINER_PORT = 16390
+_TEST_TLS_REDIS_CONTAINER_NAME = "pytest-rl-redis-tls-integ"
+
+
+def _openssl_available() -> bool:
+    """Return True if the openssl CLI is on PATH."""
+    try:
+        result = subprocess.run(
+            ["openssl", "version"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def _docker_available() -> bool:
+    """Return True if the docker CLI is on PATH and the daemon is reachable."""
+    try:
+        result = subprocess.run(
+            ["docker", "version", "--format", "{{.Server.Version}}"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def _generate_self_signed_redis_cert(cert_dir: str) -> tuple[str, str, str]:
+    """Generate a self-signed CA and a Redis server cert in cert_dir.
+
+    Mirrors mcp-context-forge/tls-test/gen-certs.sh but with a 1-day TTL
+    (long enough to never expire mid-test, short enough to make leakage
+    obvious) and 2048-bit RSA (faster than 4096; ephemeral test material
+    only).  Returns (ca.crt, redis.crt, redis.key) as absolute paths.
+    """
+    ca_key = os.path.join(cert_dir, "ca.key")
+    ca_crt = os.path.join(cert_dir, "ca.crt")
+    redis_key = os.path.join(cert_dir, "redis.key")
+    redis_crt = os.path.join(cert_dir, "redis.crt")
+    redis_csr = os.path.join(cert_dir, "redis.csr")
+    redis_ext = os.path.join(cert_dir, "redis.ext")
+
+    def _ssl(*args: str) -> None:
+        subprocess.run(
+            ["openssl", *args],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+
+    # Self-signed CA.  -addext is required for OpenSSL 3.x clients,
+    # which refuse to verify chains where the CA cert lacks an
+    # explicit keyUsage extension ("CA cert does not include key
+    # usage extension").  Older clients ignore the extra extensions.
+    _ssl("genrsa", "-out", ca_key, "2048")
+    _ssl(
+        "req", "-x509", "-new", "-nodes",
+        "-key", ca_key, "-sha256", "-days", "1",
+        "-subj", "/CN=cpex-pytest-tls-ca",
+        "-addext", "basicConstraints=critical,CA:true",
+        "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+        "-out", ca_crt,
+    )
+
+    # Redis server cert signed by the CA.  SAN covers localhost +
+    # 127.0.0.1 so both the in-test PING and the plugin's connection
+    # to the host-mapped port verify cleanly.
+    _ssl("genrsa", "-out", redis_key, "2048")
+    _ssl("req", "-new", "-key", redis_key, "-subj", "/CN=localhost", "-out", redis_csr)
+    with open(redis_ext, "w") as f:
+        f.write("subjectAltName = DNS:localhost,IP:127.0.0.1\nextendedKeyUsage = serverAuth\n")
+    _ssl(
+        "x509", "-req", "-in", redis_csr,
+        "-CA", ca_crt, "-CAkey", ca_key, "-CAcreateserial",
+        "-out", redis_crt, "-days", "1", "-sha256",
+        "-extfile", redis_ext,
+    )
+
+    # Permissions: world-readable cert/key files so the redis user
+    # inside the container (typically UID 999) can read them through
+    # the bind mount; keys are still locked down to the file owner
+    # for write.
+    for p in (ca_crt, redis_crt, redis_key):
+        os.chmod(p, 0o644)
+
+    return ca_crt, redis_crt, redis_key
+
+
+def _tls_redis_pings(host: str, port: int, ca_crt: str, timeout: float = 1.0) -> bool:
+    """Return True if a TLS PING to host:port verifies against ca_crt and returns PONG."""
+    try:
+        # Third-Party
+        import redis as _redis_sync  # noqa: PLC0415
+    except Exception:
+        return False
+    try:
+        client = _redis_sync.Redis(
+            host=host,
+            port=port,
+            ssl=True,
+            ssl_ca_certs=ca_crt,
+            socket_connect_timeout=timeout,
+            socket_timeout=timeout,
+        )
+        try:
+            return bool(client.ping())
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
+    except Exception:
+        return False
+
+
+@pytest.fixture(scope="module")
+def redis_tls_url_for_integration():
+    """Yield a rediss:// URL backed by a real TLS-enabled Redis container.
+
+    Closes the gap left by TestRedisTlsSupport (which is construction-only).
+    Generates a fresh self-signed CA + Redis cert in /tmp, starts a
+    redis:7 container with --tls-port 6390 (host port 16390), and exports
+    SSL_CERT_FILE so both rustls-native-certs (Rust core) and Python's
+    ssl module (test-side helpers) pick up the test CA.
+
+    Skips cleanly if openssl or docker is unavailable.  An external
+    operator can short-circuit the cert/container setup by exporting
+    RATE_LIMITER_TLS_REDIS_URL=rediss://<host>:<port>/15 with a CA the
+    current process already trusts.
+    """
+    override = os.environ.get("RATE_LIMITER_TLS_REDIS_URL")
+    if override:
+        # Caller-managed endpoint and trust store; we leave SSL_CERT_FILE alone.
+        yield override
+        return
+
+    try:
+        # Third-Party
+        import redis.asyncio  # noqa: F401, PLC0415
+    except Exception:
+        pytest.skip("redis.asyncio package not installed")
+
+    if not _openssl_available():
+        pytest.skip("openssl CLI not available; skipping real TLS handshake test")
+    if not _docker_available():
+        pytest.skip("docker not available; skipping real TLS handshake test")
+
+    # The cert dir has two constraints: pytest's tmp_path_factory parents
+    # are mode 0700 (the redis container's UID 999 cannot traverse them),
+    # and /tmp is not always shared into the container runtime VM
+    # (Docker Desktop / colima on macOS share $HOME but not /tmp). A
+    # subdir under $HOME satisfies both: traversable on Linux CI and
+    # bind-mountable on dev laptops.
+    # Standard
+    import shutil  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+
+    cache_root = os.path.join(os.path.expanduser("~"), ".cache", "cpex-pytest-tls")
+    os.makedirs(cache_root, exist_ok=True)
+    cert_dir = tempfile.mkdtemp(prefix="cpex-tls-redis-", dir=cache_root)
+    os.chmod(cert_dir, 0o755)
+
+    try:
+        ca_crt, _redis_crt, _redis_key = _generate_self_signed_redis_cert(cert_dir)
+    except subprocess.CalledProcessError as exc:
+        shutil.rmtree(cert_dir, ignore_errors=True)
+        pytest.skip(f"openssl failed to generate test certs: {exc.stderr!r}")
+
+    # Trust the freshly minted CA via SSL_CERT_FILE.  Honored by both
+    # rustls-native-certs (Linux + macOS) and Python's ssl default
+    # context — no OS trust store modification needed.
+    prev_ssl_cert_file = os.environ.get("SSL_CERT_FILE")
+    os.environ["SSL_CERT_FILE"] = ca_crt
+
+    def _restore_env() -> None:
+        if prev_ssl_cert_file is None:
+            os.environ.pop("SSL_CERT_FILE", None)
+        else:
+            os.environ["SSL_CERT_FILE"] = prev_ssl_cert_file
+
+    host = _TEST_REDIS_HOST
+    port = _TEST_TLS_REDIS_CONTAINER_PORT
+    container_id = None
+
+    try:
+        res = subprocess.run(
+            [
+                "docker", "run", "-d", "--rm",
+                "-p", f"{port}:6390",
+                "-v", f"{cert_dir}:/certs:ro",
+                "--name", _TEST_TLS_REDIS_CONTAINER_NAME,
+                "redis:7",
+                "redis-server",
+                "--port", "0",                    # disable plain TCP
+                "--tls-port", "6390",
+                "--tls-cert-file", "/certs/redis.crt",
+                "--tls-key-file", "/certs/redis.key",
+                "--tls-ca-cert-file", "/certs/ca.crt",
+                "--tls-auth-clients", "no",       # no client-cert auth for the smoke test
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        container_id = res.stdout.strip()
+    except subprocess.CalledProcessError as exc:
+        _restore_env()
+        shutil.rmtree(cert_dir, ignore_errors=True)
+        pytest.skip(f"failed to start TLS Redis container: {exc.stderr!r}")
+
+    # Wait for the TLS handshake + PING to round-trip.  Same rationale
+    # as redis_url_for_integration — TCP comes up before the server is
+    # ready, only PING is dispositive.
+    ready = False
+    for _ in range(100):
+        if _tls_redis_pings(host, port, ca_crt):
+            ready = True
+            break
+        time.sleep(0.1)
+
+    if not ready:
+        subprocess.run(["docker", "stop", container_id], check=False)
+        _restore_env()
+        shutil.rmtree(cert_dir, ignore_errors=True)
+        pytest.skip("TLS Redis did not become ready in time")
+
+    try:
+        yield f"rediss://{host}:{port}/15"
+    finally:
+        subprocess.run(["docker", "stop", container_id], check=False)
+        _restore_env()
+        shutil.rmtree(cert_dir, ignore_errors=True)
+
+
+class TestRedisTlsHandshake:
+    """End-to-end rustls handshake against a real TLS-enabled Redis.
+
+    TestRedisTlsSupport asserts that the redis crate was compiled with TLS
+    and that the wo-tracker #68217 ``InvalidClientConfig`` signature stays
+    absent — but nothing in that class drives a real handshake.  A
+    regression in the rustls crypto provider, the cert-chain loader, or
+    rustls-native-certs lookup could pass those tests yet fail at first
+    contact with a real TLS server.  This class closes that gap.
+    """
+
+    @pytest.mark.asyncio
+    async def test_rediss_handshake_succeeds_against_real_tls_redis(
+        self, redis_tls_url_for_integration
+    ):
+        """A tool_pre_invoke through rediss:// must complete the rustls handshake and write counters.
+
+        The redis client is lazy: URL parsing succeeds and the client is
+        constructed without ever touching the network, so the TLS path
+        only engages on the first command.  Driving a real
+        ``tool_pre_invoke`` against the TLS Redis forces that lazy code
+        path through the rustls handshake, and asserting that the
+        counter key materializes in the TLS Redis is the strongest
+        end-to-end signal the handshake completed: nothing else gets
+        you a written key.
+        """
+        await _flush_redis(redis_tls_url_for_integration)
+
+        plugin = _make_redis_plugin(redis_tls_url_for_integration, limit="3/s")
+        ctx = PluginContext(global_context=GlobalContext(request_id="r1", user="alice"))
+        payload = ToolPreInvokePayload(name="tool", arguments={})
+
+        result = await plugin.tool_pre_invoke(payload, ctx)
+
+        # First call under a 3/s limit must pass.  If the handshake had
+        # failed the Rust core would log the error and fail-mode-open
+        # would still let the request through — so we follow up with a
+        # key-in-Redis assertion below, which only succeeds if the
+        # backend was actually written to.
+        assert result.continue_processing is True, (
+            f"first request under 3/s must pass; got {result!r}"
+        )
+
+        # End-to-end proof of a successful handshake:
+        #   plugin -> Rust core -> redis crate -> rustls handshake ->
+        #   TLS Redis -> INCR -> key persists.
+        keys = await _keys_in_redis(redis_tls_url_for_integration, "rl:*")
+        assert any("alice" in k for k in keys), (
+            "expected a counter key for user 'alice' to appear in TLS Redis "
+            f"after a successful rustls handshake; got keys={keys!r}"
+        )
+
