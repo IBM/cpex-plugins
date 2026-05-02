@@ -1903,3 +1903,98 @@ class TestWipeOnDisable:
             "stale counter state — this is the user-visible promise of "
             "wipe-on-disable"
         )
+
+    @pytest.mark.asyncio
+    async def test_full_toggle_journey_across_multiple_instances(self, redis_url_for_integration):
+        """Multi-instance toggle journey: N plugins simulate the production fan-out.
+
+        At the cpex-plugins layer, "multiple gateway pods" and "multiple workers
+        per pod" collapse to a single knob — N independent plugin instances
+        sharing one Redis URL. This test runs N=3 concurrent instances, each
+        handling a different user, then drives the full enforce → disable →
+        re-enable cycle to assert:
+
+          * the parallel disable triggers exactly one wipe (the others skip via
+            the lock), and every ``rl:*`` key disappears;
+          * every user gets a fresh window after re-enable — not just the user
+            whose plugin happened to win the wipe race.
+
+        Test #5 (``test_wipe_is_idempotent_under_concurrent_shutdown``) already
+        proves N parallel shutdowns converge to a clean state, but with seeded
+        counters and no re-enable phase. The single-instance journey
+        (``test_full_toggle_journey_enforce_disable_reenforce``) proves the
+        transition composes, but with one plugin so the distributed lock isn't
+        exercised under realistic flow. This test is the composition of both —
+        real traffic-generated state across N instances, real distributed
+        coordination during the wipe, and the post-re-enable fresh-window
+        assertion across every user.
+
+        Window sized at 3/m for the same reason as the single-instance journey
+        — the test must never straddle a second boundary, so a passing Phase 3
+        request is unambiguous evidence of the wipe.
+        """
+        await _flush_redis(redis_url_for_integration)
+
+        users = ("alice", "bob", "carol")
+        payload = ToolPreInvokePayload(name="t", arguments={})
+
+        # ── Phase 1: enforce — all three instances saturate their users in parallel ──
+        plugins = [_make_redis_plugin(redis_url_for_integration, limit="3/m") for _ in users]
+        contexts = [
+            PluginContext(global_context=GlobalContext(request_id=f"r-{u}", user=u))
+            for u in users
+        ]
+
+        async def _saturate(plugin, ctx, user):
+            for i in range(3):
+                r = await plugin.tool_pre_invoke(payload, ctx)
+                assert r.continue_processing, f"{user}: request {i + 1}/3 must pass"
+            blocked = await plugin.tool_pre_invoke(payload, ctx)
+            assert blocked.continue_processing is False, (
+                f"{user}: 4th request must be blocked before disable"
+            )
+
+        await asyncio.gather(*(
+            _saturate(p, c, u) for p, c, u in zip(plugins, contexts, users)
+        ))
+
+        keys_pre_disable = await _keys_in_redis(redis_url_for_integration, "rl:*")
+        for u in users:
+            assert any(u in k for k in keys_pre_disable), (
+                f"{u}'s counter key should exist before disable; got {keys_pre_disable}"
+            )
+
+        # ── Phase 2: parallel disable — exactly one wipes, all keys gone ──
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiter", "disabled")
+
+        results = await asyncio.gather(
+            *(p.shutdown() for p in plugins),
+            return_exceptions=True,
+        )
+        for i, r in enumerate(results):
+            assert not isinstance(r, BaseException), (
+                f"plugin[{i}].shutdown() raised under concurrent toggle — got {r!r}"
+            )
+
+        keys_post_wipe = await _keys_in_redis(redis_url_for_integration, "rl:*")
+        assert keys_post_wipe == [], (
+            "concurrent shutdown under mode=disabled must converge to all rl:* "
+            f"keys deleted — expected [], got {keys_post_wipe}"
+        )
+
+        # ── Phase 3: re-enforce — every user gets a fresh window ──
+        # Fresh plugin instances mirror what each worker's plugin manager does
+        # on re-enable.
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiter", "enforce")
+        fresh_plugins = [_make_redis_plugin(redis_url_for_integration, limit="3/m") for _ in users]
+
+        async def _first_request_passes(plugin, ctx, user):
+            r = await plugin.tool_pre_invoke(payload, ctx)
+            assert r.continue_processing, (
+                f"{user} was saturated pre-disable; after the wipe + re-enable, "
+                f"{user}'s first request must NOT be blocked"
+            )
+
+        await asyncio.gather(*(
+            _first_request_passes(p, c, u) for p, c, u in zip(fresh_plugins, contexts, users)
+        ))
