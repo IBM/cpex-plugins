@@ -1835,3 +1835,71 @@ class TestWipeOnDisable:
             "wipe must NOT touch keys outside the configured prefix — "
             f"expected ['other_ns:user:bob:60'], got {other_keys}"
         )
+
+    @pytest.mark.asyncio
+    async def test_full_toggle_journey_enforce_disable_reenforce(self, redis_url_for_integration):
+        """Operator journey end-to-end: enforce → saturate → disable wipes → re-enable starts fresh.
+
+        Mirrors User Story 1 of mcp-context-forge#4576 — the operator-visible
+        contract is that flipping a saturated rate-limiter to ``disabled`` and
+        then back to ``enforce`` must give the affected user a fresh window,
+        not an immediate block on stale counter state.
+
+        The other tests in this class assert wipe invariants in isolation
+        (does the wipe fire on disable, does it skip when it should, does
+        it respect the prefix). None of them assert the *transition*
+        composes — specifically, none verify that a user who *was being
+        blocked* stops being blocked after a full toggle cycle. This test
+        pins that contract.
+
+        Window is sized at 3/m rather than 3/s so the test never straddles
+        a second boundary on slow runners — without the wipe, alice's 5th
+        request would fall in the same minute window as her saturated
+        bucket and be blocked, so a passing 5th request after the cycle
+        is unambiguous evidence the wipe ran.
+        """
+        await _flush_redis(redis_url_for_integration)
+
+        # ── Phase 1: enforce — saturate alice's bucket ──────────────────
+        plugin = _make_redis_plugin(redis_url_for_integration, limit="3/m")
+        ctx = PluginContext(global_context=GlobalContext(request_id="r1", user="alice"))
+        payload = ToolPreInvokePayload(name="t", arguments={})
+
+        for i in range(3):
+            r = await plugin.tool_pre_invoke(payload, ctx)
+            assert r.continue_processing, f"request {i + 1}/3 must pass under 3/m"
+
+        blocked = await plugin.tool_pre_invoke(payload, ctx)
+        assert blocked.continue_processing is False, (
+            "4th request must be blocked — alice's bucket should be saturated "
+            "before the operator triggers disable"
+        )
+        keys_pre_disable = await _keys_in_redis(redis_url_for_integration, "rl:*")
+        assert any("alice" in k for k in keys_pre_disable), (
+            f"alice's counter key should exist before disable; got {keys_pre_disable}"
+        )
+
+        # ── Phase 2: operator toggles to disabled — wipe must fire ──────
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiter", "disabled")
+        await plugin.shutdown()
+
+        keys_post_wipe = await _keys_in_redis(redis_url_for_integration, "rl:*")
+        assert keys_post_wipe == [], (
+            "shutdown under mode=disabled must wipe alice's saturated bucket — "
+            f"expected [], got {keys_post_wipe}"
+        )
+
+        # ── Phase 3: operator toggles back to enforce — fresh window ────
+        # Constructing a new plugin instance is what the framework's plugin
+        # manager does on re-enable; the manager adds nothing at construction
+        # beyond what _make_redis_plugin reproduces here.
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiter", "enforce")
+        plugin = _make_redis_plugin(redis_url_for_integration, limit="3/m")
+
+        r = await plugin.tool_pre_invoke(payload, ctx)
+        assert r.continue_processing, (
+            "alice was saturated pre-disable; after the wipe + re-enable, the "
+            "first request in the same minute window must NOT be blocked by "
+            "stale counter state — this is the user-visible promise of "
+            "wipe-on-disable"
+        )
