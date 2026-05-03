@@ -46,7 +46,7 @@ from cpex_rate_limiter.rate_limiter import RateLimiterPlugin
 def rate_limit_plugin_2_per_second():
     """Rate limiter plugin configured for 2 requests per second."""
     config = PluginConfig(
-        name="RateLimiter",
+        name="RateLimiterPlugin",
         kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
         hooks=["prompt_pre_fetch", "tool_pre_invoke"],
         priority=100,
@@ -59,7 +59,7 @@ def rate_limit_plugin_2_per_second():
 def rate_limit_plugin_multi_dimensional():
     """Rate limiter plugin with multi-dimensional limits."""
     config = PluginConfig(
-        name="RateLimiter",
+        name="RateLimiterPlugin",
         kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
         hooks=["prompt_pre_fetch", "tool_pre_invoke"],
         priority=100,
@@ -228,7 +228,7 @@ class TestMultiDimensionalRateLimiting:
         """Verify user rate limits are enforced independently per user."""
         # Configure with ONLY user limits (no tenant limit)
         config = PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["prompt_pre_fetch"],
             priority=100,
@@ -303,7 +303,7 @@ class TestMultiDimensionalRateLimiting:
         """Verify most restrictive dimension is selected."""
         # Configure with different limits
         config = PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["prompt_pre_fetch"],
             priority=100,
@@ -372,7 +372,7 @@ class TestSlidingWindowIntegration:
     @pytest.fixture
     def plugin(self):
         config = PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["prompt_pre_fetch", "tool_pre_invoke"],
             priority=100,
@@ -461,7 +461,7 @@ class TestTokenBucketIntegration:
     @pytest.fixture
     def plugin(self):
         config = PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["prompt_pre_fetch", "tool_pre_invoke"],
             priority=100,
@@ -554,7 +554,7 @@ class TestCrossHookSharing:
     @pytest.fixture
     def plugin(self):
         config = PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["prompt_pre_fetch", "tool_pre_invoke"],
             priority=100,
@@ -602,7 +602,7 @@ class TestCrossHookSharing:
     async def test_tenant_counter_shared_across_hooks_and_users(self, plugin):
         """Tenant bucket is shared across all users in the same tenant, regardless of hook."""
         config = PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["prompt_pre_fetch", "tool_pre_invoke"],
             priority=100,
@@ -644,7 +644,7 @@ class TestTenantIsolation:
     @pytest.fixture
     def plugin(self):
         config = PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["tool_pre_invoke"],
             priority=100,
@@ -732,7 +732,7 @@ class TestTenantIsolation:
         Uses a high by_user limit so only by_tenant could trigger a block.
         """
         config = PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["tool_pre_invoke"],
             priority=100,
@@ -778,7 +778,7 @@ class TestTenantIsolation:
         Uses a high by_user limit so only by_tenant can trigger a block.
         """
         config = PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["tool_pre_invoke"],
             priority=100,
@@ -807,7 +807,7 @@ class TestNoLimitsAndMissingContext:
     async def test_no_limits_configured_allows_all_requests(self):
         """Plugin with all dimensions None must allow every request without tracking."""
         config = PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["tool_pre_invoke"],
             config={},  # no by_user, no by_tenant, no by_tool
@@ -824,7 +824,7 @@ class TestNoLimitsAndMissingContext:
     async def test_no_limits_configured_returns_no_headers(self):
         """Plugin with no configured limits must not set X-RateLimit-* headers."""
         config = PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["tool_pre_invoke"],
             config={},
@@ -840,7 +840,7 @@ class TestNoLimitsAndMissingContext:
     async def test_both_user_and_tenant_none_still_enforces(self):
         """With both user=None and tenant_id=None the plugin must still enforce limits."""
         config = PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["tool_pre_invoke"],
             config={"by_user": "2/s", "by_tenant": "10/s"},
@@ -862,7 +862,7 @@ class TestNoLimitsAndMissingContext:
         def make_plugin():
             return RateLimiterPlugin(
                 PluginConfig(
-                    name="RateLimiter",
+                    name="RateLimiterPlugin",
                     kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
                     hooks=["tool_pre_invoke"],
                     config={"by_user": "2/s"},
@@ -1017,7 +1017,7 @@ def _make_redis_plugin(redis_url: str, algorithm: str = "fixed_window", limit: s
     """Create a RateLimiterPlugin backed by real Redis."""
     return RateLimiterPlugin(
         PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["tool_pre_invoke"],
             priority=100,
@@ -1387,7 +1387,7 @@ def _make_redis_plugin_with_config(redis_url: str, extra_config: dict) -> RateLi
     base.update(extra_config)
     return RateLimiterPlugin(
         PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["tool_pre_invoke"],
             priority=100,
@@ -1419,7 +1419,7 @@ class TestRedisFailModeAndViolationContext:
 
         plugin = RateLimiterPlugin(
             PluginConfig(
-                name="RateLimiter",
+                name="RateLimiterPlugin",
                 kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
                 hooks=["tool_pre_invoke"],
                 priority=100,
@@ -1557,7 +1557,7 @@ class TestConfigHardening:
         with caplog.at_level(logging.WARNING):
             RateLimiterPlugin(
                 PluginConfig(
-                    name="RateLimiter",
+                    name="RateLimiterPlugin",
                     kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
                     hooks=["tool_pre_invoke"],
                     priority=100,
@@ -1640,7 +1640,7 @@ class TestWipeOnDisable:
         """mode='disabled' in Redis → all rl:* keys are deleted on shutdown."""
         await _flush_redis(redis_url_for_integration)
         await _seed_rate_limit_counters(redis_url_for_integration, count=5)
-        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiter", "disabled")
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiterPlugin", "disabled")
 
         keys_before = await _keys_in_redis(redis_url_for_integration, "rl:*")
         assert len(keys_before) == 5, "seeding should have produced 5 rl:* keys"
@@ -1659,7 +1659,7 @@ class TestWipeOnDisable:
         """mode='enforce' in Redis → counters survive shutdown (config-only edit)."""
         await _flush_redis(redis_url_for_integration)
         await _seed_rate_limit_counters(redis_url_for_integration, count=3)
-        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiter", "enforce")
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiterPlugin", "enforce")
 
         plugin = _make_redis_plugin(redis_url_for_integration)
         await plugin.shutdown()
@@ -1676,7 +1676,7 @@ class TestWipeOnDisable:
         await _flush_redis(redis_url_for_integration)
         await _seed_rate_limit_counters(redis_url_for_integration, count=3)
         # Explicitly ensure the mode key does not exist (fresh-deploy / pod-restart shape).
-        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiter", None)
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiterPlugin", None)
 
         plugin = _make_redis_plugin(redis_url_for_integration)
         await plugin.shutdown()
@@ -1704,7 +1704,7 @@ class TestWipeOnDisable:
         """Multiple plugin instances calling shutdown() in parallel all succeed and converge."""
         await _flush_redis(redis_url_for_integration)
         await _seed_rate_limit_counters(redis_url_for_integration, count=10)
-        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiter", "disabled")
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiterPlugin", "disabled")
 
         plugins = [_make_redis_plugin(redis_url_for_integration) for _ in range(5)]
 
@@ -1731,7 +1731,7 @@ class TestWipeOnDisable:
         TestRedisLifecycle.test_shutdown_releases_redis_connection.
         """
         await _flush_redis(redis_url_for_integration)
-        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiter", "disabled")
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiterPlugin", "disabled")
 
         plugin = _make_redis_plugin(redis_url_for_integration)
         ctx = PluginContext(global_context=GlobalContext(request_id="r1", user="alice"))
@@ -1769,7 +1769,7 @@ class TestWipeOnDisable:
         """
         await _flush_redis(redis_url_for_integration)
         await _seed_rate_limit_counters(redis_url_for_integration, count=5)
-        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiter", "disabled")
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiterPlugin", "disabled")
 
         # Pre-acquire the wipe lock externally — pretend another worker is
         # already in the middle of wiping. Default redis_key_prefix is "rl",
@@ -1816,7 +1816,7 @@ class TestWipeOnDisable:
         finally:
             await client.aclose()
 
-        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiter", "disabled")
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiterPlugin", "disabled")
 
         plugin = _make_redis_plugin_with_config(
             redis_url_for_integration,
@@ -1880,7 +1880,7 @@ class TestWipeOnDisable:
         )
 
         # ── Phase 2: operator toggles to disabled — wipe must fire ──────
-        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiter", "disabled")
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiterPlugin", "disabled")
         await plugin.shutdown()
 
         keys_post_wipe = await _keys_in_redis(redis_url_for_integration, "rl:*")
@@ -1893,7 +1893,7 @@ class TestWipeOnDisable:
         # Constructing a new plugin instance is what the framework's plugin
         # manager does on re-enable; the manager adds nothing at construction
         # beyond what _make_redis_plugin reproduces here.
-        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiter", "enforce")
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiterPlugin", "enforce")
         plugin = _make_redis_plugin(redis_url_for_integration, limit="3/m")
 
         r = await plugin.tool_pre_invoke(payload, ctx)
@@ -1965,7 +1965,7 @@ class TestWipeOnDisable:
             )
 
         # ── Phase 2: parallel disable — exactly one wipes, all keys gone ──
-        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiter", "disabled")
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiterPlugin", "disabled")
 
         results = await asyncio.gather(
             *(p.shutdown() for p in plugins),
@@ -1985,7 +1985,7 @@ class TestWipeOnDisable:
         # ── Phase 3: re-enforce — every user gets a fresh window ──
         # Fresh plugin instances mirror what each worker's plugin manager does
         # on re-enable.
-        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiter", "enforce")
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiterPlugin", "enforce")
         fresh_plugins = [_make_redis_plugin(redis_url_for_integration, limit="3/m") for _ in users]
 
         async def _first_request_passes(plugin, ctx, user):
