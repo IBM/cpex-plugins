@@ -550,7 +550,7 @@ mod tests {
         // `ensure_crypto_provider` with `()`. Under that mutation no rustls
         // crypto provider is installed by us, and (since no other code path
         // in this crate installs one) `CryptoProvider::get_default()` returns
-        // None — surfacing the wo-tracker #68217 runtime-time signature
+        // None — surfacing the runtime-time signature
         // ("Call CryptoProvider::install_default() before this point...")
         // the function exists to prevent.
         //

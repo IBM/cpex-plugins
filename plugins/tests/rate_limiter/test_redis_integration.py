@@ -1583,7 +1583,7 @@ class TestConfigHardening:
 class TestRedisTlsSupport:
     """TLS / rediss:// scheme support.
 
-    Regression coverage for wo-tracker #68217: managed Redis services
+    Regression coverage for managed Redis with in-transit encryption: managed Redis services
     (AWS ElastiCache with in-transit encryption, Redis Cloud, etc.) require
     a `rediss://` URL. The Rust engine must be built with the redis crate's
     TLS feature so that constructing a client with a `rediss://` URL parses
@@ -1631,7 +1631,7 @@ class TestRedisTlsSupport:
         the backend error; we assert the logged error is connectivity-shaped
         (refused / timed out / IO) rather than the unmistakable
         ``InvalidClientConfig: TLS feature not enabled`` shape that signaled
-        the original wo-tracker #68217 regression.
+        the original TLS-feature-not-enabled regression.
         """
         # Standard
         import logging  # noqa: PLC0415
@@ -1662,7 +1662,7 @@ class TestRedisTlsSupport:
             f"backend is unreachable; got result={result!r}"
         )
 
-        # Negative assertion — pins the wo-tracker #68217 regression.
+        # Negative assertion — pins the TLS-feature-not-enabled regression.
         #
         # The original sev-1 fingerprint was rustls panicking at plugin init
         # with `InvalidClientConfig: can't connect with TLS, the feature is
@@ -1678,7 +1678,7 @@ class TestRedisTlsSupport:
         # follow-up alongside the real TLS Redis fixture work.
         all_messages = " ".join(r.getMessage() for r in caplog.records).lower()
         assert "feature is not enabled" not in all_messages and "invalidclientconfig" not in all_messages, (
-            "rediss:// failure looks like the wo-tracker #68217 regression "
+            "rediss:// failure looks like the TLS-feature-not-enabled regression "
             f"(TLS feature not compiled). Captured logs: "
             f"{[(r.levelname, r.getMessage()) for r in caplog.records]}"
         )
@@ -1688,7 +1688,7 @@ class TestRedisTlsSupport:
 # Real TLS Redis handshake test
 # =============================================================================
 # The TestRedisTlsSupport class above only verifies that the redis crate was
-# compiled with TLS support and that the wo-tracker #68217 InvalidClientConfig
+# compiled with TLS support and that the InvalidClientConfig
 # signature does not appear — neither test drives a real TLS handshake.
 # A handshake regression (missing crypto provider, bad cert chain, broken
 # rustls-native-certs lookup) could pass those tests while failing in
@@ -1952,7 +1952,7 @@ class TestRedisTlsHandshake:
     """End-to-end rustls handshake against a real TLS-enabled Redis.
 
     TestRedisTlsSupport asserts that the redis crate was compiled with TLS
-    and that the wo-tracker #68217 ``InvalidClientConfig`` signature stays
+    and that the ``InvalidClientConfig`` signature stays
     absent — but nothing in that class drives a real handshake.  A
     regression in the rustls crypto provider, the cert-chain loader, or
     rustls-native-certs lookup could pass those tests yet fail at first
