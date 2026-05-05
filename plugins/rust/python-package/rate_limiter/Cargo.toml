@@ -1,6 +1,6 @@
 [package]
 name = "rate_limiter"
-version = "0.0.7"
+version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
