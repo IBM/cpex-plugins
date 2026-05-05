@@ -4,7 +4,7 @@
 // Rust-owned rate limiter plugin core. Python only keeps a tiny compatibility
 // shell so the gateway can continue importing a `Plugin` subclass.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use cpex_framework_bridge::{build_framework_object, default_result};
 use log::warn;
@@ -16,6 +16,24 @@ use pyo3_stub_gen::derive::*;
 use crate::engine::RateLimiterEngine;
 
 const LOGGER_NAME: &str = "cpex_rate_limiter.rate_limiter";
+
+/// Process-global guard: installs the rustls ring crypto provider exactly
+/// once. rustls 0.23 dropped its implicit default crypto provider, so any
+/// caller that wants TLS must install one before first use. The redis
+/// crate's `tls-rustls` feature does not pick a provider, so without this
+/// the first `rediss://` operation panics with
+/// "Call CryptoProvider::install_default() before this point...".
+///
+/// `install_default` returns Err if a provider is already installed (e.g.
+/// by another caller in the same process); that's a no-op for us, so we
+/// discard the result.
+static CRYPTO_PROVIDER_INSTALLED: OnceLock<()> = OnceLock::new();
+
+fn ensure_crypto_provider() {
+    CRYPTO_PROVIDER_INSTALLED.get_or_init(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
 
 #[gen_stub_pyclass]
 #[pyclass]
@@ -33,6 +51,10 @@ pub struct RateLimiterPluginCore {
 impl RateLimiterPluginCore {
     #[new]
     pub fn new(config: &Bound<'_, PyDict>) -> PyResult<Self> {
+        // Install the rustls crypto provider before any redis client is
+        // constructed — required for `rediss://` URLs to work past the
+        // first TLS handshake. See `ensure_crypto_provider` doc above.
+        ensure_crypto_provider();
         let engine = Arc::new(RateLimiterEngine::new(config)?);
         let fail_closed = parse_fail_mode(config)?;
         Ok(Self {
@@ -518,8 +540,28 @@ fn log_exception(py: Python<'_>, message: &str) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::await_async_tuple;
+    use super::ensure_crypto_provider;
     use pyo3::prelude::*;
     use pyo3::types::{PyAnyMethods, PyDictMethods, PyModule};
+
+    #[test]
+    fn ensure_crypto_provider_installs_a_default() {
+        // Mutation guard: cargo-mutants tries replacing the body of
+        // `ensure_crypto_provider` with `()`. Under that mutation no rustls
+        // crypto provider is installed by us, and (since no other code path
+        // in this crate installs one) `CryptoProvider::get_default()` returns
+        // None — surfacing the runtime-time signature
+        // ("Call CryptoProvider::install_default() before this point...")
+        // the function exists to prevent.
+        //
+        // OnceLock makes the call idempotent; this test is safe to run in
+        // any order alongside other tests in the same process.
+        ensure_crypto_provider();
+        assert!(
+            rustls::crypto::CryptoProvider::get_default().is_some(),
+            "ensure_crypto_provider() must leave a default rustls crypto provider installed",
+        );
+    }
 
     #[test]
     fn await_async_tuple_parses_successful_result() -> PyResult<()> {
