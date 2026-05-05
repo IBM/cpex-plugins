@@ -229,6 +229,18 @@ impl RedisRateLimiter {
         // returns to surface an error.  Mapping the timeout into a
         // RedisError lets the caller's fail_mode logic route this exactly
         // like any other connection-side failure.
+        //
+        // Hardcoded rather than promoted to a config key to keep the
+        // plugin's config surface small — operators rarely tune this knob
+        // and adding it for the few who might need it expands the schema
+        // for everyone else.  Two seconds is comfortable headroom for
+        // typical production paths (intra-VPC and cross-AZ Redis well
+        // under 100 ms; managed Redis with TLS handshake adds ~100-300 ms
+        // on top).  If a deployment with deliberately slow networks
+        // surfaces and 2 s becomes too tight, promote this into the
+        // ``lib.rs`` defaults + the engine's KNOWN config-key list — the
+        // existing config-validation machinery (defaults, unknown-key
+        // warning) handles the rest cleanly.
         const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
         let conn = timeout(
             CONNECT_TIMEOUT,
