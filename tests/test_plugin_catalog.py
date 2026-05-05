@@ -3386,13 +3386,10 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("matrix:\n        include: ${{ fromJson(needs.resolve.outputs.wheel_matrix) }}", workflow)
         self.assertIn("runs-on: ${{ matrix.runner }}", workflow)
         self.assertIn("name: wheel-${{ matrix.platform }}", workflow)
-        self.assertIn("allow_non_main_pypi", workflow)
+        self.assertNotIn("allow_non_main_pypi", workflow)
+        self.assertNotIn("ALLOW_NON_MAIN_PYPI", workflow)
         self.assertIn(
-            'if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${ALLOW_NON_MAIN_PYPI}" == "true" ]]; then',
-            workflow,
-        )
-        self.assertIn(
-            "if: ${{ needs.resolve.outputs.publish_enabled == 'true' && (needs.resolve.outputs.publish_env != 'pypi' || needs.resolve.outputs.tag_on_main == 'true' || needs.resolve.outputs.allow_non_main_pypi == 'true') }}",
+            "if: ${{ needs.resolve.outputs.publish_enabled == 'true' && (needs.resolve.outputs.publish_env != 'pypi' || needs.resolve.outputs.tag_on_main == 'true') }}",
             workflow,
         )
         self.assertNotIn("matrix.", preflight_section)

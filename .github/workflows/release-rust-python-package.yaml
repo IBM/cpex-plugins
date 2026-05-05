@@ -33,12 +33,6 @@ on:
         options:
           - testpypi
           - pypi
-      allow_non_main_pypi:
-        description: "Allow PyPI publishing when the release tag is not on main"
-        required: false
-        default: false
-        type: boolean
-
 permissions:
   contents: read
 
@@ -52,7 +46,6 @@ jobs:
       wheel_matrix: ${{ steps.resolve.outputs.wheel_matrix }}
       publish_env: ${{ steps.resolve.outputs.publish_env }}
       publish_enabled: ${{ steps.resolve.outputs.publish_enabled }}
-      allow_non_main_pypi: ${{ steps.resolve.outputs.allow_non_main_pypi }}
       checkout_ref: ${{ steps.resolve.outputs.checkout_ref }}
       tag_on_main: ${{ steps.resolve.outputs.tag_on_main }}
     steps:
@@ -71,7 +64,6 @@ jobs:
           TAG_INPUT: ${{ inputs.tag }}
           REPOSITORY_INPUT: ${{ inputs.repository }}
           PUBLISH_ENABLED: ${{ inputs.publish_enabled }}
-          ALLOW_NON_MAIN_PYPI: ${{ inputs.allow_non_main_pypi }}
         run: |
           set -euo pipefail
           git fetch --force origin "refs/heads/main:refs/remotes/origin/main"
@@ -118,11 +110,6 @@ jobs:
             echo "wheel_matrix=${wheel_matrix}"
             echo "checkout_ref=${checkout_ref}"
             echo "tag_on_main=${tag_on_main}"
-            if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${ALLOW_NON_MAIN_PYPI}" == "true" ]]; then
-              echo "allow_non_main_pypi=true"
-            else
-              echo "allow_non_main_pypi=false"
-            fi
             if [[ "${PUBLISH_ENABLED}" == "false" ]]; then
               echo "publish_enabled=false"
             else
@@ -297,7 +284,7 @@ jobs:
           fi
 
   publish:
-    if: ${{ needs.resolve.outputs.publish_enabled == 'true' && (needs.resolve.outputs.publish_env != 'pypi' || needs.resolve.outputs.tag_on_main == 'true' || needs.resolve.outputs.allow_non_main_pypi == 'true') }}
+    if: ${{ needs.resolve.outputs.publish_enabled == 'true' && (needs.resolve.outputs.publish_env != 'pypi' || needs.resolve.outputs.tag_on_main == 'true') }}
     needs: [resolve, build-wheel, build-sdist]
     runs-on: ubuntu-latest
     environment: ${{ needs.resolve.outputs.publish_env }}
