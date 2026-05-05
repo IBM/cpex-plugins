@@ -46,7 +46,7 @@ from cpex_rate_limiter.rate_limiter import RateLimiterPlugin
 def rate_limit_plugin_2_per_second():
     """Rate limiter plugin configured for 2 requests per second."""
     config = PluginConfig(
-        name="RateLimiter",
+        name="RateLimiterPlugin",
         kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
         hooks=["prompt_pre_fetch", "tool_pre_invoke"],
         priority=100,
@@ -59,7 +59,7 @@ def rate_limit_plugin_2_per_second():
 def rate_limit_plugin_multi_dimensional():
     """Rate limiter plugin with multi-dimensional limits."""
     config = PluginConfig(
-        name="RateLimiter",
+        name="RateLimiterPlugin",
         kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
         hooks=["prompt_pre_fetch", "tool_pre_invoke"],
         priority=100,
@@ -228,7 +228,7 @@ class TestMultiDimensionalRateLimiting:
         """Verify user rate limits are enforced independently per user."""
         # Configure with ONLY user limits (no tenant limit)
         config = PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["prompt_pre_fetch"],
             priority=100,
@@ -303,7 +303,7 @@ class TestMultiDimensionalRateLimiting:
         """Verify most restrictive dimension is selected."""
         # Configure with different limits
         config = PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["prompt_pre_fetch"],
             priority=100,
@@ -372,7 +372,7 @@ class TestSlidingWindowIntegration:
     @pytest.fixture
     def plugin(self):
         config = PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["prompt_pre_fetch", "tool_pre_invoke"],
             priority=100,
@@ -461,7 +461,7 @@ class TestTokenBucketIntegration:
     @pytest.fixture
     def plugin(self):
         config = PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["prompt_pre_fetch", "tool_pre_invoke"],
             priority=100,
@@ -554,7 +554,7 @@ class TestCrossHookSharing:
     @pytest.fixture
     def plugin(self):
         config = PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["prompt_pre_fetch", "tool_pre_invoke"],
             priority=100,
@@ -602,7 +602,7 @@ class TestCrossHookSharing:
     async def test_tenant_counter_shared_across_hooks_and_users(self, plugin):
         """Tenant bucket is shared across all users in the same tenant, regardless of hook."""
         config = PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["prompt_pre_fetch", "tool_pre_invoke"],
             priority=100,
@@ -644,7 +644,7 @@ class TestTenantIsolation:
     @pytest.fixture
     def plugin(self):
         config = PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["tool_pre_invoke"],
             priority=100,
@@ -732,7 +732,7 @@ class TestTenantIsolation:
         Uses a high by_user limit so only by_tenant could trigger a block.
         """
         config = PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["tool_pre_invoke"],
             priority=100,
@@ -778,7 +778,7 @@ class TestTenantIsolation:
         Uses a high by_user limit so only by_tenant can trigger a block.
         """
         config = PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["tool_pre_invoke"],
             priority=100,
@@ -807,7 +807,7 @@ class TestNoLimitsAndMissingContext:
     async def test_no_limits_configured_allows_all_requests(self):
         """Plugin with all dimensions None must allow every request without tracking."""
         config = PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["tool_pre_invoke"],
             config={},  # no by_user, no by_tenant, no by_tool
@@ -824,7 +824,7 @@ class TestNoLimitsAndMissingContext:
     async def test_no_limits_configured_returns_no_headers(self):
         """Plugin with no configured limits must not set X-RateLimit-* headers."""
         config = PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["tool_pre_invoke"],
             config={},
@@ -840,7 +840,7 @@ class TestNoLimitsAndMissingContext:
     async def test_both_user_and_tenant_none_still_enforces(self):
         """With both user=None and tenant_id=None the plugin must still enforce limits."""
         config = PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["tool_pre_invoke"],
             config={"by_user": "2/s", "by_tenant": "10/s"},
@@ -862,7 +862,7 @@ class TestNoLimitsAndMissingContext:
         def make_plugin():
             return RateLimiterPlugin(
                 PluginConfig(
-                    name="RateLimiter",
+                    name="RateLimiterPlugin",
                     kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
                     hooks=["tool_pre_invoke"],
                     config={"by_user": "2/s"},
@@ -1017,7 +1017,7 @@ def _make_redis_plugin(redis_url: str, algorithm: str = "fixed_window", limit: s
     """Create a RateLimiterPlugin backed by real Redis."""
     return RateLimiterPlugin(
         PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["tool_pre_invoke"],
             priority=100,
@@ -1387,7 +1387,7 @@ def _make_redis_plugin_with_config(redis_url: str, extra_config: dict) -> RateLi
     base.update(extra_config)
     return RateLimiterPlugin(
         PluginConfig(
-            name="RateLimiter",
+            name="RateLimiterPlugin",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["tool_pre_invoke"],
             priority=100,
@@ -1419,7 +1419,7 @@ class TestRedisFailModeAndViolationContext:
 
         plugin = RateLimiterPlugin(
             PluginConfig(
-                name="RateLimiter",
+                name="RateLimiterPlugin",
                 kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
                 hooks=["tool_pre_invoke"],
                 priority=100,
@@ -1557,7 +1557,7 @@ class TestConfigHardening:
         with caplog.at_level(logging.WARNING):
             RateLimiterPlugin(
                 PluginConfig(
-                    name="RateLimiter",
+                    name="RateLimiterPlugin",
                     kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
                     hooks=["tool_pre_invoke"],
                     priority=100,
@@ -1578,6 +1578,426 @@ class TestConfigHardening:
             "engine must warn on unknown config keys so misspellings are visible — "
             f"captured records: {[(r.levelname, r.getMessage()) for r in caplog.records]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Helpers for wipe-on-disable tests
+# ---------------------------------------------------------------------------
+
+
+async def _set_plugin_mode_key(redis_url: str, plugin_name: str, mode: str | None) -> None:
+    """Set or delete plugin:<name>:mode in Redis.
+
+    ``mode=None`` deletes the key (simulates a fresh deploy where no operator
+    has touched the admin mode API yet).
+    """
+    # Third-Party
+    import redis.asyncio as aioredis  # noqa: PLC0415
+
+    client = aioredis.from_url(redis_url, decode_responses=True)
+    try:
+        key = f"plugin:{plugin_name}:mode"
+        if mode is None:
+            await client.delete(key)
+        else:
+            await client.set(key, mode)
+    finally:
+        await client.aclose()
+
+
+async def _seed_rate_limit_counters(redis_url: str, count: int = 3) -> None:
+    """Drop ``count`` rl:* keys into Redis to simulate accumulated counter state."""
+    # Third-Party
+    import redis.asyncio as aioredis  # noqa: PLC0415
+
+    client = aioredis.from_url(redis_url, decode_responses=True)
+    try:
+        for i in range(count):
+            await client.set(f"rl:test:user:user-{i}:60", "5", ex=60)
+    finally:
+        await client.aclose()
+
+
+class TestWipeOnDisable:
+    """Counter wipe when operator transitions plugin mode to 'disabled'.
+
+    Rationale (team alignment, see README "Disabling resets counters"):
+    when the operator flips the rate limiter to disabled, every rate-limit
+    counter should be cleared so re-enabling starts every user with a
+    fresh window. The plugin signals this transition by reading
+    ``plugin:<name>:mode`` from Redis at shutdown — that key is written by
+    ``publish_plugin_mode_change`` *before* the pub/sub broadcast that
+    triggers the shutdown, so it is authoritative by the time we read it.
+
+    The wipe must NOT fire on:
+      * graceful pod shutdown (mode key unchanged, almost always 'enforce')
+      * non-mode config edits (mode key unchanged)
+      * Redis-unreachable shutdown paths (fail-safe: don't accidentally wipe)
+    """
+
+    @pytest.mark.asyncio
+    async def test_wipe_fires_when_mode_key_says_disabled(self, redis_url_for_integration):
+        """mode='disabled' in Redis → all rl:* keys are deleted on shutdown."""
+        await _flush_redis(redis_url_for_integration)
+        await _seed_rate_limit_counters(redis_url_for_integration, count=5)
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiterPlugin", "disabled")
+
+        keys_before = await _keys_in_redis(redis_url_for_integration, "rl:*")
+        assert len(keys_before) == 5, "seeding should have produced 5 rl:* keys"
+
+        plugin = _make_redis_plugin(redis_url_for_integration)
+        await plugin.shutdown()
+
+        keys_after = await _keys_in_redis(redis_url_for_integration, "rl:*")
+        assert keys_after == [], (
+            "shutdown with mode='disabled' must wipe every rl:* key — "
+            f"expected [], got {keys_after}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_wipe_when_mode_key_says_enforce(self, redis_url_for_integration):
+        """mode='enforce' in Redis → counters survive shutdown (config-only edit)."""
+        await _flush_redis(redis_url_for_integration)
+        await _seed_rate_limit_counters(redis_url_for_integration, count=3)
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiterPlugin", "enforce")
+
+        plugin = _make_redis_plugin(redis_url_for_integration)
+        await plugin.shutdown()
+
+        keys_after = await _keys_in_redis(redis_url_for_integration, "rl:*")
+        assert len(keys_after) == 3, (
+            "shutdown with mode='enforce' must NOT wipe counters — "
+            f"expected 3 rl:* keys, got {keys_after}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_wipe_when_mode_key_absent(self, redis_url_for_integration):
+        """No mode key in Redis → graceful shutdown safety: counters survive."""
+        await _flush_redis(redis_url_for_integration)
+        await _seed_rate_limit_counters(redis_url_for_integration, count=3)
+        # Explicitly ensure the mode key does not exist (fresh-deploy / pod-restart shape).
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiterPlugin", None)
+
+        plugin = _make_redis_plugin(redis_url_for_integration)
+        await plugin.shutdown()
+
+        keys_after = await _keys_in_redis(redis_url_for_integration, "rl:*")
+        assert len(keys_after) == 3, (
+            "shutdown with no mode key must NOT wipe counters (graceful shutdown safety) — "
+            f"expected 3 rl:* keys, got {keys_after}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_wipe_when_redis_unreachable_for_mode_lookup(self):
+        """Redis unreachable → mode lookup fails → fail-safe: no wipe attempted, no exception escapes."""
+        # The plugin's redis_url points nowhere. We never connect to set up
+        # state — there is no state to set up. We just need shutdown to
+        # complete cleanly without raising.
+        plugin = _make_redis_plugin(_DEAD_REDIS_URL)
+
+        # Must not raise; must not hang. Any error inside the wipe path
+        # should be swallowed and core.shutdown() should still run.
+        await plugin.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_wipe_is_idempotent_under_concurrent_shutdown(self, redis_url_for_integration):
+        """Multiple plugin instances calling shutdown() in parallel all succeed and converge."""
+        await _flush_redis(redis_url_for_integration)
+        await _seed_rate_limit_counters(redis_url_for_integration, count=10)
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiterPlugin", "disabled")
+
+        plugins = [_make_redis_plugin(redis_url_for_integration) for _ in range(5)]
+
+        results = await asyncio.gather(
+            *(p.shutdown() for p in plugins),
+            return_exceptions=True,
+        )
+        for i, r in enumerate(results):
+            assert not isinstance(r, BaseException), (
+                f"plugin[{i}].shutdown() raised under concurrent wipe — got {r!r}"
+            )
+
+        keys_after = await _keys_in_redis(redis_url_for_integration, "rl:*")
+        assert keys_after == [], (
+            "concurrent shutdowns must converge to all keys deleted — "
+            f"expected [], got {keys_after}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_core_shutdown_runs_even_when_wipe_raises(self, redis_url_for_integration):
+        """If wipe raises mid-shutdown, core.shutdown() must still execute and release the Redis connection.
+
+        Verified via the same client-count delta pattern used by
+        TestRedisLifecycle.test_shutdown_releases_redis_connection.
+        """
+        await _flush_redis(redis_url_for_integration)
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiterPlugin", "disabled")
+
+        plugin = _make_redis_plugin(redis_url_for_integration)
+        ctx = PluginContext(global_context=GlobalContext(request_id="r1", user="alice"))
+        payload = ToolPreInvokePayload(name="tool", arguments={})
+
+        # Warm the Rust core's cached Redis connection.
+        await plugin.tool_pre_invoke(payload, ctx)
+        clients_before = await _count_redis_clients(redis_url_for_integration)
+
+        # Force the wipe path to raise.
+        async def _boom() -> None:
+            raise RuntimeError("simulated wipe failure")
+
+        plugin._wipe_my_counters = _boom  # type: ignore[method-assign]
+
+        # Must not raise — the shutdown contract swallows wipe errors and
+        # still runs core.shutdown() inside finally.
+        await plugin.shutdown()
+
+        await asyncio.sleep(0.2)
+        clients_after = await _count_redis_clients(redis_url_for_integration)
+        assert clients_after < clients_before, (
+            "core.shutdown() must run even when wipe raises — expected the "
+            f"Rust core's connection to be released (before={clients_before} after={clients_after})"
+        )
+
+    @pytest.mark.asyncio
+    async def test_wipe_skipped_when_another_worker_holds_lock(self, redis_url_for_integration):
+        """Single-flight guard: when another worker is already wiping, this shutdown skips.
+
+        Simulates the lock-already-held state by SETting the lock key
+        externally before invoking shutdown. With the lock held, the wipe
+        path must not run — observable by counters surviving the shutdown
+        despite mode=disabled.
+        """
+        await _flush_redis(redis_url_for_integration)
+        await _seed_rate_limit_counters(redis_url_for_integration, count=5)
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiterPlugin", "disabled")
+
+        # Pre-acquire the wipe lock externally — pretend another worker is
+        # already in the middle of wiping. Default redis_key_prefix is "rl",
+        # so the lock key is "rl-wipe-lock".
+        # Third-Party
+        import redis.asyncio as aioredis  # noqa: PLC0415
+
+        client = aioredis.from_url(redis_url_for_integration, decode_responses=True)
+        try:
+            await client.set("rl-wipe-lock", "1", nx=True, ex=30)
+        finally:
+            await client.aclose()
+
+        plugin = _make_redis_plugin(redis_url_for_integration)
+        await plugin.shutdown()
+
+        # Counters survive — proves we did NOT take the wipe path.
+        keys_after = await _keys_in_redis(redis_url_for_integration, "rl:*")
+        assert len(keys_after) == 5, (
+            "shutdown must skip the wipe when another worker holds the lock — "
+            f"expected 5 rl:* keys to survive, got {keys_after}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_wipe_only_deletes_keys_under_configured_prefix(self, redis_url_for_integration):
+        """Wipe respects the plugin's configured ``redis_key_prefix``.
+
+        A regression that hard-coded ``rl:*`` (the default prefix) would still
+        pass every other test in this class, because they all use the default
+        prefix. This test pins the contract: only keys under the plugin's
+        configured prefix are deleted; adjacent namespaces survive.
+        """
+        await _flush_redis(redis_url_for_integration)
+
+        # Seed both: a key under our custom prefix (must be wiped) and a key
+        # under an unrelated prefix (must survive).
+        # Third-Party
+        import redis.asyncio as aioredis  # noqa: PLC0415
+
+        client = aioredis.from_url(redis_url_for_integration, decode_responses=True)
+        try:
+            await client.set("custom_pfx:user:alice:60", "5")
+            await client.set("other_ns:user:bob:60", "5")
+        finally:
+            await client.aclose()
+
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiterPlugin", "disabled")
+
+        plugin = _make_redis_plugin_with_config(
+            redis_url_for_integration,
+            {"redis_key_prefix": "custom_pfx"},
+        )
+        await plugin.shutdown()
+
+        custom_keys = await _keys_in_redis(redis_url_for_integration, "custom_pfx:*")
+        other_keys = await _keys_in_redis(redis_url_for_integration, "other_ns:*")
+
+        assert custom_keys == [], (
+            "wipe must delete every key under the configured prefix — "
+            f"expected [], got {custom_keys}"
+        )
+        assert other_keys == ["other_ns:user:bob:60"], (
+            "wipe must NOT touch keys outside the configured prefix — "
+            f"expected ['other_ns:user:bob:60'], got {other_keys}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_full_toggle_journey_enforce_disable_reenforce(self, redis_url_for_integration):
+        """Operator journey end-to-end: enforce → saturate → disable wipes → re-enable starts fresh.
+
+        Mirrors User Story 1 of mcp-context-forge#4576 — the operator-visible
+        contract is that flipping a saturated rate-limiter to ``disabled`` and
+        then back to ``enforce`` must give the affected user a fresh window,
+        not an immediate block on stale counter state.
+
+        The other tests in this class assert wipe invariants in isolation
+        (does the wipe fire on disable, does it skip when it should, does
+        it respect the prefix). None of them assert the *transition*
+        composes — specifically, none verify that a user who *was being
+        blocked* stops being blocked after a full toggle cycle. This test
+        pins that contract.
+
+        Window is sized at 3/m rather than 3/s so the test never straddles
+        a second boundary on slow runners — without the wipe, alice's 5th
+        request would fall in the same minute window as her saturated
+        bucket and be blocked, so a passing 5th request after the cycle
+        is unambiguous evidence the wipe ran.
+        """
+        await _flush_redis(redis_url_for_integration)
+
+        # ── Phase 1: enforce — saturate alice's bucket ──────────────────
+        plugin = _make_redis_plugin(redis_url_for_integration, limit="3/m")
+        ctx = PluginContext(global_context=GlobalContext(request_id="r1", user="alice"))
+        payload = ToolPreInvokePayload(name="t", arguments={})
+
+        for i in range(3):
+            r = await plugin.tool_pre_invoke(payload, ctx)
+            assert r.continue_processing, f"request {i + 1}/3 must pass under 3/m"
+
+        blocked = await plugin.tool_pre_invoke(payload, ctx)
+        assert blocked.continue_processing is False, (
+            "4th request must be blocked — alice's bucket should be saturated "
+            "before the operator triggers disable"
+        )
+        keys_pre_disable = await _keys_in_redis(redis_url_for_integration, "rl:*")
+        assert any("alice" in k for k in keys_pre_disable), (
+            f"alice's counter key should exist before disable; got {keys_pre_disable}"
+        )
+
+        # ── Phase 2: operator toggles to disabled — wipe must fire ──────
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiterPlugin", "disabled")
+        await plugin.shutdown()
+
+        keys_post_wipe = await _keys_in_redis(redis_url_for_integration, "rl:*")
+        assert keys_post_wipe == [], (
+            "shutdown under mode=disabled must wipe alice's saturated bucket — "
+            f"expected [], got {keys_post_wipe}"
+        )
+
+        # ── Phase 3: operator toggles back to enforce — fresh window ────
+        # Constructing a new plugin instance is what the framework's plugin
+        # manager does on re-enable; the manager adds nothing at construction
+        # beyond what _make_redis_plugin reproduces here.
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiterPlugin", "enforce")
+        plugin = _make_redis_plugin(redis_url_for_integration, limit="3/m")
+
+        r = await plugin.tool_pre_invoke(payload, ctx)
+        assert r.continue_processing, (
+            "alice was saturated pre-disable; after the wipe + re-enable, the "
+            "first request in the same minute window must NOT be blocked by "
+            "stale counter state — this is the user-visible promise of "
+            "wipe-on-disable"
+        )
+
+    @pytest.mark.asyncio
+    async def test_full_toggle_journey_across_multiple_instances(self, redis_url_for_integration):
+        """Multi-instance toggle journey: N plugins simulate the production fan-out.
+
+        At the cpex-plugins layer, "multiple gateway pods" and "multiple workers
+        per pod" collapse to a single knob — N independent plugin instances
+        sharing one Redis URL. This test runs N=3 concurrent instances, each
+        handling a different user, then drives the full enforce → disable →
+        re-enable cycle to assert:
+
+          * the parallel disable triggers exactly one wipe (the others skip via
+            the lock), and every ``rl:*`` key disappears;
+          * every user gets a fresh window after re-enable — not just the user
+            whose plugin happened to win the wipe race.
+
+        Test #5 (``test_wipe_is_idempotent_under_concurrent_shutdown``) already
+        proves N parallel shutdowns converge to a clean state, but with seeded
+        counters and no re-enable phase. The single-instance journey
+        (``test_full_toggle_journey_enforce_disable_reenforce``) proves the
+        transition composes, but with one plugin so the distributed lock isn't
+        exercised under realistic flow. This test is the composition of both —
+        real traffic-generated state across N instances, real distributed
+        coordination during the wipe, and the post-re-enable fresh-window
+        assertion across every user.
+
+        Window sized at 3/m for the same reason as the single-instance journey
+        — the test must never straddle a second boundary, so a passing Phase 3
+        request is unambiguous evidence of the wipe.
+        """
+        await _flush_redis(redis_url_for_integration)
+
+        users = ("alice", "bob", "carol")
+        payload = ToolPreInvokePayload(name="t", arguments={})
+
+        # ── Phase 1: enforce — all three instances saturate their users in parallel ──
+        plugins = [_make_redis_plugin(redis_url_for_integration, limit="3/m") for _ in users]
+        contexts = [
+            PluginContext(global_context=GlobalContext(request_id=f"r-{u}", user=u))
+            for u in users
+        ]
+
+        async def _saturate(plugin, ctx, user):
+            for i in range(3):
+                r = await plugin.tool_pre_invoke(payload, ctx)
+                assert r.continue_processing, f"{user}: request {i + 1}/3 must pass"
+            blocked = await plugin.tool_pre_invoke(payload, ctx)
+            assert blocked.continue_processing is False, (
+                f"{user}: 4th request must be blocked before disable"
+            )
+
+        await asyncio.gather(*(
+            _saturate(p, c, u) for p, c, u in zip(plugins, contexts, users)
+        ))
+
+        keys_pre_disable = await _keys_in_redis(redis_url_for_integration, "rl:*")
+        for u in users:
+            assert any(u in k for k in keys_pre_disable), (
+                f"{u}'s counter key should exist before disable; got {keys_pre_disable}"
+            )
+
+        # ── Phase 2: parallel disable — exactly one wipes, all keys gone ──
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiterPlugin", "disabled")
+
+        results = await asyncio.gather(
+            *(p.shutdown() for p in plugins),
+            return_exceptions=True,
+        )
+        for i, r in enumerate(results):
+            assert not isinstance(r, BaseException), (
+                f"plugin[{i}].shutdown() raised under concurrent toggle — got {r!r}"
+            )
+
+        keys_post_wipe = await _keys_in_redis(redis_url_for_integration, "rl:*")
+        assert keys_post_wipe == [], (
+            "concurrent shutdown under mode=disabled must converge to all rl:* "
+            f"keys deleted — expected [], got {keys_post_wipe}"
+        )
+
+        # ── Phase 3: re-enforce — every user gets a fresh window ──
+        # Fresh plugin instances mirror what each worker's plugin manager does
+        # on re-enable.
+        await _set_plugin_mode_key(redis_url_for_integration, "RateLimiterPlugin", "enforce")
+        fresh_plugins = [_make_redis_plugin(redis_url_for_integration, limit="3/m") for _ in users]
+
+        async def _first_request_passes(plugin, ctx, user):
+            r = await plugin.tool_pre_invoke(payload, ctx)
+            assert r.continue_processing, (
+                f"{user} was saturated pre-disable; after the wipe + re-enable, "
+                f"{user}'s first request must NOT be blocked"
+            )
+
+        await asyncio.gather(*(
+            _first_request_passes(p, c, u) for p, c, u in zip(fresh_plugins, contexts, users)
+        ))
 
 
 class TestRedisTlsSupport:
@@ -1604,7 +2024,7 @@ class TestRedisTlsSupport:
         # a real connection here — the regression is at URL/feature parsing.
         plugin = RateLimiterPlugin(
             PluginConfig(
-                name="RateLimiter",
+                name="RateLimiterPlugin",
                 kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
                 hooks=["tool_pre_invoke"],
                 priority=100,
@@ -1638,7 +2058,7 @@ class TestRedisTlsSupport:
 
         plugin = RateLimiterPlugin(
             PluginConfig(
-                name="RateLimiter",
+                name="RateLimiterPlugin",
                 kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
                 hooks=["tool_pre_invoke"],
                 priority=100,
@@ -1999,4 +2419,3 @@ class TestRedisTlsHandshake:
             "expected a counter key for user 'alice' to appear in TLS Redis "
             f"after a successful rustls handshake; got keys={keys!r}"
         )
-
