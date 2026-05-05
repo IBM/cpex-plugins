@@ -80,7 +80,7 @@ jobs:
         run: |
           ! grep -R "mcpgateway\.plugins\.framework\|from mcpgateway\|import mcpgateway\|mcpgateway\.plugins\|gateway\.plugins" plugins/rust/python-package/ci_scaffold_default
           grep -R "cpex.framework" plugins/rust/python-package/ci_scaffold_default
-          grep -F '"cpex>=0.1.0rc1"' plugins/rust/python-package/ci_scaffold_default/pyproject.toml
+          grep -F '"cpex>=0.1.0rc1,<0.2"' plugins/rust/python-package/ci_scaffold_default/pyproject.toml
           python3 -m py_compile plugins/rust/python-package/ci_scaffold_default/cpex_ci_scaffold_default/ci_scaffold_default.py
 
       - name: Sync default plugin
@@ -103,7 +103,7 @@ jobs:
         run: |
           ! grep -R "mcpgateway\.plugins\.framework\|from mcpgateway\|import mcpgateway\|mcpgateway\.plugins\|gateway\.plugins" plugins/rust/python-package/ci_scaffold_all_hooks
           grep -R "cpex.framework" plugins/rust/python-package/ci_scaffold_all_hooks
-          grep -F '"cpex>=0.1.0rc1"' plugins/rust/python-package/ci_scaffold_all_hooks/pyproject.toml
+          grep -F '"cpex>=0.1.0rc1,<0.2"' plugins/rust/python-package/ci_scaffold_all_hooks/pyproject.toml
           python3 -m py_compile plugins/rust/python-package/ci_scaffold_all_hooks/cpex_ci_scaffold_all_hooks/ci_scaffold_all_hooks.py
 
       - name: Sync all-hooks plugin

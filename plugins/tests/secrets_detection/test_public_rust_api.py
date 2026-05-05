@@ -1,7 +1,25 @@
 import subprocess
 import sys
+from pathlib import Path
 
+from real_cpex_imports import assert_real_cpex_imports
 from secrets_detection.helpers import *  # noqa: F403,F405
+
+
+def test_imports_with_real_cpex_package() -> None:
+    plugin_root = (
+        Path(__file__).resolve().parents[3]
+        / "plugins"
+        / "rust"
+        / "python-package"
+        / "secrets_detection"
+    )
+    assert_real_cpex_imports(
+        plugin_root,
+        [
+            "from cpex_secrets_detection.secrets_detection import SecretsDetectionPlugin",
+        ],
+    )
 
 
 class TestPublicRustApi:

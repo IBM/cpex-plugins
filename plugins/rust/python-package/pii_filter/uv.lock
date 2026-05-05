@@ -179,7 +179,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "cpex", specifier = ">=0.1.0rc1" }]
+requires-dist = [{ name = "cpex", specifier = ">=0.1.0rc1,<0.2" }]
 
 [package.metadata.requires-dev]
 dev = [

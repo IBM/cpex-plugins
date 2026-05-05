@@ -389,7 +389,7 @@ class PluginCatalogTests(unittest.TestCase):
 
         self.assertNotIn("mcpgateway", rendered_source)
         self.assertIn("cpex.framework", rendered_source)
-        self.assertIn('"cpex>=0.1.0rc1"', rendered_source)
+        self.assertIn('"cpex>=0.1.0rc1,<0.2"', rendered_source)
 
     def test_plugin_scaffold_generator_renders_standalone_cpex_imports(self) -> None:
         try:
@@ -451,7 +451,7 @@ class PluginCatalogTests(unittest.TestCase):
             generated_source = "\n".join(path.read_text() for path in plugin_dir.rglob("*") if path.is_file())
             self.assertNotIn("mcpgateway", generated_source)
             self.assertIn("cpex.framework", generated_source)
-            self.assertIn('"cpex>=0.1.0rc1"', generated_source)
+            self.assertIn('"cpex>=0.1.0rc1,<0.2"', generated_source)
 
             compile_result = subprocess.run(
                 [

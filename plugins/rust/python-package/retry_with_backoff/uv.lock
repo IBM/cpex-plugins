@@ -182,7 +182,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cpex", specifier = ">=0.1.0rc1" },
+    { name = "cpex", specifier = ">=0.1.0rc1,<0.2" },
     { name = "pydantic", specifier = ">=2,<3" },
 ]
 
