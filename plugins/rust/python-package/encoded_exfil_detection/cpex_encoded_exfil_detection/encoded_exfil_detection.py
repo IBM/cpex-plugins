@@ -34,17 +34,10 @@ from cpex.framework import (
     ToolPostInvokePayload,
     ToolPostInvokeResult,
 )
-
-try:
-    from cpex_encoded_exfil_detection.encoded_exfil_detection_rust import (
-        ExfilDetectorEngine,
-        py_scan_container as _py_scan_container,
-    )
-    _RUST_IMPORT_ERROR: ImportError | None = None
-except ImportError as _err:
-    ExfilDetectorEngine = None  # type: ignore[assignment,misc]
-    _py_scan_container = None  # type: ignore[assignment]
-    _RUST_IMPORT_ERROR = _err
+from cpex_encoded_exfil_detection.encoded_exfil_detection_rust import (
+    ExfilDetectorEngine,
+    py_scan_container as _py_scan_container,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -136,10 +129,6 @@ def _scan_container(
     path: str = "",
 ) -> tuple[int, Any, list[dict[str, Any]]]:
     """Scan a container for encoded exfiltration patterns via the Rust engine."""
-    if _RUST_IMPORT_ERROR is not None:
-        raise ImportError(
-            "Rust extension not built — run 'make install' before using this plugin"
-        ) from _RUST_IMPORT_ERROR
     count, redacted, findings = _py_scan_container(container, cfg)
     normalized = _prefix_finding_paths(
         [f for f in findings if isinstance(f, dict)],
@@ -168,10 +157,6 @@ class EncodedExfilDetectorPlugin(Plugin):
             config: Plugin configuration.
         """
         super().__init__(config)
-        if _RUST_IMPORT_ERROR is not None:
-            raise ImportError(
-                "Rust extension not built — run 'make install' before using this plugin"
-            ) from _RUST_IMPORT_ERROR
         self._cfg = EncodedExfilDetectorConfig(**(config.config or {}))
         try:
             self._rust_engine = ExfilDetectorEngine(self._cfg)
