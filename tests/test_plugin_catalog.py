@@ -1540,7 +1540,7 @@ class PluginCatalogTests(unittest.TestCase):
             self.assertEqual(payload["plugins"], ["pii_filter", "rate_limiter"])
 
     def test_release_info_accepts_canonical_tag(self) -> None:
-        result = run_catalog("release-info", str(REPO_ROOT), "rate-limiter-v0.0.5")
+        result = run_catalog("release-info", str(REPO_ROOT), "rate-limiter-v0.0.7")
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["slug"], "rate_limiter")
@@ -1561,7 +1561,7 @@ class PluginCatalogTests(unittest.TestCase):
         )
 
     def test_release_info_gives_pii_filter_the_same_target_matrix(self) -> None:
-        result = run_catalog("release-info", str(REPO_ROOT), "pii-filter-v0.2.2")
+        result = run_catalog("release-info", str(REPO_ROOT), "pii-filter-v0.2.3")
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["slug"], "pii_filter")
@@ -1578,12 +1578,12 @@ class PluginCatalogTests(unittest.TestCase):
         )
 
     def test_release_info_rejects_noncanonical_tag(self) -> None:
-        result = run_catalog("release-info", str(REPO_ROOT), "rate_limiter-v0.0.5")
+        result = run_catalog("release-info", str(REPO_ROOT), "rate_limiter-v0.0.7")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("canonical", result.stderr.lower())
 
     def test_release_info_field_supports_kind(self) -> None:
-        result = run_catalog("release-info-field", str(REPO_ROOT), "pii-filter-v0.2.2", "kind")
+        result = run_catalog("release-info-field", str(REPO_ROOT), "pii-filter-v0.2.3", "kind")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "cpex_pii_filter.pii_filter.PIIFilterPlugin")
 
