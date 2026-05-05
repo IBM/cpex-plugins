@@ -3,13 +3,7 @@
 
 from __future__ import annotations
 
-try:
-    from cpex.framework import Plugin
-except ModuleNotFoundError:
-    class Plugin:  # type: ignore[no-redef]
-        def __init__(self, config) -> None:
-            self.config = config
-
+from cpex.framework import Plugin
 from cpex_pii_filter.pii_filter_rust import PIIDetectorRust, PIIFilterPluginCore
 
 

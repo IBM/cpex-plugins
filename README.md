@@ -2,6 +2,12 @@
 
 Monorepo for managed CPEX plugins that are implemented in Rust and published as Python packages.
 
+## Runtime Requirements
+
+These packages target the CPEX release-candidate framework API and intentionally depend on `cpex>=0.1.0rc1,<0.2`. The RC dependency is the migration target for this repository; it is not an accidental pre-stable dependency.
+
+Rust plugin packages require their compiled PyO3 extension at import/runtime. They do not ship Python fallback implementations for missing Rust extensions.
+
 ## Layout
 
 Managed plugins live under `plugins/rust/python-package/<slug>/`.
@@ -41,7 +47,7 @@ See [TESTING.md](TESTING.md) for detailed testing guidelines and cross-repositor
 
 ### Current Architecture (Transitional)
 
-Plugins are implemented as **pure Python** or **pure Rust** — each plugin uses one language for its logic. There is no dual-path where a plugin ships both Rust and Python implementations with a Rust fallback.
+Plugins are implemented as **pure Python** or **pure Rust** — each plugin uses one language for its logic. There is no dual-path where a plugin ships both Rust and Python implementations with a Python fallback for a missing Rust extension.
 
 For Rust plugins, the current approach wraps the Rust implementation with PyO3/maturin bindings as a packaging layer:
 - Plugin logic implemented entirely in Rust

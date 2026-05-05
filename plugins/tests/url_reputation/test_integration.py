@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -15,7 +16,23 @@ from cpex.framework import (
 )
 
 from cpex_url_reputation.url_reputation import URLReputationConfig, URLReputationPlugin
-from cpex_url_reputation.url_reputation_rust import URLReputationEngine
+from cpex_url_reputation.url_reputation_rust import URLReputationPlugin as RustURLReputationPlugin
+
+
+def _rust_config(**overrides) -> SimpleNamespace:
+    config = {
+        "whitelist_domains": set(),
+        "allowed_patterns": [],
+        "blocked_domains": set(),
+        "blocked_patterns": [],
+        "use_heuristic_check": False,
+        "entropy_threshold": 3.5,
+        "block_non_secure_http": True,
+    }
+    config.update(overrides)
+    config["whitelist_domains"] = set(config["whitelist_domains"])
+    config["blocked_domains"] = set(config["blocked_domains"])
+    return SimpleNamespace(**config)
 
 
 def test_imports_with_real_cpex_package() -> None:
@@ -74,60 +91,47 @@ class TestRustEngine:
 
         module = importlib.import_module("cpex_url_reputation.url_reputation_rust")
 
-        assert hasattr(module, "URLReputationEngine")
+        assert hasattr(module, "URLReputationPlugin")
 
     def test_whitelisted_subdomain_allowed(self) -> None:
-        engine = URLReputationEngine({"whitelist_domains": ["example.com"]})
+        engine = RustURLReputationPlugin(_rust_config(whitelist_domains=["example.com"]))
         result = engine.validate_url("https://sub.example.com/login")
         assert result.continue_processing is True
         assert result.violation is None
 
     def test_phishing_like_domain_blocked(self) -> None:
-        engine = URLReputationEngine(
-            {
-                "whitelist_domains": ["paypal.com"],
-                "use_heuristic_check": True,
-            }
-        )
+        engine = RustURLReputationPlugin(_rust_config(whitelist_domains=["paypal.com"], use_heuristic_check=True))
         result = engine.validate_url("https://pаypal.com/login")
         assert result.continue_processing is False
         assert result.violation is not None
 
     def test_high_entropy_domain_blocked(self) -> None:
-        engine = URLReputationEngine(
-            {
-                "use_heuristic_check": True,
-                "entropy_threshold": 2.5,
-            }
-        )
+        engine = RustURLReputationPlugin(_rust_config(use_heuristic_check=True, entropy_threshold=2.5))
         result = engine.validate_url("https://ajsd9a8sd7a98sda7sd9.com")
         assert result.continue_processing is False
         assert result.violation is not None
 
     def test_http_blocked_but_https_allowed(self) -> None:
-        engine = URLReputationEngine({"block_non_secure_http": True})
+        engine = RustURLReputationPlugin(_rust_config(block_non_secure_http=True))
         blocked = engine.validate_url("http://safe.com")
         allowed = engine.validate_url("https://safe.com")
         assert blocked.continue_processing is False
         assert allowed.continue_processing is True
 
     def test_allowed_pattern_bypasses_blocked_pattern(self) -> None:
-        engine = URLReputationEngine(
-            {
-                "allowed_patterns": [r"^https://trusted\.example/.*$"],
-                "blocked_patterns": [r".*trusted.*"],
-                "use_heuristic_check": True,
-            }
+        engine = RustURLReputationPlugin(
+            _rust_config(
+                allowed_patterns=[r"^https://trusted\.example/.*$"],
+                blocked_patterns=[r".*trusted.*"],
+                use_heuristic_check=True,
+            )
         )
         result = engine.validate_url("https://trusted.example/path")
         assert result.continue_processing is True
 
     def test_blocked_pattern_url(self) -> None:
-        engine = URLReputationEngine(
-            {
-                "blocked_patterns": [r".*admin.*", r".*login.*"],
-                "block_non_secure_http": False,
-            }
+        engine = RustURLReputationPlugin(
+            _rust_config(blocked_patterns=[r".*admin.*", r".*login.*"], block_non_secure_http=False)
         )
         result = engine.validate_url("https://example.com/admin/dashboard")
         assert result.continue_processing is False
@@ -136,36 +140,31 @@ class TestRustEngine:
 
     def test_invalid_blocked_pattern_raises(self) -> None:
         with pytest.raises(ValueError, match="Pattern compilation failed"):
-            URLReputationEngine({"blocked_patterns": ["["]})
+            RustURLReputationPlugin(_rust_config(blocked_patterns=["["]))
 
     def test_internationalized_domain_allowed(self) -> None:
-        engine = URLReputationEngine({"use_heuristic_check": True})
+        engine = RustURLReputationPlugin(_rust_config(use_heuristic_check=True))
         result = engine.validate_url("https://xn--fsq.com")
         assert result.continue_processing is True
 
     def test_mixed_case_whitelist_wins_over_blocked_domain(self) -> None:
-        engine = URLReputationEngine(
-            {
-                "whitelist_domains": ["Example.COM"],
-                "blocked_domains": ["example.com"],
-                "block_non_secure_http": False,
-            }
+        engine = RustURLReputationPlugin(
+            _rust_config(
+                whitelist_domains=["Example.COM"],
+                blocked_domains=["example.com"],
+                block_non_secure_http=False,
+            )
         )
         result = engine.validate_url("https://example.com/path")
         assert result.continue_processing is True
 
     def test_url_with_port_allowed(self) -> None:
-        engine = URLReputationEngine(
-            {
-                "use_heuristic_check": True,
-                "block_non_secure_http": True,
-            }
-        )
+        engine = RustURLReputationPlugin(_rust_config(use_heuristic_check=True, block_non_secure_http=True))
         result = engine.validate_url("https://example.com:8080/path")
         assert result.continue_processing is True
 
     def test_invalid_url_blocked(self) -> None:
-        engine = URLReputationEngine({})
+        engine = RustURLReputationPlugin(_rust_config())
         result = engine.validate_url("not a url")
         assert result.continue_processing is False
         assert result.violation is not None
@@ -197,9 +196,9 @@ class TestPluginShim:
     async def test_resource_pre_fetch_blocks_when_rust_core_errors(self) -> None:
         config = _make_plugin_config(block_non_secure_http=False)
         mock_core = MagicMock()
-        mock_core.resource_pre_fetch.side_effect = RuntimeError("boom")
+        mock_core.validate_url.side_effect = RuntimeError("boom")
         with patch(
-            "cpex_url_reputation.url_reputation.URLReputationPluginCore",
+            "cpex_url_reputation.url_reputation.RustURLReputationPlugin",
             return_value=mock_core,
         ):
             plugin = URLReputationPlugin(config)

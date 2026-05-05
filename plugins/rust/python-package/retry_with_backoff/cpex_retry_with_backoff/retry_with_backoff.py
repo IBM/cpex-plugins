@@ -27,7 +27,6 @@ from cpex.framework import (
 from cpex_retry_with_backoff.retry_with_backoff_rust import RetryStateManager
 
 log = logging.getLogger(__name__)
-_RUST_AVAILABLE = True
 
 
 @dataclass
@@ -205,7 +204,7 @@ class RetryWithBackoffPlugin(Plugin):
             }
         }
 
-        if self._rust is not None and not cfg.check_text_content:
+        if not cfg.check_text_content:
             is_error = isinstance(result, dict) and result.get("isError") is True
             status_code: int | None = None
             if isinstance(result, dict):

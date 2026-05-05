@@ -9,9 +9,7 @@
 // Uses EVALSHA with NOSCRIPT fallback to EVAL (REDIS-02).
 //
 // Key format: `{prefix}:{dimension_key}:{window_seconds}`
-// This matches the Python RedisBackend key format exactly so that instances
-// running the Rust backend and instances running the Python fallback share the
-// same Redis counters during a rolling upgrade.
+// This preserves the existing Redis counter namespace during rolling upgrades.
 
 use std::cmp::max;
 use std::sync::OnceLock;

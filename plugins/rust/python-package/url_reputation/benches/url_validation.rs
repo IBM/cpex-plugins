@@ -14,7 +14,7 @@ fn create_plugin_with_heuristics() -> URLReputationPlugin {
         entropy_threshold: 3.65,
         block_non_secure_http: true,
     };
-    URLReputationPlugin::new(config)
+    URLReputationPlugin::new(config).expect("benchmark config should be valid")
 }
 
 fn benchmark_full_heuristic_validation(c: &mut Criterion) {
@@ -138,7 +138,7 @@ fn benchmark_blocked_pattern_matching(c: &mut Criterion) {
         entropy_threshold: 3.65,
         block_non_secure_http: false,
     };
-    let plugin = URLReputationPlugin::new(config);
+    let plugin = URLReputationPlugin::new(config).expect("benchmark config should be valid");
 
     // Test URLs that should match blocked patterns
     let blocked_urls = vec![
@@ -173,7 +173,7 @@ fn benchmark_allowed_pattern_matching(c: &mut Criterion) {
         entropy_threshold: 3.65,
         block_non_secure_http: false,
     };
-    let plugin = URLReputationPlugin::new(config);
+    let plugin = URLReputationPlugin::new(config).expect("benchmark config should be valid");
 
     // Test URLs that should match allowed patterns
     let allowed_urls = vec![
@@ -206,7 +206,7 @@ fn benchmark_pattern_no_match(c: &mut Criterion) {
         entropy_threshold: 3.65,
         block_non_secure_http: false,
     };
-    let plugin = URLReputationPlugin::new(config);
+    let plugin = URLReputationPlugin::new(config).expect("benchmark config should be valid");
 
     // Test URLs that won't match any patterns (worst case - checks all patterns)
     let clean_urls = vec![

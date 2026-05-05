@@ -114,7 +114,7 @@ clean-all: clean
 .PHONY: verify check-all ci-build ci pre-commit
 
 verify:
-	@uv run python -c "from cpex_url_reputation import URLReputationEngine; print('url_reputation_rust available')" || echo "url_reputation_rust not installed — run: make install"
+	@uv run python -c "from cpex_url_reputation import URLReputationPlugin; print('url_reputation_rust available')" || echo "url_reputation_rust not installed — run: make install"
 
 check-all: fmt-check clippy test-unit
 	@echo "$(GREEN)All checks passed$(NC)"

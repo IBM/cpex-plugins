@@ -2,6 +2,10 @@
 
 Rust-backed secrets detection plugin for MCP Gateway / CPEX.
 
+## Runtime Requirements
+
+This plugin depends on `cpex>=0.1.0rc1,<0.2` and imports hook models from `cpex.framework`. The compiled Rust extension is mandatory; there is no Python fallback implementation.
+
 ## What it does
 
 This plugin scans hook payloads for likely secrets and can either:

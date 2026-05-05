@@ -3,13 +3,7 @@
 
 from __future__ import annotations
 
-try:
-    from cpex.framework import Plugin
-except ModuleNotFoundError:
-    class Plugin:  # type: ignore[no-redef]
-        def __init__(self, config) -> None:
-            self._config = config
-
+from cpex.framework import Plugin
 from cpex_secrets_detection.secrets_detection_rust import (
     SecretsDetectionPluginCore,
     py_scan_container,

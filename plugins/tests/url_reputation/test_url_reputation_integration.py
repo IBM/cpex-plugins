@@ -8,7 +8,6 @@ Tests for URLReputationPlugin.
 """
 
 import pytest
-from unittest.mock import MagicMock, patch
 
 from cpex.framework import (
     PluginConfig,
@@ -17,18 +16,9 @@ from cpex.framework import (
 )
 
 from cpex_url_reputation.url_reputation import URLReputationPlugin, URLReputationConfig
+import cpex_url_reputation.url_reputation_rust  # noqa: F401
 
-try:
-    import url_reputation_rust  # noqa: F401
-    _RUST_AVAILABLE = True
-except ImportError:
-    _RUST_AVAILABLE = False
-except Exception:
-    _RUST_AVAILABLE = False
 
-_PLUGIN_MODULE = "cpex_url_reputation.url_reputation"
-
-@pytest.mark.skipif(not _RUST_AVAILABLE, reason="Rust url_reputation plugin not available")
 @pytest.mark.asyncio
 async def test_whitelisted_subdomain():
     """Subdomains of a whitelisted domain should be allowed."""
@@ -52,7 +42,6 @@ async def test_whitelisted_subdomain():
     assert res.violation is None
 
 
-@pytest.mark.skipif(not _RUST_AVAILABLE, reason="Rust url_reputation plugin not available")
 @pytest.mark.asyncio
 async def test_phishing_like_domain_blocked():
     """Domains mimicking popular sites but not whitelisted are blocked."""
@@ -78,7 +67,6 @@ async def test_phishing_like_domain_blocked():
 
 
 
-@pytest.mark.skipif(not _RUST_AVAILABLE, reason="Rust url_reputation plugin not available")
 @pytest.mark.asyncio
 async def test_high_entropy_domain_blocked():
     """Random-looking high-entropy domains should be blocked."""
@@ -103,7 +91,6 @@ async def test_high_entropy_domain_blocked():
     assert not res.continue_processing
 
 
-@pytest.mark.skipif(not _RUST_AVAILABLE, reason="Rust url_reputation plugin not available")
 @pytest.mark.asyncio
 async def test_unicode_homograph_blocked():
     """URLs with unicode homograph attacks should be blocked."""
@@ -130,7 +117,7 @@ async def test_unicode_homograph_blocked():
 
 @pytest.mark.asyncio
 async def test_http_blocked_but_https_allowed_python():
-    """Non-HTTPS URLs should be blocked; HTTPS allowed (Python fallback compatible)."""
+    """Non-HTTPS URLs should be blocked; HTTPS allowed."""
     config = PluginConfig(
         name="urlrep",
         kind="cpex_url_reputation.url_reputation.URLReputationPlugin",
@@ -154,7 +141,6 @@ async def test_http_blocked_but_https_allowed_python():
     assert res_https.continue_processing
 
 
-@pytest.mark.skipif(not _RUST_AVAILABLE, reason="Rust url_reputation plugin not available")
 @pytest.mark.asyncio
 async def test_high_entropy_domain_blocked_heuristic():
     """Random-looking high-entropy domains should be blocked (requires Rust heuristics)."""
@@ -179,7 +165,6 @@ async def test_high_entropy_domain_blocked_heuristic():
     assert not res.continue_processing
 
 
-@pytest.mark.skipif(not _RUST_AVAILABLE, reason="Rust url_reputation plugin not available")
 @pytest.mark.asyncio
 async def test_allowed_pattern_url():
     """URLs matching allowed patterns bypass checks."""
@@ -206,7 +191,7 @@ async def test_allowed_pattern_url():
 
 @pytest.mark.asyncio
 async def test_blocked_pattern_url():
-    """URLs matching blocked patterns are rejected (Python fallback compatible - simple substring match)."""
+    """URLs matching blocked patterns are rejected."""
     config = PluginConfig(
         name="urlrep",
         kind="cpex_url_reputation.url_reputation.URLReputationPlugin",
@@ -215,7 +200,7 @@ async def test_blocked_pattern_url():
             "whitelist_domains": [],
             "allowed_patterns": [],
             "blocked_domains": [],
-            "blocked_patterns": ["admin", "login"],  # Simple patterns for Python compatibility
+            "blocked_patterns": ["admin", "login"],
             "use_heuristic_check": False,
             "entropy_threshold": 3.5,
             "block_non_secure_http": False,
@@ -229,7 +214,6 @@ async def test_blocked_pattern_url():
     assert res.violation.reason == "Blocked pattern"
 
 
-@pytest.mark.skipif(not _RUST_AVAILABLE, reason="Rust url_reputation plugin not available")
 @pytest.mark.asyncio
 async def test_internationalized_domain():
     """Test that Punycode domains are correctly handled."""
@@ -254,7 +238,6 @@ async def test_internationalized_domain():
     assert res.continue_processing
 
 
-@pytest.mark.skipif(not _RUST_AVAILABLE, reason="Rust url_reputation plugin not available")
 @pytest.mark.asyncio
 async def test_mixed_case_domain_allowed():
     """Whitelist with mixed-case entry should bypass blocked_domains for that domain."""
@@ -278,7 +261,6 @@ async def test_mixed_case_domain_allowed():
     assert res.continue_processing
 
 
-@pytest.mark.skipif(not _RUST_AVAILABLE, reason="Rust url_reputation plugin not available")
 @pytest.mark.asyncio
 async def test_url_with_port_allowed():
     """URLs with valid ports should be allowed if everything else is OK."""
@@ -301,13 +283,6 @@ async def test_url_with_port_allowed():
     url = "https://example.com:8080/path"
     res = await plugin.resource_pre_fetch(ResourcePreFetchPayload(uri=url), None)
     assert res.continue_processing
-
-
-# ---------------------------------------------------------------------------
-# Python fallback path tests (force _RUST_AVAILABLE=False via mock)
-# ---------------------------------------------------------------------------
-
-_PLUGIN_MODULE = "cpex_url_reputation.url_reputation"
 
 
 @pytest.mark.asyncio

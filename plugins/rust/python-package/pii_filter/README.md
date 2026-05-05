@@ -20,6 +20,10 @@ High-performance PII detection and masking library for ContextForge.
 make install
 ```
 
+## Runtime Requirements
+
+This plugin depends on `cpex>=0.1.0rc1,<0.2` and imports hook models from `cpex.framework`. The compiled Rust extension is mandatory; there is no Python fallback implementation.
+
 ## Usage
 
 The Python plugin requires the compiled Rust extension and uses it for all detection and masking operations.

@@ -4,25 +4,28 @@
 import typing
 
 __all__ = [
-    "URLReputationEngine",
-    "URLReputationPluginCore",
-    "URLReputationResult",
+    "PluginViolation",
+    "URLPluginResult",
+    "URLReputationPlugin",
 ]
 
 
 @typing.final
-class URLReputationResult:
+class PluginViolation:
+    reason: str
+    description: str
+    code: str
+    details: typing.Optional[dict[str, str]]
+
+
+@typing.final
+class URLPluginResult:
     continue_processing: bool
-    violation: typing.Any
+    violation: typing.Optional[PluginViolation]
 
 
 @typing.final
-class URLReputationEngine:
-    def __new__(cls, config: dict) -> URLReputationEngine: ...
-    def validate_url(self, url: str) -> URLReputationResult: ...
-
-
-@typing.final
-class URLReputationPluginCore:
-    def __new__(cls, config: dict) -> URLReputationPluginCore: ...
-    def resource_pre_fetch(self, payload: typing.Any, context: typing.Any) -> typing.Any: ...
+class URLReputationPlugin:
+    def __new__(cls, config: typing.Any) -> URLReputationPlugin: ...
+    def validate_url(self, url: str) -> URLPluginResult: ...
+    def validate_url_py(self, url: str) -> dict[str, typing.Any]: ...

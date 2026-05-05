@@ -4,6 +4,9 @@
 
 Blocks URLs based on configured blocked domains, patterns and heuristics before resource fetch. Designed for fast and efficient resource checks.
 
+## Runtime Requirements
+
+This plugin depends on `cpex>=0.1.0rc1,<0.2` and imports hook models from `cpex.framework`. The compiled Rust extension is mandatory; there is no Python fallback implementation.
 
 ## Hooks
 - resource_pre_fetch – triggered before any resource is fetched.

@@ -4,54 +4,14 @@
 from __future__ import annotations
 
 import logging
+import re
+from types import SimpleNamespace
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
-try:
-    from cpex.framework import Plugin, PluginViolation, ResourcePreFetchResult
-except ModuleNotFoundError:
-    class Plugin:  # type: ignore[no-redef]
-        def __init__(self, config) -> None:
-            self.config = config
-
-    class PluginViolation:  # type: ignore[no-redef]
-        def __init__(
-            self,
-            reason: str = "",
-            description: str = "",
-            code: str = "",
-            details: dict[str, Any] | None = None,
-            http_status_code: int = 400,
-            http_headers: dict[str, str] | None = None,
-        ) -> None:
-            self.reason = reason
-            self.description = description
-            self.code = code
-            self.details = details
-            self.http_status_code = http_status_code
-            self.http_headers = http_headers
-
-    class ResourcePreFetchResult:  # type: ignore[no-redef]
-        def __init__(
-            self,
-            continue_processing: bool = True,
-            violation: PluginViolation | None = None,
-            metadata: dict[str, Any] | None = None,
-            http_headers: dict[str, str] | None = None,
-        ) -> None:
-            self.continue_processing = continue_processing
-            self.violation = violation
-            self.metadata = metadata
-            self.http_headers = http_headers
-
-try:
-    from cpex_url_reputation.url_reputation_rust import URLReputationEngine, URLReputationPluginCore
-    _RUST_AVAILABLE = True
-except ImportError:
-    URLReputationEngine = None  # type: ignore[misc,assignment]
-    URLReputationPluginCore = None  # type: ignore[misc,assignment]
-    _RUST_AVAILABLE = False
+from cpex.framework import Plugin, PluginViolation, ResourcePreFetchResult
+from cpex_url_reputation.url_reputation_rust import URLReputationPlugin as RustURLReputationPlugin
 
 logger = logging.getLogger(__name__)
 
@@ -74,26 +34,42 @@ class URLReputationConfig(BaseModel):
             return set()
         return {str(domain).lower() for domain in value}
 
+    @field_validator("allowed_patterns", "blocked_patterns")
+    @classmethod
+    def validate_patterns(cls, value: list[str]) -> list[str]:
+        for pattern in value:
+            try:
+                re.compile(str(pattern))
+            except re.error as exc:
+                raise ValueError(f"Pattern compilation failed for {pattern!r}") from exc
+        return value
+
 
 class URLReputationPlugin(Plugin):
     """Gateway-facing Plugin subclass that delegates behavior to the Rust engine."""
 
     def __init__(self, config) -> None:
         super().__init__(config)
-        if not _RUST_AVAILABLE or URLReputationPluginCore is None:
-            raise RuntimeError(
-                "Rust url_reputation_rust module is required but not available. "
-                "Please ensure the plugin is properly installed with: make install"
-            )
         self._cfg = URLReputationConfig(**(config.config or {}))
-        self._core = URLReputationPluginCore(self._cfg.model_dump())
+        self._core = RustURLReputationPlugin(SimpleNamespace(**self._cfg.model_dump()))
 
     async def resource_pre_fetch(self, payload, context):
         try:
-            result = self._core.resource_pre_fetch(payload, context)
-            if hasattr(result, "__await__"):
-                return await result
-            return result
+            result = self._core.validate_url(payload.uri)
+            if result.continue_processing:
+                return ResourcePreFetchResult(continue_processing=True)
+            violation = result.violation
+            return ResourcePreFetchResult(
+                continue_processing=False,
+                violation=PluginViolation(
+                    reason=violation.reason,
+                    description=violation.description,
+                    code=violation.code,
+                    details=violation.details,
+                )
+                if violation is not None
+                else None,
+            )
         except Exception as exc:
             logger.warning("URL reputation validation failed; blocking for safety: %s", exc)
             return ResourcePreFetchResult(
@@ -109,7 +85,5 @@ class URLReputationPlugin(Plugin):
 
 __all__ = [
     "URLReputationConfig",
-    "URLReputationEngine",
     "URLReputationPlugin",
-    "URLReputationPluginCore",
 ]

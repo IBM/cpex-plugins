@@ -18,6 +18,10 @@ High-performance retry and backoff policy engine for ContextForge and MCP Gatewa
 make install
 ```
 
+## Runtime Requirements
+
+This plugin depends on `cpex>=0.1.0rc1,<0.2` and imports hook models from `cpex.framework`. The compiled Rust extension is mandatory; there is no Python fallback implementation.
+
 ## Usage
 
 The plugin runs on `tool_post_invoke` and `resource_post_fetch`.
@@ -54,7 +58,7 @@ Use `tool_overrides` to change retry behavior for a specific tool:
 - Successful responses clear retry state for the `(tool, request_id)` pair.
 - Retry state expires after a short TTL so abandoned request state does not accumulate indefinitely.
 - If `check_text_content` is disabled, the hot path uses the Rust state manager directly.
-- If `check_text_content` is enabled, the plugin falls back to Python-side payload inspection before applying retry policy.
+- If `check_text_content` is enabled, Python-side payload inspection supplements the Rust state manager before applying retry policy.
 
 ## Returned Metadata
 

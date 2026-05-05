@@ -5,27 +5,7 @@ from __future__ import annotations
 
 import logging
 
-try:
-    from cpex.framework import Plugin, PromptPrehookResult, ToolPreInvokeResult
-except ModuleNotFoundError:
-    class Plugin:  # type: ignore[no-redef]
-        def __init__(self, config) -> None:
-            self.config = config
-
-    class PromptPrehookResult:  # type: ignore[no-redef]
-        def __init__(self, continue_processing=True, violation=None, metadata=None, http_headers=None):
-            self.continue_processing = continue_processing
-            self.violation = violation
-            self.metadata = metadata
-            self.http_headers = http_headers
-
-    class ToolPreInvokeResult:  # type: ignore[no-redef]
-        def __init__(self, continue_processing=True, violation=None, metadata=None, http_headers=None):
-            self.continue_processing = continue_processing
-            self.violation = violation
-            self.metadata = metadata
-            self.http_headers = http_headers
-
+from cpex.framework import Plugin, PromptPrehookResult, ToolPreInvokeResult
 from cpex_rate_limiter.rate_limiter_rust import (
     RateLimiterPluginCore,
     compat_default_config as _compat_default_config,

@@ -4,6 +4,10 @@
 
 Enforces rate limits per user, tenant, and tool across `tool_pre_invoke` and `prompt_pre_fetch` hooks. Supports pluggable counting algorithms (fixed window, sliding window, token bucket), an in-process memory backend (single-instance), and a Redis backend (shared across all gateway instances).
 
+## Runtime Requirements
+
+This plugin depends on `cpex>=0.1.0rc1,<0.2` and imports hook models from `cpex.framework`. The compiled Rust extension is mandatory; there is no Python fallback implementation.
+
 ## Hooks
 
 | Hook | When it runs |

@@ -409,18 +409,7 @@ class TestGetState:
             _STATE.update(baseline)
 
 
-class TestRustFallback:
-    @pytest.mark.asyncio
-    async def test_python_fallback_when_rust_unavailable(self):
-        plugin = make_plugin()
-        ctx = make_context()
-
-        with patch.object(plugin, "_rust", None):
-            r1 = await plugin.tool_post_invoke(make_payload("t", {"isError": True}), ctx)
-            assert r1.retry_delay_ms > 0
-            r2 = await plugin.tool_post_invoke(make_payload("t", {"result": "ok"}), ctx)
-            assert r2.retry_delay_ms == 0
-
+class TestRustPath:
     @pytest.mark.asyncio
     async def test_rust_path_taken_when_available(self):
         plugin = make_plugin()
