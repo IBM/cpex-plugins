@@ -410,7 +410,7 @@ class PluginCatalogTests(unittest.TestCase):
                     resolver = "2"
 
                     [workspace.package]
-                    edition = "2021"
+                    edition = "2024"
                     authors = ["Test"]
                     license = "Apache-2.0"
                     repository = "https://example.invalid"
