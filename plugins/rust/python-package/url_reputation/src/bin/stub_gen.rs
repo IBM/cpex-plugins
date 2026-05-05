@@ -19,3 +19,54 @@ fn main() {
     );
     println!("✓ Generated stub files successfully");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::main;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+
+    fn cwd_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn temp_project_dir() -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "cpex-url-reputation-stub-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(path.join("cpex_url_reputation/url_reputation_rust")).unwrap();
+        path
+    }
+
+    #[test]
+    fn main_writes_expected_stub_files() {
+        let _guard = cwd_lock().lock().unwrap();
+        let original_cwd = std::env::current_dir().unwrap();
+        let temp_dir = temp_project_dir();
+
+        std::env::set_current_dir(&temp_dir).unwrap();
+        main();
+        std::env::set_current_dir(original_cwd).unwrap();
+
+        let top_level = fs::read_to_string(temp_dir.join("cpex_url_reputation/__init__.pyi"))
+            .expect("top-level stub should be written");
+        let rust_stub = fs::read_to_string(
+            temp_dir.join("cpex_url_reputation/url_reputation_rust/__init__.pyi"),
+        )
+        .expect("rust extension stub should be written");
+
+        assert!(top_level.contains("URLReputationConfig"));
+        assert!(top_level.contains("URLReputationPlugin"));
+        assert!(!top_level.contains("URLReputationEngine"));
+        assert!(rust_stub.contains("class PluginViolation:"));
+        assert!(rust_stub.contains("class URLPluginResult:"));
+        assert!(rust_stub.contains("def validate_url_py"));
+
+        fs::remove_dir_all(temp_dir).unwrap();
+    }
+}
