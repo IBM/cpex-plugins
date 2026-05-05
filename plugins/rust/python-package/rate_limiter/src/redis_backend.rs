@@ -632,17 +632,18 @@ mod tests {
             "connection_async should error against a hanging Redis (server never \
              completes the redis handshake), not return Ok",
         );
-        // The error category should be IO/timeout shaped, not a config or
-        // protocol-level error — pins the contract that the timeout maps
-        // into the existing fail_mode path.
-        let kind = err.kind();
-        assert!(
-            matches!(
-                kind,
-                redis::ErrorKind::IoError | redis::ErrorKind::ResponseError
-            ),
+        // Pin the exact contract: the connection-acquisition timeout maps
+        // into ``redis::ErrorKind::IoError``, the same shape the existing
+        // ``fail_mode`` path routes for any other connection-side failure.
+        // Anything else (ResponseError, ClientError, ...) would mean the
+        // timeout is being surfaced through a different code path than
+        // the rest of the fail-mode logic and would silently break the
+        // operator's fail-open / fail-closed policy.
+        assert_eq!(
+            err.kind(),
+            redis::ErrorKind::IoError,
             "expected IoError-shaped timeout error from connection_async; got {:?}: {}",
-            kind,
+            err.kind(),
             err,
         );
     }

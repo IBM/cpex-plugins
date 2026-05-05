@@ -1600,6 +1600,79 @@ class TestRedisFailModeAndViolationContext:
         finally:
             listener.close()
 
+    @pytest.mark.asyncio
+    async def test_hanging_redis_with_fail_mode_closed_blocks_with_backend_unavailable(self):
+        """``tool_pre_invoke`` with ``fail_mode=closed`` must complete within
+        a bounded window when the configured Redis endpoint accepts TCP but
+        never responds at the application layer — and must surface a
+        ``BACKEND_UNAVAILABLE`` violation (HTTP 503 + ``Retry-After``)
+        rather than hanging until the framework's outer 30-second timeout
+        fires.
+
+        Companion to ``test_hanging_redis_fails_fast_via_connect_timeout``
+        which covers the default ``fail_mode=open`` branch.  Together the
+        two pin both halves of the operator's policy contract under the
+        hanging-Redis failure shape: open allows the request, closed blocks
+        with the documented error envelope.
+
+        Test setup matches the open-mode test: bind a TCP listener but
+        never ``accept()`` to read or write any bytes.  ``asyncio.wait_for``
+        is the runaway-guard so a regression doesn't hang the suite.
+        """
+        # Standard
+        import asyncio  # noqa: PLC0415
+        import socket  # noqa: PLC0415
+        import time  # noqa: PLC0415
+
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        hang_port = listener.getsockname()[1]
+
+        try:
+            plugin = _make_redis_plugin_with_config(
+                f"redis://127.0.0.1:{hang_port}/0",
+                {"fail_mode": "closed"},
+            )
+            ctx = PluginContext(global_context=GlobalContext(request_id="r1", user="alice"))
+            payload = ToolPreInvokePayload(name="t", arguments={})
+
+            t0 = time.monotonic()
+            result = await asyncio.wait_for(
+                plugin.tool_pre_invoke(payload, ctx),
+                timeout=10.0,
+            )
+            elapsed = time.monotonic() - t0
+
+            assert elapsed < 5.0, (
+                f"plugin must fail fast on a hanging Redis (≤5s) regardless "
+                f"of fail_mode; without the connection-acquisition timeout this "
+                f"would hang until the framework's outer 30-second timeout fires. "
+                f"Took {elapsed:.2f}s."
+            )
+            assert result.continue_processing is False, (
+                f"fail_mode=closed must block the request when Redis hangs "
+                f"during connection acquisition; got {result!r}"
+            )
+            assert result.violation is not None, (
+                f"fail_mode=closed must produce a violation when the backend "
+                f"is unreachable; got {result!r}"
+            )
+            assert result.violation.code == "BACKEND_UNAVAILABLE", (
+                f"expected violation.code='BACKEND_UNAVAILABLE', "
+                f"got {result.violation.code!r}"
+            )
+            assert result.violation.http_status_code == 503, (
+                f"expected http_status_code=503, "
+                f"got {result.violation.http_status_code!r}"
+            )
+            assert "Retry-After" in result.violation.http_headers, (
+                f"expected Retry-After header on the violation; "
+                f"got headers={result.violation.http_headers!r}"
+            )
+        finally:
+            listener.close()
+
 
 class TestConfigHardening:
     """Config hardening (G13, G15).
