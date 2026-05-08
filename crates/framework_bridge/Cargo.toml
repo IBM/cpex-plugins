@@ -1,6 +1,6 @@
 [package]
 name = "cpex_framework_bridge"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["ContextForge Contributors"]
 license = "Apache-2.0"

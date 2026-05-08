@@ -1,6 +1,6 @@
 description: "High-performance retry policy engine with exponential backoff, jitter, per-tool overrides, and retry metadata for transient tool and resource failures"
 author: "ContextForge Contributors"
-version: "0.3.0"
+version: "0.3.1"
 kind: "cpex_retry_with_backoff.retry_with_backoff.RetryWithBackoffPlugin"
 available_hooks:
   - "tool_post_invoke"

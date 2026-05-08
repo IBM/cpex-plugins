@@ -1,6 +1,6 @@
 description: "Static URL reputation checks using blocked domains and URL patterns"
 author: "ContextForge Contributors"
-version: "0.3.0"
+version: "0.3.1"
 kind: "cpex_url_reputation.url_reputation.URLReputationPlugin"
 available_hooks:
   - "resource_pre_fetch"
