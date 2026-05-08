@@ -13,6 +13,8 @@ from cpex.framework import (
     ToolPostInvokePayload,
     ToolPreInvokePayload,
 )
+from cpex.framework.hooks.policies import HookPayloadPolicy, apply_policy
+from cpex.framework.memory import wrap_payload_for_isolation
 from cpex.framework.models import GlobalContext
 
 from cpex_pii_filter.pii_filter import PIIDetectorRust, PIIFilterPlugin
@@ -312,6 +314,59 @@ async def test_tool_post_invoke_returns_copied_payload_for_frozen_models():
     assert result.modified_payload is not payload
     assert payload.result["contact"] == "alice@example.com"
     assert result.modified_payload.result["contact"] == "[REDACTED]"
+
+
+@pytest.mark.asyncio
+async def test_tool_post_invoke_returns_new_nested_result_for_mcp_content():
+    plugin = PIIFilterPlugin(_make_config())
+    payload = ToolPostInvokePayload(
+        name="search",
+        result={
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Contact alice@example.com",
+                }
+            ],
+            "isError": False,
+        },
+    )
+
+    result = await plugin.tool_post_invoke(payload, _make_context())
+
+    assert result.modified_payload is not None
+    assert result.modified_payload is not payload
+    assert result.modified_payload.result is not payload.result
+    assert result.modified_payload.result["content"] is not payload.result["content"]
+    assert result.modified_payload.result["content"][0] is not payload.result["content"][0]
+    assert payload.result["content"][0]["text"] == "Contact alice@example.com"
+    assert result.modified_payload.result["content"][0]["text"] == "Contact [REDACTED]"
+
+
+@pytest.mark.asyncio
+async def test_tool_post_invoke_survives_cpex_policy_with_isolated_payload():
+    plugin = PIIFilterPlugin(_make_config())
+    payload = ToolPostInvokePayload(
+        name="search",
+        result={
+            "content": [{"type": "text", "text": "Contact alice@example.com"}],
+            "isError": False,
+        },
+    )
+    plugin_input = wrap_payload_for_isolation(payload)
+
+    result = await plugin.tool_post_invoke(plugin_input, _make_context())
+
+    assert result.modified_payload is not None
+    filtered = apply_policy(
+        plugin_input,
+        result.modified_payload,
+        HookPayloadPolicy(writable_fields=frozenset({"result"})),
+        apply_to=payload,
+    )
+    assert filtered is not None
+    assert payload.result["content"][0]["text"] == "Contact alice@example.com"
+    assert filtered.result["content"][0]["text"] == "Contact [REDACTED]"
 
 
 @pytest.mark.asyncio

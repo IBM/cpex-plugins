@@ -40,9 +40,18 @@ if os.environ.get("CPEX_TEST_PLUGIN_HOOKS") != "1":
 
 cpex = types.ModuleType("cpex")
 framework = types.ModuleType("cpex.framework")
+hooks = types.ModuleType("cpex.framework.hooks")
+policies = types.ModuleType("cpex.framework.hooks.policies")
+memory = types.ModuleType("cpex.framework.memory")
 
 framework.__dict__.update(plugin_hooks.__dict__)
+policies.HookPayloadPolicy = plugin_hooks.HookPayloadPolicy
+policies.apply_policy = plugin_hooks.apply_policy
+memory.wrap_payload_for_isolation = plugin_hooks.wrap_payload_for_isolation
 sys.modules["cpex"] = cpex
 sys.modules["cpex.framework"] = framework
+sys.modules["cpex.framework.hooks"] = hooks
+sys.modules["cpex.framework.hooks.policies"] = policies
+sys.modules["cpex.framework.memory"] = memory
 sys.modules["cpex.framework.models"] = plugin_hooks
 sys.modules["cpex.framework.settings"] = plugin_hooks

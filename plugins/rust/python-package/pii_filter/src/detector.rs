@@ -5,7 +5,7 @@
 
 use log::{debug, warn};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyList, PySet, PyString, PyTuple};
+use pyo3::types::{PyAny, PyDict, PyList, PyMapping, PySet, PyString, PyTuple};
 use pyo3_stub_gen::derive::*;
 use std::collections::HashMap;
 
@@ -357,16 +357,17 @@ impl PIIDetectorRust {
             }
         }
 
-        // Handle dictionaries
-        if let Ok(dict) = data.cast::<PyDict>() {
-            let mut entries: Vec<(Py<PyAny>, Py<PyAny>)> = Vec::with_capacity(dict.len());
+        // Handle mappings through the Python protocol. CPEX isolation wraps
+        // dicts in copy-on-write dict subclasses whose visible entries are not
+        // stored in the underlying PyDict table.
+        if let Ok(mapping) = data.cast::<PyMapping>() {
+            let mapping_len = mapping.len()?;
+            let mut entries: Vec<(Py<PyAny>, Py<PyAny>)> = Vec::with_capacity(mapping_len);
             let mut all_detections = HashMap::new();
-            if dict.len() > self.config.max_collection_items {
+            if mapping_len > self.config.max_collection_items {
                 warn!(
                     "Rejected nested mapping at path '{}' because size {} exceeds max {}",
-                    path,
-                    dict.len(),
-                    self.config.max_collection_items
+                    path, mapping_len, self.config.max_collection_items
                 );
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                     "Nested mapping exceeds maximum size of {} items",
@@ -374,7 +375,10 @@ impl PIIDetectorRust {
                 )));
             }
 
-            for (key, value) in dict.iter() {
+            for item in mapping.items()?.iter() {
+                let item = item.cast::<PyTuple>()?;
+                let key = item.get_item(0)?;
+                let value = item.get_item(1)?;
                 let key_str = key.str()?.to_string_lossy().into_owned();
                 let new_path = if path.is_empty() {
                     key_str.clone()
@@ -1651,6 +1655,57 @@ class ConfigModel:
             let data = PyList::empty(py);
             data.append("a@example.com").unwrap();
             data.append("b@example.com").unwrap();
+
+            let err = detector
+                .process_nested(py, &data.into_any(), "")
+                .unwrap_err();
+            assert!(err.is_instance_of::<pyo3::exceptions::PyValueError>(py));
+        });
+    }
+
+    #[test]
+    fn test_process_nested_mapping_allows_collection_limit_boundary() {
+        Python::initialize();
+        Python::attach(|py| {
+            let config = PyDict::new(py);
+            config.set_item("detect_email", true).unwrap();
+            config.set_item("max_collection_items", 1).unwrap();
+
+            let detector = PIIDetectorRust::new(&config.into_any()).unwrap();
+            let data = PyDict::new(py);
+            data.set_item("email", "alice@example.com").unwrap();
+
+            let (modified, new_data, _) =
+                detector.process_nested(py, &data.into_any(), "").unwrap();
+
+            assert!(modified);
+            assert_eq!(
+                new_data
+                    .bind(py)
+                    .cast::<PyDict>()
+                    .unwrap()
+                    .get_item("email")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "[REDACTED]"
+            );
+        });
+    }
+
+    #[test]
+    fn test_process_nested_mapping_rejects_over_collection_limit() {
+        Python::initialize();
+        Python::attach(|py| {
+            let config = PyDict::new(py);
+            config.set_item("detect_email", true).unwrap();
+            config.set_item("max_collection_items", 1).unwrap();
+
+            let detector = PIIDetectorRust::new(&config.into_any()).unwrap();
+            let data = PyDict::new(py);
+            data.set_item("first", "alice@example.com").unwrap();
+            data.set_item("second", "bob@example.com").unwrap();
 
             let err = detector
                 .process_nested(py, &data.into_any(), "")

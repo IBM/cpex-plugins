@@ -3,9 +3,68 @@
 from __future__ import annotations
 
 import importlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from enum import Enum
 from typing import Any
+
+
+@dataclass(frozen=True)
+class HookPayloadPolicy:
+    writable_fields: frozenset[str]
+
+
+class CopyOnWriteDict(dict):
+    def __init__(self, original: dict[str, Any]) -> None:
+        super().__init__()
+        self._original = original
+
+    def __getitem__(self, key: Any) -> Any:
+        return super().__getitem__(key) if key in self else self._original[key]
+
+    def __iter__(self):
+        return iter(self._original)
+
+    def __len__(self) -> int:
+        return len(self._original)
+
+    def items(self):
+        return ((key, self[key]) for key in self)
+
+    def copy(self) -> dict:
+        return dict(self.items())
+
+
+def wrap_payload_for_isolation(payload: Any) -> Any:
+    if not is_dataclass(payload):
+        return payload
+    updates = {}
+    for item in fields(payload):
+        value = getattr(payload, item.name)
+        updates[item.name] = CopyOnWriteDict(value) if isinstance(value, dict) else value
+    return type(payload)(**updates)
+
+
+def apply_policy(
+    original: Any,
+    modified: Any,
+    policy: HookPayloadPolicy,
+    *,
+    apply_to: Any | None = None,
+) -> Any | None:
+    target = apply_to if apply_to is not None else original
+    updates = {}
+    for item in fields(modified):
+        old_value = getattr(original, item.name)
+        new_value = getattr(modified, item.name)
+        if new_value == old_value:
+            continue
+        if item.name in policy.writable_fields:
+            updates[item.name] = new_value
+    if not updates:
+        return None
+    values = {item.name: getattr(target, item.name) for item in fields(target)}
+    values.update(updates)
+    return type(target)(**values)
 
 
 class PromptHookType(str, Enum):

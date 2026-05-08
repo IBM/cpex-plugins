@@ -1,6 +1,6 @@
 description: "Rust-backed PII detection and masking for prompt arguments, tool inputs, and tool outputs"
 author: "ContextForge Contributors"
-version: "0.3.1"
+version: "0.3.2"
 kind: "cpex_pii_filter.pii_filter.PIIFilterPlugin"
 available_hooks:
   - "prompt_pre_fetch"
