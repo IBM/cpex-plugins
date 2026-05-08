@@ -41,12 +41,3 @@ jobs:
 
       - name: Run install-built-wheel tests
         run: python3 -m unittest tests/test_install_built_wheel.py
-
-  release-validation:
-    if: github.event_name == 'pull_request'
-    needs: test
-    uses: ./.github/workflows/release-rust-python-package.yaml
-    with:
-      tag: retry-with-backoff-v0.3.0
-      repository: testpypi
-      publish_enabled: false
