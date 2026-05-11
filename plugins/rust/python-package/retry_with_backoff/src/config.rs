@@ -98,7 +98,7 @@ impl RetryConfig {
             .and_then(|v| {
                 v.cast::<PyDict>()
                     .ok()
-                    .and_then(|d| parse_tool_overrides(&d).ok())
+                    .and_then(|d| parse_tool_overrides(d).ok())
             })
             .unwrap_or_default();
 

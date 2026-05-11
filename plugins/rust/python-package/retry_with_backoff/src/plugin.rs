@@ -116,7 +116,9 @@ impl RetryWithBackoffPluginCore {
         self.evict_stale(&mut state_map);
 
         let key = format!("{}:{}", tool_name, request_id);
-        let state = state_map.entry(key.clone()).or_insert_with(ToolRetryState::new);
+        let state = state_map
+            .entry(key.clone())
+            .or_insert_with(ToolRetryState::new);
 
         state.consecutive_failures += 1;
         state.last_failure_at = monotonic_secs();
@@ -196,75 +198,65 @@ impl RetryWithBackoffPluginCore {
         let retry_status_set = config.retry_on_status_set();
 
         // Check isError flag
-        if let Some(is_error) = result_dict.get_item("isError")? {
-            if is_error.extract::<bool>().unwrap_or(false) {
-                // Check structured content for status_code
-                if let Some(structured) = result_dict.get_item("structuredContent")? {
-                    if let Ok(structured_dict) = structured.cast::<PyDict>() {
-                        if let Some(status) = structured_dict.get_item("status_code")? {
-                            if let Ok(status_code) = status.extract::<i32>() {
-                                return Ok(retry_status_set.contains(&status_code));
-                            }
-                        }
-                    }
-                }
+        if let Some(is_error) = result_dict.get_item("isError")?
+            && is_error.extract::<bool>().unwrap_or(false)
+        {
+            // Check structured content for status_code
+            if let Some(structured) = result_dict.get_item("structuredContent")?
+                && let Ok(structured_dict) = structured.cast::<PyDict>()
+                && let Some(status) = structured_dict.get_item("status_code")?
+                && let Ok(status_code) = status.extract::<i32>()
+            {
+                return Ok(retry_status_set.contains(&status_code));
+            }
+            return Ok(true);
+        }
+
+        // Check structuredContent
+        if let Some(structured) = result_dict.get_item("structuredContent")?
+            && let Ok(structured_dict) = structured.cast::<PyDict>()
+        {
+            if let Some(is_error) = structured_dict.get_item("isError")?
+                && is_error.extract::<bool>().unwrap_or(false)
+            {
+                return Ok(true);
+            }
+            if let Some(status) = structured_dict.get_item("status_code")?
+                && let Ok(status_code) = status.extract::<i32>()
+                && retry_status_set.contains(&status_code)
+            {
                 return Ok(true);
             }
         }
 
-        // Check structuredContent
-        if let Some(structured) = result_dict.get_item("structuredContent")? {
-            if let Ok(structured_dict) = structured.cast::<PyDict>() {
-                if let Some(is_error) = structured_dict.get_item("isError")? {
-                    if is_error.extract::<bool>().unwrap_or(false) {
-                        return Ok(true);
+        // Check text content if enabled
+        if config.check_text_content
+            && let Some(content) = result_dict.get_item("content")?
+            && let Ok(content_list) = content.cast::<PyList>()
+        {
+            for item in content_list.iter() {
+                if let Ok(item_dict) = item.cast::<PyDict>() {
+                    // Check if type is "text"
+                    if let Some(item_type) = item_dict.get_item("type")?
+                        && item_type.extract::<String>().ok() != Some("text".to_string())
+                    {
+                        continue;
                     }
-                }
-                if let Some(status) = structured_dict.get_item("status_code")? {
-                    if let Ok(status_code) = status.extract::<i32>() {
-                        if retry_status_set.contains(&status_code) {
+                    // Try to parse text as JSON
+                    if let Some(text) = item_dict.get_item("text")?
+                        && let Ok(text_str) = text.extract::<String>()
+                        && let Ok(parsed) = serde_json::from_str::<Value>(&text_str)
+                        && let Some(obj) = parsed.as_object()
+                    {
+                        // Check isError in parsed JSON
+                        if obj.get("isError").and_then(|v| v.as_bool()) == Some(true) {
                             return Ok(true);
                         }
-                    }
-                }
-            }
-        }
-
-        // Check text content if enabled
-        if config.check_text_content {
-            if let Some(content) = result_dict.get_item("content")? {
-                if let Ok(content_list) = content.cast::<PyList>() {
-                    for item in content_list.iter() {
-                        if let Ok(item_dict) = item.cast::<PyDict>() {
-                            // Check if type is "text"
-                            if let Some(item_type) = item_dict.get_item("type")? {
-                                if item_type.extract::<String>().ok() != Some("text".to_string()) {
-                                    continue;
-                                }
-                            }
-                            // Try to parse text as JSON
-                            if let Some(text) = item_dict.get_item("text")? {
-                                if let Ok(text_str) = text.extract::<String>() {
-                                    if let Ok(parsed) = serde_json::from_str::<Value>(&text_str) {
-                                        if let Some(obj) = parsed.as_object() {
-                                            // Check isError in parsed JSON
-                                            if obj.get("isError").and_then(|v| v.as_bool())
-                                                == Some(true)
-                                            {
-                                                return Ok(true);
-                                            }
-                                            // Check status_code in parsed JSON
-                                            if let Some(status) =
-                                                obj.get("status_code").and_then(|v| v.as_i64())
-                                            {
-                                                if retry_status_set.contains(&(status as i32)) {
-                                                    return Ok(true);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                        // Check status_code in parsed JSON
+                        if let Some(status) = obj.get("status_code").and_then(|v| v.as_i64())
+                            && retry_status_set.contains(&(status as i32))
+                        {
+                            return Ok(true);
                         }
                     }
                 }
