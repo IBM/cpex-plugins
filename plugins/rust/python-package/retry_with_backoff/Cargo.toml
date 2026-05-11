@@ -16,7 +16,7 @@ name = "stub_gen"
 path = "src/bin/stub_gen.rs"
 
 [dependencies]
-cpex_framework_bridge = { path = "../../../../crates/framework_bridge" }
+cpex_framework_bridge = { workspace = true }
 log.workspace = true
 mutants = "0"
 pyo3.workspace = true
