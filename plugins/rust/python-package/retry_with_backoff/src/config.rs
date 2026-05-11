@@ -329,4 +329,39 @@ mod tests {
         assert!(status_set.contains(&503));
         assert!(!status_set.contains(&404));
     }
+
+    #[test]
+    fn test_config_validation_max_retries_at_limit_is_valid() {
+        // max_retries = 10 is valid; > 10 is invalid.
+        // Kills mutant: `replace > with >=` on the max_retries validation check.
+        let config = RetryConfig {
+            max_retries: 10,
+            backoff_base_ms: 200,
+            max_backoff_ms: 5000,
+            retry_on_status: vec![500],
+            jitter: true,
+            check_text_content: false,
+            tool_overrides: HashMap::new(),
+        };
+        assert!(config.validate().is_ok(), "max_retries = 10 must be valid");
+    }
+
+    #[test]
+    fn test_config_validation_max_backoff_equals_base_is_valid() {
+        // max_backoff_ms == backoff_base_ms is valid; max_backoff_ms < backoff_base_ms is invalid.
+        // Kills mutant: `replace < with <=` on the max_backoff_ms validation check.
+        let config = RetryConfig {
+            max_retries: 2,
+            backoff_base_ms: 200,
+            max_backoff_ms: 200,
+            retry_on_status: vec![500],
+            jitter: true,
+            check_text_content: false,
+            tool_overrides: HashMap::new(),
+        };
+        assert!(
+            config.validate().is_ok(),
+            "max_backoff_ms == backoff_base_ms must be valid"
+        );
+    }
 }

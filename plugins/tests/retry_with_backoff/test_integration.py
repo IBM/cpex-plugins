@@ -11,11 +11,11 @@ import pytest
 
 from cpex_retry_with_backoff.retry_with_backoff import RetryWithBackoffPlugin
 from cpex_retry_with_backoff.retry_with_backoff_rust import RetryStateManager
-from mcpgateway.common.models import ResourceContent
-from mcpgateway.plugins.framework import (
+from cpex.framework import (
     GlobalContext,
     PluginConfig,
     PluginContext,
+    ResourceContent,
     ResourcePostFetchPayload,
     ToolPostInvokePayload,
 )
@@ -207,3 +207,88 @@ class TestRetryPolicyMetadata:
             "max_backoff_ms": 3000,
             "retry_on_status": [503],
         }
+
+
+class TestIsFailureStructuredContent:
+    """Cover structuredContent and check_text_content branches in Rust is_failure()."""
+
+    @pytest.mark.asyncio
+    async def test_structured_content_is_error_triggers_retry(self):
+        plugin = make_plugin()
+        ctx = make_context()
+        result = await plugin.tool_post_invoke(
+            make_payload("t", {"structuredContent": {"isError": True}}), ctx
+        )
+        assert result.retry_delay_ms > 0
+
+    @pytest.mark.asyncio
+    async def test_structured_content_retryable_status_code_triggers_retry(self):
+        plugin = make_plugin()
+        ctx = make_context()
+        result = await plugin.tool_post_invoke(
+            make_payload("t", {"structuredContent": {"status_code": 500}}), ctx
+        )
+        assert result.retry_delay_ms > 0
+
+    @pytest.mark.asyncio
+    async def test_structured_content_non_retryable_status_code_no_retry(self):
+        plugin = make_plugin()
+        ctx = make_context()
+        result = await plugin.tool_post_invoke(
+            make_payload("t", {"structuredContent": {"status_code": 400}}), ctx
+        )
+        assert result.retry_delay_ms == 0
+
+    @pytest.mark.asyncio
+    async def test_is_error_with_retryable_status_in_structured_content_triggers_retry(self):
+        plugin = make_plugin()
+        ctx = make_context()
+        result = await plugin.tool_post_invoke(
+            make_payload("t", {"isError": True, "structuredContent": {"status_code": 500}}), ctx
+        )
+        assert result.retry_delay_ms > 0
+
+    @pytest.mark.asyncio
+    async def test_is_error_with_non_retryable_status_in_structured_content_no_retry(self):
+        plugin = make_plugin()
+        ctx = make_context()
+        result = await plugin.tool_post_invoke(
+            make_payload("t", {"isError": True, "structuredContent": {"status_code": 400}}), ctx
+        )
+        assert result.retry_delay_ms == 0
+
+    @pytest.mark.asyncio
+    async def test_check_text_content_is_error_in_json_triggers_retry(self):
+        plugin = make_plugin({"check_text_content": True})
+        ctx = make_context()
+        result = await plugin.tool_post_invoke(
+            make_payload("t", {"content": [{"type": "text", "text": '{"isError": true}'}]}), ctx
+        )
+        assert result.retry_delay_ms > 0
+
+    @pytest.mark.asyncio
+    async def test_check_text_content_retryable_status_in_json_triggers_retry(self):
+        plugin = make_plugin({"check_text_content": True})
+        ctx = make_context()
+        result = await plugin.tool_post_invoke(
+            make_payload("t", {"content": [{"type": "text", "text": '{"status_code": 500}'}]}), ctx
+        )
+        assert result.retry_delay_ms > 0
+
+    @pytest.mark.asyncio
+    async def test_check_text_content_non_text_type_is_skipped(self):
+        plugin = make_plugin({"check_text_content": True})
+        ctx = make_context()
+        result = await plugin.tool_post_invoke(
+            make_payload("t", {"content": [{"type": "image", "text": '{"isError": true}'}]}), ctx
+        )
+        assert result.retry_delay_ms == 0
+
+    @pytest.mark.asyncio
+    async def test_check_text_content_disabled_ignores_content_array(self):
+        plugin = make_plugin({"check_text_content": False})
+        ctx = make_context()
+        result = await plugin.tool_post_invoke(
+            make_payload("t", {"content": [{"type": "text", "text": '{"isError": true}'}]}), ctx
+        )
+        assert result.retry_delay_ms == 0
