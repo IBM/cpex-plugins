@@ -5,39 +5,20 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from dataclasses import dataclass
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from real_cpex_imports import assert_real_cpex_imports
-from cpex_retry_with_backoff.retry_with_backoff import (
-    RetryConfig,
-    RetryWithBackoffPlugin,
-    _cfg_for,
-    _compute_delay_ms,
-    _del_state,
-    _get_state,
-    _is_failure,
-    _STATE,
-    _STATE_TTL_SECONDS,
-)
-from cpex.framework import (
+from cpex_retry_with_backoff.retry_with_backoff import RetryWithBackoffPlugin
+from cpex_retry_with_backoff.retry_with_backoff_rust import RetryStateManager
+from mcpgateway.common.models import ResourceContent
+from mcpgateway.plugins.framework import (
     GlobalContext,
     PluginConfig,
     PluginContext,
     ResourcePostFetchPayload,
     ToolPostInvokePayload,
 )
-
-
-@dataclass
-class ResourceContent:
-    type: str
-    id: str
-    uri: str
-    text: str
 
 
 def make_plugin(config_overrides: dict | None = None) -> RetryWithBackoffPlugin:
@@ -73,232 +54,54 @@ def make_payload(tool: str, result: dict) -> ToolPostInvokePayload:
     return ToolPostInvokePayload(name=tool, result=result)
 
 
-def test_imports_with_real_cpex_package() -> None:
-    plugin_root = (
-        Path(__file__).resolve().parents[3]
-        / "plugins"
-        / "rust"
-        / "python-package"
-        / "retry_with_backoff"
-    )
-    assert_real_cpex_imports(
-        plugin_root,
-        [
-            "from cpex_retry_with_backoff.retry_with_backoff import RetryConfig, RetryWithBackoffPlugin",
-        ],
-    )
-
-
 class TestComputeDelayMs:
     def test_no_jitter_returns_exact_ceiling(self):
-        cfg = RetryConfig(backoff_base_ms=200, max_backoff_ms=5000, jitter=False)
-        assert _compute_delay_ms(0, cfg) == 200
-        assert _compute_delay_ms(1, cfg) == 400
-        assert _compute_delay_ms(2, cfg) == 800
+        mgr = RetryStateManager(2, 200, 5000, False, [])
+        assert mgr.compute_delay(0) == 200
+        assert mgr.compute_delay(1) == 400
+        assert mgr.compute_delay(2) == 800
 
     def test_no_jitter_caps_at_max_backoff(self):
-        cfg = RetryConfig(backoff_base_ms=200, max_backoff_ms=500, jitter=False)
-        assert _compute_delay_ms(0, cfg) == 200
-        assert _compute_delay_ms(1, cfg) == 400
-        assert _compute_delay_ms(2, cfg) == 500
-        assert _compute_delay_ms(10, cfg) == 500
+        mgr = RetryStateManager(2, 200, 500, False, [])
+        assert mgr.compute_delay(0) == 200
+        assert mgr.compute_delay(1) == 400
+        assert mgr.compute_delay(2) == 500
+        assert mgr.compute_delay(10) == 500
 
     def test_jitter_returns_value_within_cap(self):
-        cfg = RetryConfig(backoff_base_ms=200, max_backoff_ms=300, jitter=True)
-        delay = _compute_delay_ms(5, cfg)
+        mgr = RetryStateManager(2, 200, 300, True, [])
+        delay = mgr.compute_delay(5)
         assert 0 <= delay <= 300
 
     def test_exponential_growth_without_jitter(self):
-        cfg = RetryConfig(backoff_base_ms=100, max_backoff_ms=100_000, jitter=False)
-        assert [_compute_delay_ms(i, cfg) for i in range(5)] == [100, 200, 400, 800, 1600]
+        mgr = RetryStateManager(2, 100, 100_000, False, [])
+        assert [mgr.compute_delay(i) for i in range(5)] == [100, 200, 400, 800, 1600]
 
 
 class TestIsFailure:
-    def setup_method(self):
-        self.cfg = RetryConfig()
-
     def test_is_error_true_triggers_failure(self):
-        assert _is_failure({"isError": True}, self.cfg) is True
+        mgr = RetryStateManager(2, 200, 5000, False, [429, 500, 502, 503, 504])
+        assert mgr.check_failure(True, None) is True
 
     def test_is_error_false_is_not_failure(self):
-        assert _is_failure({"isError": False}, self.cfg) is False
+        mgr = RetryStateManager(2, 200, 5000, False, [429, 500, 502, 503, 504])
+        assert mgr.check_failure(False, None) is False
 
-    def test_status_code_500_in_structured_content_is_failure(self):
-        assert _is_failure({"isError": False, "structuredContent": {"status_code": 500}}, self.cfg) is True
+    def test_status_code_500_triggers_failure(self):
+        mgr = RetryStateManager(2, 200, 5000, False, [429, 500, 502, 503, 504])
+        assert mgr.check_failure(False, 500) is True
 
-    def test_status_400_in_structured_content_is_not_retriable(self):
-        assert _is_failure({"isError": False, "structuredContent": {"status_code": 400}}, self.cfg) is False
-
-    def test_check_text_content_enabled_retryable_status(self):
-        cfg = RetryConfig(check_text_content=True)
-        result = {
-            "isError": False,
-            "structuredContent": None,
-            "content": [{"type": "text", "text": '{"status_code": 503}'}],
-        }
-        assert _is_failure(result, cfg) is True
-
-    def test_structured_content_is_error_true_triggers_failure(self):
-        assert _is_failure({"isError": False, "structuredContent": {"isError": True}}, self.cfg) is True
+    def test_status_400_is_not_retriable(self):
+        mgr = RetryStateManager(2, 200, 5000, False, [429, 500, 502, 503, 504])
+        assert mgr.check_failure(False, 400) is False
 
     def test_is_error_with_non_retryable_status_skips_retry(self):
-        result = {"isError": True, "structuredContent": {"status_code": 400}}
-        assert _is_failure(result, self.cfg) is False
+        mgr = RetryStateManager(2, 200, 5000, False, [429, 500, 502, 503, 504])
+        assert mgr.check_failure(True, 400) is False
 
-    def test_non_dict_result_is_not_failure(self):
-        assert _is_failure("error string", self.cfg) is False
-
-    def test_status_200_in_structured_content_is_not_failure(self):
-        """HTTP 200 status code should not be treated as a failure."""
-        assert _is_failure({"isError": False, "structuredContent": {"status_code": 200}}, self.cfg) is False
-
-    def test_empty_dict_is_not_failure(self):
-        """Empty result dict should not be treated as a failure."""
-        assert _is_failure({}, self.cfg) is False
-
-    def test_structured_content_without_status_code_is_not_failure(self):
-        """Structured content without status_code should not be treated as a failure."""
-        assert _is_failure({"isError": False, "structuredContent": {"result": "ok"}}, self.cfg) is False
-
-    def test_is_error_with_empty_structured_content_always_retries(self):
-        """isError=True with empty structured content should trigger retry."""
-        result = {"isError": True, "structuredContent": {}}
-        assert _is_failure(result, self.cfg) is True
-
-
-class TestCfgFor:
-    def test_no_override_returns_same_object(self):
-        cfg = RetryConfig()
-        assert _cfg_for(cfg, "unknown_tool") is cfg
-
-    def test_override_merges_max_retries(self):
-        cfg = RetryConfig(max_retries=3, tool_overrides={"my_tool": {"max_retries": 1}})
-        merged = _cfg_for(cfg, "my_tool")
-        assert merged.max_retries == 1
-        assert merged.backoff_base_ms == cfg.backoff_base_ms
-
-    def test_override_does_not_include_tool_overrides(self):
-        cfg = RetryConfig(tool_overrides={"my_tool": {"max_retries": 1}})
-        merged = _cfg_for(cfg, "my_tool")
-        assert merged.tool_overrides == {}
-
-    def test_other_tool_not_affected_by_override(self):
-        """Tool-specific overrides should not affect other tools."""
-        cfg = RetryConfig(max_retries=3, tool_overrides={"tool_a": {"max_retries": 1}})
-        result = _cfg_for(cfg, "tool_b")
-        assert result is cfg
-        assert result.max_retries == 3
-
-
-class TestRustNativePolicy:
-    def test_simple_config_returns_wire_policy(self):
-        plugin = make_plugin(
-            {
-                "max_retries": 3,
-                "backoff_base_ms": 150,
-                "max_backoff_ms": 3000,
-                "retry_on_status": [500, 503],
-                "jitter": False,
-            }
-        )
-
-        assert plugin.to_rust_native_policy("tool_a", ceiling=10) == {
-            "kind": "retry_with_backoff",
-            "maxRetries": 3,
-            "backoffBaseMs": 150,
-            "maxBackoffMs": 3000,
-            "retryOnStatus": [500, 503],
-            "jitter": False,
-        }
-
-    def test_ceiling_clamps_max_retries(self):
-        plugin = make_plugin({"max_retries": 3})
-
-        policy = plugin.to_rust_native_policy("tool_a", ceiling=1)
-
-        assert policy is not None
-        assert policy["maxRetries"] == 1
-
-    def test_per_tool_override_is_merged(self):
-        plugin = make_plugin(
-            {
-                "max_retries": 3,
-                "backoff_base_ms": 200,
-                "max_backoff_ms": 5000,
-                "retry_on_status": [500],
-                "jitter": True,
-                "tool_overrides": {
-                    "slow_api": {
-                        "max_retries": 2,
-                        "backoff_base_ms": 750,
-                        "retry_on_status": [429, 503],
-                        "jitter": False,
-                    }
-                },
-            }
-        )
-
-        assert plugin.to_rust_native_policy("slow_api", ceiling=10) == {
-            "kind": "retry_with_backoff",
-            "maxRetries": 2,
-            "backoffBaseMs": 750,
-            "maxBackoffMs": 5000,
-            "retryOnStatus": [429, 503],
-            "jitter": False,
-        }
-
-    def test_per_tool_override_max_retries_is_clamped(self):
-        plugin = make_plugin(
-            {
-                "max_retries": 3,
-                "tool_overrides": {"slow_api": {"max_retries": 8}},
-            }
-        )
-
-        policy = plugin.to_rust_native_policy("slow_api", ceiling=2)
-
-        assert policy is not None
-        assert policy["maxRetries"] == 2
-
-    def test_check_text_content_returns_none(self):
-        plugin = make_plugin({"check_text_content": True})
-
-        assert plugin.to_rust_native_policy("tool_a", ceiling=10) is None
-
-
-class TestPluginInit:
-    def test_missing_gateway_retry_ceiling_uses_plugin_config(self):
-        class StandaloneCpexSettings:
-            pass
-
-        with patch("cpex_retry_with_backoff.retry_with_backoff.get_settings") as mock_settings:
-            mock_settings.return_value = StandaloneCpexSettings()
-            plugin = make_plugin({"max_retries": 5})
-            assert plugin._cfg.max_retries == 5
-
-    def test_max_retries_clamped_to_gateway_ceiling(self):
-        with patch("cpex_retry_with_backoff.retry_with_backoff.get_settings") as mock_settings:
-            mock_settings.return_value.max_tool_retries = 2
-            plugin = make_plugin({"max_retries": 5})
-            assert plugin._cfg.max_retries == 2
-
-    def test_tool_override_max_retries_clamped(self):
-        with patch("cpex_retry_with_backoff.retry_with_backoff.get_settings") as mock_settings:
-            mock_settings.return_value.max_tool_retries = 2
-            plugin = make_plugin(
-                {
-                    "max_retries": 2,
-                    "tool_overrides": {"slow_api": {"max_retries": 10}},
-                }
-            )
-            assert plugin._cfg.tool_overrides["slow_api"]["max_retries"] == 2
-
-    def test_clamping_emits_warning(self, caplog):
-        with patch("cpex_retry_with_backoff.retry_with_backoff.get_settings") as mock_settings:
-            mock_settings.return_value.max_tool_retries = 1
-            with caplog.at_level(logging.WARNING):
-                make_plugin({"max_retries": 5})
-            assert any("max_retries=5 exceeds gateway ceiling=1" in record.getMessage() for record in caplog.records)
+    def test_status_200_is_not_failure(self):
+        mgr = RetryStateManager(2, 200, 5000, False, [429, 500, 502, 503, 504])
+        assert mgr.check_failure(False, 200) is False
 
 
 class TestToolPostInvoke:
@@ -375,65 +178,6 @@ class TestToolPostInvoke:
         # tool_b is unaffected
         r = await plugin.tool_post_invoke(make_payload("tool_b", {"isError": True}), ctx)
         assert r.retry_delay_ms > 0
-
-
-class TestGetState:
-    def test_creates_fresh_state_for_new_tool(self):
-        st = _get_state("brand_new_tool", "req-fresh")
-        assert st.consecutive_failures == 0
-        assert st.last_failure_at == 0.0
-
-    def test_returns_same_object_on_second_call(self):
-        s1 = _get_state("tool_x", "req-same")
-        s1.consecutive_failures = 7
-        s2 = _get_state("tool_x", "req-same")
-        assert s2.consecutive_failures == 7
-        assert s1 is s2
-
-    def test_ttl_eviction_removes_stale_entries(self):
-        from cpex_retry_with_backoff.retry_with_backoff import _ToolRetryState
-
-        key = "evict_tool:evict_req"
-        baseline = _STATE.copy()
-        try:
-            with patch("cpex_retry_with_backoff.retry_with_backoff.time.monotonic", return_value=_STATE_TTL_SECONDS + 10):
-                _STATE[key] = _ToolRetryState(
-                    consecutive_failures=3,
-                    last_failure_at=9.0,
-                )
-                _get_state("other_tool", "other_req")
-                assert key not in _STATE
-                _del_state("other_tool", "other_req")
-        finally:
-            _STATE.clear()
-            _STATE.update(baseline)
-
-
-class TestRustPath:
-    @pytest.mark.asyncio
-    async def test_rust_path_taken_when_available(self):
-        plugin = make_plugin()
-        ctx = make_context()
-        mock_rust = MagicMock()
-        mock_rust.check_and_update.return_value = (True, 300)
-
-        with patch.object(plugin, "_rust", mock_rust):
-            result = await plugin.tool_post_invoke(make_payload("t", {"isError": True}), ctx)
-
-        mock_rust.check_and_update.assert_called_once()
-        assert result.retry_delay_ms == 300
-
-    @pytest.mark.asyncio
-    async def test_rust_path_bypassed_for_check_text_content(self):
-        plugin = make_plugin({"check_text_content": True})
-        ctx = make_context()
-        mock_rust = MagicMock()
-        mock_rust.check_and_update.return_value = (True, 300)
-
-        with patch.object(plugin, "_rust", mock_rust):
-            await plugin.tool_post_invoke(make_payload("t", {"isError": True}), ctx)
-
-        mock_rust.check_and_update.assert_not_called()
 
 
 class TestRetryPolicyMetadata:

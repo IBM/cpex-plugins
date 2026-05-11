@@ -1,6 +1,9 @@
 // Copyright 2026
 // SPDX-License-Identifier: Apache-2.0
 
+pub mod config;
+pub mod plugin;
+
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
@@ -202,6 +205,7 @@ impl RetryStateManager {
 fn retry_with_backoff_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     pyo3_log::init();
     m.add_class::<RetryStateManager>()?;
+    m.add_class::<plugin::RetryWithBackoffPluginCore>()?;
     Ok(())
 }
 
