@@ -11,7 +11,7 @@ mod cycle_rewrite;
 mod python_scan;
 mod text_scan;
 
-pub use python_scan::scan_container;
+pub use python_scan::{scan_container, scan_container_findings};
 pub use text_scan::detect_and_redact;
 
 #[cfg(test)]

@@ -50,6 +50,59 @@ class TestPluginHooks:
         assert result.violation.code == "SECRETS_DETECTED"
         assert result.modified_payload == payload
 
+    async def test_tool_pre_invoke_redacts_arguments_without_blocking(self, plugin):
+        payload = ToolPreInvokePayload(
+            name="echo",
+            args={"message": "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"},
+        )
+
+        result = await plugin.tool_pre_invoke(payload, make_context())
+
+        assert result.continue_processing is True
+        assert result.violation is None
+        assert result.modified_payload is not None
+        assert result.modified_payload is not payload
+        assert (
+            result.modified_payload.args["message"]
+            == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        )
+        assert payload.args["message"] == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+        assert result.metadata == {"secrets_redacted": True, "count": 1}
+
+    async def test_tool_pre_invoke_blocks_without_redaction(self):
+        plugin = SecretsDetectionPlugin(make_config(block_on_detection=True, redact=False))
+        payload = ToolPreInvokePayload(
+            name="echo",
+            args={"message": "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"},
+        )
+
+        result = await plugin.tool_pre_invoke(payload, make_context())
+
+        assert result.continue_processing is False
+        assert result.violation is not None
+        assert result.violation.code == "SECRETS_DETECTED"
+        assert result.violation.description == (
+            "Potential secrets detected in tool arguments"
+        )
+        assert result.modified_payload == payload
+
+    async def test_tool_pre_invoke_blocks_with_redaction_without_leaking_secret(self):
+        plugin = SecretsDetectionPlugin(make_config(block_on_detection=True, redact=True))
+        payload = ToolPreInvokePayload(
+            name="echo",
+            args={"message": "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"},
+        )
+
+        result = await plugin.tool_pre_invoke(payload, make_context())
+
+        assert result.continue_processing is False
+        assert result.violation is not None
+        assert result.violation.code == "SECRETS_DETECTED"
+        assert result.modified_payload is not None
+        assert result.modified_payload is not payload
+        assert result.modified_payload.args["message"] == "AWS_ACCESS_KEY_ID=[REDACTED]"
+        assert payload.args["message"] == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+
     async def test_prompt_pre_fetch_blocks_with_redaction_without_leaking_secret(self):
         plugin = SecretsDetectionPlugin(make_config(block_on_detection=True, redact=True))
         payload = PromptPrehookPayload(

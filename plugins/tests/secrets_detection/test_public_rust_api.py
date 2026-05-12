@@ -35,6 +35,17 @@ class TestPublicRustApi:
         assert redacted == payload
         assert isinstance(redacted, tuple)
 
+    def test_scan_container_returns_original_clean_nested_containers(self):
+        payload = {"outer": ["safe", {"nested": "value"}]}
+
+        count, redacted, findings = py_scan_container(
+            payload, {"redact": True, "redaction_text": "[REDACTED]"}
+        )
+
+        assert count == 0
+        assert findings == []
+        assert redacted is payload
+
     def test_scan_container_handles_split_concerns_through_public_api(self):
         class Wrapper:
             def __init__(self, value, back=None):

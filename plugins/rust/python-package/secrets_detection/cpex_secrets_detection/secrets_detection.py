@@ -20,6 +20,9 @@ class SecretsDetectionPlugin(Plugin):
     async def prompt_pre_fetch(self, payload, context):
         return self._core.prompt_pre_fetch(payload, context)
 
+    async def tool_pre_invoke(self, payload, context):
+        return self._core.tool_pre_invoke(payload, context)
+
     async def tool_post_invoke(self, payload, context):
         return self._core.tool_post_invoke(payload, context)
 

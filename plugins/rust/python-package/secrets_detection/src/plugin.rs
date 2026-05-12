@@ -8,7 +8,7 @@ use pyo3_stub_gen::derive::*;
 
 use crate::config::SecretsDetectionConfig;
 use crate::object_model::copy_object_with_updates;
-use crate::scanner::scan_container;
+use crate::scanner::{scan_container, scan_container_findings};
 
 #[gen_stub_pyclass]
 #[pyclass]
@@ -32,54 +32,28 @@ impl SecretsDetectionPluginCore {
         payload: &Bound<'_, PyAny>,
         _context: &Bound<'_, PyAny>,
     ) -> PyResult<Py<PyAny>> {
-        let args = payload.getattr("args")?;
-        let (count, redacted_args, findings) = scan_container(py, &args, &self.config)?;
-        if self.should_block(count) {
-            let modified_payload = if self.config.redact && count > 0 {
-                copy_with_update(py, payload, [("args", redacted_args.clone().unbind())])?
-            } else {
-                payload.clone().unbind()
-            };
-            return blocked_result(
-                py,
-                "PromptPrehookResult",
-                "Potential secrets detected in prompt arguments",
-                count,
-                findings.as_any(),
-                modified_payload,
-            );
-        }
+        self.scan_payload_attr(
+            py,
+            payload,
+            "args",
+            "PromptPrehookResult",
+            "Potential secrets detected in prompt arguments",
+        )
+    }
 
-        if self.config.redact && count > 0 {
-            let modified_payload =
-                copy_with_update(py, payload, [("args", redacted_args.unbind())])?;
-            return build_framework_object(
-                py,
-                "PromptPrehookResult",
-                [
-                    ("modified_payload", modified_payload),
-                    (
-                        "metadata",
-                        redaction_metadata(py, count)?.into_any().unbind(),
-                    ),
-                ],
-            );
-        }
-
-        if count > 0 {
-            return build_framework_object(
-                py,
-                "PromptPrehookResult",
-                [(
-                    "metadata",
-                    findings_metadata(py, count, findings.as_any())?
-                        .into_any()
-                        .unbind(),
-                )],
-            );
-        }
-
-        default_result(py, "PromptPrehookResult")
+    pub fn tool_pre_invoke(
+        &self,
+        py: Python<'_>,
+        payload: &Bound<'_, PyAny>,
+        _context: &Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        self.scan_payload_attr(
+            py,
+            payload,
+            "args",
+            "ToolPreInvokeResult",
+            "Potential secrets detected in tool arguments",
+        )
     }
 
     pub fn tool_post_invoke(
@@ -88,54 +62,13 @@ impl SecretsDetectionPluginCore {
         payload: &Bound<'_, PyAny>,
         _context: &Bound<'_, PyAny>,
     ) -> PyResult<Py<PyAny>> {
-        let value = payload.getattr("result")?;
-        let (count, redacted_result, findings) = scan_container(py, &value, &self.config)?;
-        if self.should_block(count) {
-            let modified_payload = if self.config.redact && count > 0 {
-                copy_with_update(py, payload, [("result", redacted_result.clone().unbind())])?
-            } else {
-                payload.clone().unbind()
-            };
-            return blocked_result(
-                py,
-                "ToolPostInvokeResult",
-                "Potential secrets detected in tool result",
-                count,
-                findings.as_any(),
-                modified_payload,
-            );
-        }
-
-        if self.config.redact && count > 0 {
-            let modified_payload =
-                copy_with_update(py, payload, [("result", redacted_result.unbind())])?;
-            return build_framework_object(
-                py,
-                "ToolPostInvokeResult",
-                [
-                    ("modified_payload", modified_payload),
-                    (
-                        "metadata",
-                        redaction_metadata(py, count)?.into_any().unbind(),
-                    ),
-                ],
-            );
-        }
-
-        if count > 0 {
-            return build_framework_object(
-                py,
-                "ToolPostInvokeResult",
-                [(
-                    "metadata",
-                    findings_metadata(py, count, findings.as_any())?
-                        .into_any()
-                        .unbind(),
-                )],
-            );
-        }
-
-        default_result(py, "ToolPostInvokeResult")
+        self.scan_payload_attr(
+            py,
+            payload,
+            "result",
+            "ToolPostInvokeResult",
+            "Potential secrets detected in tool result",
+        )
     }
 
     pub fn resource_post_fetch(
@@ -204,6 +137,75 @@ impl SecretsDetectionPluginCore {
 impl SecretsDetectionPluginCore {
     fn should_block(&self, count: usize) -> bool {
         self.config.block_on_detection && count >= self.config.min_findings_to_block
+    }
+
+    fn scan_payload_attr(
+        &self,
+        py: Python<'_>,
+        payload: &Bound<'_, PyAny>,
+        attr: &str,
+        result_class: &str,
+        block_description: &str,
+    ) -> PyResult<Py<PyAny>> {
+        let value = payload.getattr(attr)?;
+        let (mut count, mut findings) = scan_container_findings(py, &value, &self.config)?;
+        let redacted_value = if self.config.redact && count > 0 {
+            let (redacted_count, redacted, redacted_findings) =
+                scan_container(py, &value, &self.config)?;
+            count = redacted_count;
+            findings = redacted_findings;
+            Some(redacted)
+        } else {
+            None
+        };
+
+        if self.should_block(count) {
+            let modified_payload = if self.config.redact && count > 0 {
+                let redacted = redacted_value.expect("redacted value exists");
+                copy_with_update(py, payload, [(attr, redacted.unbind())])?
+            } else {
+                payload.clone().unbind()
+            };
+            return blocked_result(
+                py,
+                result_class,
+                block_description,
+                count,
+                findings.as_any(),
+                modified_payload,
+            );
+        }
+
+        if self.config.redact && count > 0 {
+            let redacted = redacted_value.expect("redacted value exists");
+            let modified_payload = copy_with_update(py, payload, [(attr, redacted.unbind())])?;
+            return build_framework_object(
+                py,
+                result_class,
+                [
+                    ("modified_payload", modified_payload),
+                    (
+                        "metadata",
+                        redaction_metadata(py, count)?.into_any().unbind(),
+                    ),
+                ],
+            );
+        }
+
+        if count > 0 {
+            return build_framework_object(
+                py,
+                result_class,
+                [(
+                    "metadata",
+                    findings_metadata(py, count, findings.as_any())?
+                        .into_any()
+                        .unbind(),
+                )],
+            );
+        }
+
+        default_result(py, result_class)
     }
 }
 
