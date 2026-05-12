@@ -139,91 +139,10 @@ fn scan_findings_inner<'py>(
             has_rebuild_state,
         )?
     {
-        let count = if let Some(serialized_object_state) = target.object_state {
-            append_findings(
-                &findings,
-                scan_object_findings(
-                    py,
-                    &target.state,
-                    serialized_object_state,
-                    config,
-                    str_type,
-                    seen,
-                )?,
-            )?
-        } else {
-            append_findings(
-                &findings,
-                scan_findings_inner(py, &target.state, config, str_type, seen)?,
-            )?
-        };
-        total += count;
-    }
-
-    seen.remove(&object_id);
-    Ok((total, findings))
-}
-
-fn scan_object_findings<'py>(
-    py: Python<'py>,
-    container: &Bound<'py, PyAny>,
-    object_state: InspectedObjectState<'py>,
-    config: &SecretsDetectionConfig,
-    str_type: &Bound<'py, PyAny>,
-    seen: &mut HashSet<usize>,
-) -> PyResult<(usize, Bound<'py, PyList>)> {
-    let findings = PyList::empty(py);
-    let object_id = container.as_ptr() as usize;
-    if !seen.insert(object_id) {
-        return Ok((0, findings));
-    }
-
-    let mut total = 0usize;
-    let rebuild_state_for_gate = object_state
-        .rebuild_state
-        .as_ref()
-        .map(|state| state.as_any().clone());
-    let has_rebuild_state = object_state.rebuild_state.is_some();
-
-    if let Some(state) = object_state.rebuild_state {
-        total += append_findings(
+        let count = append_findings(
             &findings,
-            scan_findings_inner(py, state.as_any(), config, str_type, seen)?,
+            scan_findings_inner(py, &target.state, config, str_type, seen)?,
         )?;
-    }
-    if let Some(scan_state) = object_state.scan_state {
-        total += append_findings(
-            &findings,
-            scan_findings_inner(py, scan_state.as_any(), config, str_type, seen)?,
-        )?;
-    }
-    if let Some(serialized_state) = object_state.serialized_state
-        && let Some(target) = serialized_scan_target(
-            py,
-            container,
-            rebuild_state_for_gate.as_ref(),
-            &serialized_state,
-            has_rebuild_state,
-        )?
-    {
-        let count = if let Some(serialized_object_state) = target.object_state {
-            append_findings(
-                &findings,
-                scan_object_findings(
-                    py,
-                    &target.state,
-                    serialized_object_state,
-                    config,
-                    str_type,
-                    seen,
-                )?,
-            )?
-        } else {
-            append_findings(
-                &findings,
-                scan_findings_inner(py, &target.state, config, str_type, seen)?,
-            )?
-        };
         total += count;
     }
 
