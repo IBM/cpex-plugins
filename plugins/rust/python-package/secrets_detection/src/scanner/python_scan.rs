@@ -67,9 +67,26 @@ fn scan_findings_inner<'py>(
         return Ok((0, findings));
     }
 
-    if let Ok(dict) = container.cast::<PyDict>() {
+    if container.is_exact_instance_of::<PyDict>() {
+        let dict = container.cast::<PyDict>()?;
         let mut total = 0usize;
         for (_, value) in dict.iter() {
+            let count = append_findings(
+                &findings,
+                scan_findings_inner(py, &value, config, str_type, seen)?,
+            )?;
+            total += count;
+        }
+        seen.remove(&object_id);
+        return Ok((total, findings));
+    }
+
+    if container.is_instance_of::<PyDict>() {
+        let mut total = 0usize;
+        for item in container.call_method0("items")?.try_iter()? {
+            let item = item?;
+            let pair = item.cast::<PyTuple>()?;
+            let value = pair.get_item(1)?;
             let count = append_findings(
                 &findings,
                 scan_findings_inner(py, &value, config, str_type, seen)?,
@@ -194,11 +211,33 @@ fn scan_container_inner<'py>(
         return Ok((0, container.clone(), findings));
     }
 
-    if let Ok(dict) = container.cast::<PyDict>() {
+    if container.is_exact_instance_of::<PyDict>() {
+        let dict = container.cast::<PyDict>()?;
         let new_dict = PyDict::new(py);
         memo.insert(object_id, new_dict.clone().into_any().unbind());
         let mut total = 0usize;
         for (key, value) in dict.iter() {
+            let (count, redacted_value, child_findings) =
+                scan_container_inner(py, &value, config, str_type, seen, memo)?;
+            total += count;
+            for finding in child_findings.iter() {
+                findings.append(finding)?;
+            }
+            new_dict.set_item(key, redacted_value)?;
+        }
+        seen.remove(&object_id);
+        return Ok((total, new_dict.into_any(), findings));
+    }
+
+    if container.is_instance_of::<PyDict>() {
+        let new_dict = PyDict::new(py);
+        memo.insert(object_id, new_dict.clone().into_any().unbind());
+        let mut total = 0usize;
+        for item in container.call_method0("items")?.try_iter()? {
+            let item = item?;
+            let pair = item.cast::<PyTuple>()?;
+            let key = pair.get_item(0)?;
+            let value = pair.get_item(1)?;
             let (count, redacted_value, child_findings) =
                 scan_container_inner(py, &value, config, str_type, seen, memo)?;
             total += count;

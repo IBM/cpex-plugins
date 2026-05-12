@@ -42,6 +42,100 @@ fn findings_scan_counts_nested_container_paths_without_rebuilding() {
 }
 
 #[test]
+fn findings_scan_counts_dict_subclass_items() {
+    Python::initialize();
+    Python::attach(|py| -> PyResult<()> {
+        let code = CString::new(
+            r#"
+class CopyOnWriteDict(dict):
+    def __init__(self, original):
+        super().__init__()
+        self._original = original
+
+    def __getitem__(self, key):
+        return super().__getitem__(key) if key in self else self._original[key]
+
+    def __iter__(self):
+        return iter(self._original)
+
+    def __len__(self):
+        return len(self._original)
+
+    def items(self):
+        return ((key, self[key]) for key in self)
+"#,
+        )
+        .unwrap();
+        let module = PyModule::from_code(py, code.as_c_str(), c"test_module.py", c"test_module")?;
+        let original = PyDict::new(py);
+        original.set_item("message", "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")?;
+        let payload = module.getattr("CopyOnWriteDict")?.call1((original,))?;
+        let config = SecretsDetectionConfig::default();
+
+        let (count, findings) = scan_container_findings(py, &payload, &config)?;
+
+        assert_eq!(count, 1);
+        assert_eq!(findings.len(), 1);
+
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn scan_container_redacts_dict_subclass_items() {
+    Python::initialize();
+    Python::attach(|py| -> PyResult<()> {
+        let code = CString::new(
+            r#"
+class CopyOnWriteDict(dict):
+    def __init__(self, original):
+        super().__init__()
+        self._original = original
+
+    def __getitem__(self, key):
+        return super().__getitem__(key) if key in self else self._original[key]
+
+    def __iter__(self):
+        return iter(self._original)
+
+    def __len__(self):
+        return len(self._original)
+
+    def items(self):
+        return ((key, self[key]) for key in self)
+"#,
+        )
+        .unwrap();
+        let module = PyModule::from_code(py, code.as_c_str(), c"test_module.py", c"test_module")?;
+        let original = PyDict::new(py);
+        original.set_item("message", "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")?;
+        let payload = module.getattr("CopyOnWriteDict")?.call1((original,))?;
+        let config = SecretsDetectionConfig {
+            redact: true,
+            redaction_text: "[REDACTED]".to_string(),
+            ..Default::default()
+        };
+
+        let (count, redacted, findings) = scan_container(py, &payload, &config)?;
+
+        assert_eq!(count, 1);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            redacted
+                .cast::<PyDict>()?
+                .get_item("message")?
+                .expect("message exists")
+                .extract::<String>()?,
+            "AWS_ACCESS_KEY_ID=[REDACTED]"
+        );
+
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
 fn findings_scan_counts_object_internal_and_serialized_states_once() {
     Python::initialize();
     Python::attach(|py| -> PyResult<()> {
