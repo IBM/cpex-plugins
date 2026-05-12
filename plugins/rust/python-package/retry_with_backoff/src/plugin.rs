@@ -80,7 +80,7 @@ impl RetryWithBackoffPluginCore {
         let tool_name = payload.getattr("name")?.extract::<String>()?;
 
         // Get tool-specific config
-        let config = self.config.get_tool_config(&tool_name);
+        let config = self.config.get_tool_config(&tool_name)?;
 
         // Extract request_id from context
         let global_context = context.getattr("global_context")?;
@@ -195,8 +195,6 @@ impl RetryWithBackoffPluginCore {
             return Ok(false);
         };
 
-        let retry_status_set = config.retry_on_status_set();
-
         // Check isError flag
         if let Some(is_error) = result_dict.get_item("isError")?
             && is_error.extract::<bool>().unwrap_or(false)
@@ -207,12 +205,13 @@ impl RetryWithBackoffPluginCore {
                 && let Some(status) = structured_dict.get_item("status_code")?
                 && let Ok(status_code) = status.extract::<i32>()
             {
-                return Ok(retry_status_set.contains(&status_code));
+                return Ok(config.retry_on_status.contains(&status_code));
             }
             return Ok(true);
         }
 
-        // Check structuredContent
+        // Check structuredContent; track presence to gate text content check
+        let has_structured_content = result_dict.get_item("structuredContent")?.is_some();
         if let Some(structured) = result_dict.get_item("structuredContent")?
             && let Ok(structured_dict) = structured.cast::<PyDict>()
         {
@@ -223,23 +222,27 @@ impl RetryWithBackoffPluginCore {
             }
             if let Some(status) = structured_dict.get_item("status_code")?
                 && let Ok(status_code) = status.extract::<i32>()
-                && retry_status_set.contains(&status_code)
+                && config.retry_on_status.contains(&status_code)
             {
                 return Ok(true);
             }
         }
 
-        // Check text content if enabled
+        // Check text content only when enabled and structuredContent is absent
         if config.check_text_content
+            && !has_structured_content
             && let Some(content) = result_dict.get_item("content")?
             && let Ok(content_list) = content.cast::<PyList>()
         {
             for item in content_list.iter() {
                 if let Ok(item_dict) = item.cast::<PyDict>() {
-                    // Check if type is "text"
-                    if let Some(item_type) = item_dict.get_item("type")?
-                        && item_type.extract::<String>().ok() != Some("text".to_string())
-                    {
+                    // Only process items explicitly marked as type "text"
+                    let is_text = item_dict
+                        .get_item("type")?
+                        .and_then(|v| v.extract::<String>().ok())
+                        .as_deref()
+                        == Some("text");
+                    if !is_text {
                         continue;
                     }
                     // Try to parse text as JSON
@@ -254,7 +257,7 @@ impl RetryWithBackoffPluginCore {
                         }
                         // Check status_code in parsed JSON
                         if let Some(status) = obj.get("status_code").and_then(|v| v.as_i64())
-                            && retry_status_set.contains(&(status as i32))
+                            && config.retry_on_status.contains(&(status as i32))
                         {
                             return Ok(true);
                         }
@@ -285,7 +288,7 @@ impl RetryWithBackoffPluginCore {
         state_map.remove(&key);
     }
 
-    #[mutants::skip] // TTL eviction cannot be verified without clock injection
+    #[cfg_attr(feature = "mutants", mutants::skip)] // TTL eviction cannot be verified without clock injection
     fn evict_stale(&self, map: &mut HashMap<String, ToolRetryState>) {
         let cutoff = monotonic_secs() - STATE_TTL_SECS;
         map.retain(|_, value| value.last_failure_at <= 0.0 || value.last_failure_at >= cutoff);

@@ -1,6 +1,6 @@
 [package]
 name = "retry_with_backoff"
-version = "0.3.0"
+version = "0.3.2"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -15,10 +15,13 @@ crate-type = ["cdylib", "rlib"]
 name = "stub_gen"
 path = "src/bin/stub_gen.rs"
 
+[features]
+mutants = ["dep:mutants"]
+
 [dependencies]
 cpex_framework_bridge = { workspace = true }
 log.workspace = true
-mutants = "0"
+mutants = { version = "0", optional = true }
 pyo3.workspace = true
 pyo3-log.workspace = true
 pyo3-stub-gen.workspace = true

@@ -4,7 +4,7 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetryConfig {
@@ -37,6 +37,7 @@ pub struct ToolOverride {
     pub max_backoff_ms: Option<u64>,
     pub retry_on_status: Option<Vec<i32>>,
     pub jitter: Option<bool>,
+    pub check_text_content: Option<bool>,
 }
 
 fn default_max_retries() -> u32 {
@@ -62,45 +63,69 @@ fn default_retry_on_status() -> Vec<i32> {
 impl RetryConfig {
     /// Parse configuration from a Python dictionary
     pub fn from_py_dict(dict: &Bound<'_, PyDict>) -> PyResult<Self> {
-        // Extract fields manually to handle Python types
-        let max_retries = dict
-            .get_item("max_retries")?
-            .and_then(|v| v.extract::<u32>().ok())
-            .unwrap_or_else(default_max_retries);
+        let max_retries = match dict.get_item("max_retries")? {
+            Some(v) => v.extract::<u32>().map_err(|_| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "max_retries must be a non-negative integer",
+                )
+            })?,
+            None => default_max_retries(),
+        };
 
-        let backoff_base_ms = dict
-            .get_item("backoff_base_ms")?
-            .and_then(|v| v.extract::<u64>().ok())
-            .unwrap_or_else(default_backoff_base_ms);
+        let backoff_base_ms = match dict.get_item("backoff_base_ms")? {
+            Some(v) => v.extract::<u64>().map_err(|_| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "backoff_base_ms must be a non-negative integer",
+                )
+            })?,
+            None => default_backoff_base_ms(),
+        };
 
-        let max_backoff_ms = dict
-            .get_item("max_backoff_ms")?
-            .and_then(|v| v.extract::<u64>().ok())
-            .unwrap_or_else(default_max_backoff_ms);
+        let max_backoff_ms = match dict.get_item("max_backoff_ms")? {
+            Some(v) => v.extract::<u64>().map_err(|_| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "max_backoff_ms must be a non-negative integer",
+                )
+            })?,
+            None => default_max_backoff_ms(),
+        };
 
-        let retry_on_status = dict
-            .get_item("retry_on_status")?
-            .and_then(|v| v.extract::<Vec<i32>>().ok())
-            .unwrap_or_else(default_retry_on_status);
+        let retry_on_status = match dict.get_item("retry_on_status")? {
+            Some(v) => v.extract::<Vec<i32>>().map_err(|_| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "retry_on_status must be a list of integers",
+                )
+            })?,
+            None => default_retry_on_status(),
+        };
 
-        let jitter = dict
-            .get_item("jitter")?
-            .and_then(|v| v.extract::<bool>().ok())
-            .unwrap_or_else(default_jitter);
+        let jitter = match dict.get_item("jitter")? {
+            Some(v) => v.extract::<bool>().map_err(|_| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>("jitter must be a boolean")
+            })?,
+            None => default_jitter(),
+        };
 
-        let check_text_content = dict
-            .get_item("check_text_content")?
-            .and_then(|v| v.extract::<bool>().ok())
-            .unwrap_or(false);
+        let check_text_content = match dict.get_item("check_text_content")? {
+            Some(v) => v.extract::<bool>().map_err(|_| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "check_text_content must be a boolean",
+                )
+            })?,
+            None => false,
+        };
 
-        let tool_overrides = dict
-            .get_item("tool_overrides")?
-            .and_then(|v| {
-                v.cast::<PyDict>()
-                    .ok()
-                    .and_then(|d| parse_tool_overrides(d).ok())
-            })
-            .unwrap_or_default();
+        let tool_overrides = match dict.get_item("tool_overrides")? {
+            Some(v) => {
+                let d = v.cast::<PyDict>().map_err(|_| {
+                    PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                        "tool_overrides must be a dictionary",
+                    )
+                })?;
+                parse_tool_overrides(d)?
+            }
+            None => HashMap::new(),
+        };
 
         let config = Self {
             max_retries,
@@ -137,8 +162,8 @@ impl RetryConfig {
     }
 
     /// Get configuration for a specific tool, applying overrides if present
-    pub fn get_tool_config(&self, tool_name: &str) -> Self {
-        if let Some(override_cfg) = self.tool_overrides.get(tool_name) {
+    pub fn get_tool_config(&self, tool_name: &str) -> PyResult<Self> {
+        let merged = if let Some(override_cfg) = self.tool_overrides.get(tool_name) {
             Self {
                 max_retries: override_cfg.max_retries.unwrap_or(self.max_retries),
                 backoff_base_ms: override_cfg.backoff_base_ms.unwrap_or(self.backoff_base_ms),
@@ -148,17 +173,16 @@ impl RetryConfig {
                     .clone()
                     .unwrap_or_else(|| self.retry_on_status.clone()),
                 jitter: override_cfg.jitter.unwrap_or(self.jitter),
-                check_text_content: self.check_text_content,
+                check_text_content: override_cfg
+                    .check_text_content
+                    .unwrap_or(self.check_text_content),
                 tool_overrides: HashMap::new(), // Don't nest overrides
             }
         } else {
             self.clone()
-        }
-    }
-
-    /// Get retry_on_status as a HashSet for faster lookups
-    pub fn retry_on_status_set(&self) -> HashSet<i32> {
-        self.retry_on_status.iter().copied().collect()
+        };
+        merged.validate()?;
+        Ok(merged)
     }
 }
 
@@ -172,19 +196,58 @@ fn parse_tool_overrides(dict: &Bound<'_, PyDict>) -> PyResult<HashMap<String, To
         let tool_override = ToolOverride {
             max_retries: override_dict
                 .get_item("max_retries")?
-                .and_then(|v| v.extract::<u32>().ok()),
+                .map(|v| v.extract::<u32>())
+                .transpose()
+                .map_err(|_| {
+                    PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                        "tool override max_retries must be a non-negative integer",
+                    )
+                })?,
             backoff_base_ms: override_dict
                 .get_item("backoff_base_ms")?
-                .and_then(|v| v.extract::<u64>().ok()),
+                .map(|v| v.extract::<u64>())
+                .transpose()
+                .map_err(|_| {
+                    PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                        "tool override backoff_base_ms must be a non-negative integer",
+                    )
+                })?,
             max_backoff_ms: override_dict
                 .get_item("max_backoff_ms")?
-                .and_then(|v| v.extract::<u64>().ok()),
+                .map(|v| v.extract::<u64>())
+                .transpose()
+                .map_err(|_| {
+                    PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                        "tool override max_backoff_ms must be a non-negative integer",
+                    )
+                })?,
             retry_on_status: override_dict
                 .get_item("retry_on_status")?
-                .and_then(|v| v.extract::<Vec<i32>>().ok()),
+                .map(|v| v.extract::<Vec<i32>>())
+                .transpose()
+                .map_err(|_| {
+                    PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                        "tool override retry_on_status must be a list of integers",
+                    )
+                })?,
             jitter: override_dict
                 .get_item("jitter")?
-                .and_then(|v| v.extract::<bool>().ok()),
+                .map(|v| v.extract::<bool>())
+                .transpose()
+                .map_err(|_| {
+                    PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                        "tool override jitter must be a boolean",
+                    )
+                })?,
+            check_text_content: override_dict
+                .get_item("check_text_content")?
+                .map(|v| v.extract::<bool>())
+                .transpose()
+                .map_err(|_| {
+                    PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                        "tool override check_text_content must be a boolean",
+                    )
+                })?,
         };
 
         overrides.insert(tool_name, tool_override);
@@ -274,7 +337,7 @@ mod tests {
             tool_overrides: HashMap::new(),
         };
 
-        let tool_config = config.get_tool_config("my_tool");
+        let tool_config = config.get_tool_config("my_tool").unwrap();
         assert_eq!(tool_config.max_retries, 2);
         assert_eq!(tool_config.backoff_base_ms, 200);
     }
@@ -290,6 +353,7 @@ mod tests {
                 max_backoff_ms: None,
                 retry_on_status: Some(vec![503]),
                 jitter: Some(false),
+                check_text_content: None,
             },
         );
 
@@ -303,31 +367,12 @@ mod tests {
             tool_overrides: overrides,
         };
 
-        let tool_config = config.get_tool_config("my_tool");
+        let tool_config = config.get_tool_config("my_tool").unwrap();
         assert_eq!(tool_config.max_retries, 5);
         assert_eq!(tool_config.backoff_base_ms, 500);
         assert_eq!(tool_config.max_backoff_ms, 5000); // Uses base config
         assert_eq!(tool_config.retry_on_status, vec![503]);
         assert!(!tool_config.jitter);
-    }
-
-    #[test]
-    fn test_retry_on_status_set() {
-        let config = RetryConfig {
-            max_retries: 2,
-            backoff_base_ms: 200,
-            max_backoff_ms: 5000,
-            retry_on_status: vec![429, 500, 503],
-            jitter: true,
-            check_text_content: false,
-            tool_overrides: HashMap::new(),
-        };
-
-        let status_set = config.retry_on_status_set();
-        assert!(status_set.contains(&429));
-        assert!(status_set.contains(&500));
-        assert!(status_set.contains(&503));
-        assert!(!status_set.contains(&404));
     }
 
     #[test]
