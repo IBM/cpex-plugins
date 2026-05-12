@@ -288,7 +288,7 @@ impl RetryWithBackoffPluginCore {
         state_map.remove(&key);
     }
 
-    #[cfg_attr(feature = "mutants", mutants::skip)] // TTL eviction cannot be verified without clock injection
+    #[mutants::skip] // TTL eviction cannot be verified without clock injection
     fn evict_stale(&self, map: &mut HashMap<String, ToolRetryState>) {
         let cutoff = monotonic_secs() - STATE_TTL_SECS;
         map.retain(|_, value| value.last_failure_at <= 0.0 || value.last_failure_at >= cutoff);
