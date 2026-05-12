@@ -13,6 +13,7 @@ from cpex.framework import (
     ResourceHookType,
     ResourcePostFetchPayload,
     ToolHookType,
+    ToolPreInvokePayload,
     ToolPostInvokePayload,
 )
 
@@ -32,6 +33,7 @@ __all__ = [
     "RootModel",
     "SecretsDetectionPlugin",
     "ToolHookType",
+    "ToolPreInvokePayload",
     "ToolPostInvokePayload",
     "make_config",
     "make_context",

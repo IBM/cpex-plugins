@@ -24,7 +24,158 @@ pub fn scan_container<'py>(
     let mut seen = HashSet::new();
     let mut memo = HashMap::new();
     let str_type = py.import("builtins")?.getattr("str")?;
-    scan_container_inner(py, container, config, &str_type, &mut seen, &mut memo)
+    let (count, redacted, findings) =
+        scan_container_inner(py, container, config, &str_type, &mut seen, &mut memo)?;
+    if count == 0 {
+        return Ok((0, container.clone(), findings));
+    }
+    Ok((count, redacted, findings))
+}
+
+pub fn scan_container_findings<'py>(
+    py: Python<'py>,
+    container: &Bound<'py, PyAny>,
+    config: &SecretsDetectionConfig,
+) -> PyResult<(usize, Bound<'py, PyList>)> {
+    let mut seen = HashSet::new();
+    let str_type = py.import("builtins")?.getattr("str")?;
+    scan_findings_inner(py, container, config, &str_type, &mut seen)
+}
+
+fn scan_findings_inner<'py>(
+    py: Python<'py>,
+    container: &Bound<'py, PyAny>,
+    config: &SecretsDetectionConfig,
+    str_type: &Bound<'py, PyAny>,
+    seen: &mut HashSet<usize>,
+) -> PyResult<(usize, Bound<'py, PyList>)> {
+    let findings = PyList::empty(py);
+
+    if container.is_instance(str_type)? {
+        let text = container.extract::<String>()?;
+        let (matches, _) = detect_and_redact(&text, config);
+        for finding in &matches {
+            let finding_dict = PyDict::new(py);
+            finding_dict.set_item("type", &finding.pii_type)?;
+            findings.append(finding_dict)?;
+        }
+        return Ok((matches.len(), findings));
+    }
+
+    let object_id = container.as_ptr() as usize;
+    if !seen.insert(object_id) {
+        return Ok((0, findings));
+    }
+
+    if container.is_exact_instance_of::<PyDict>() {
+        let dict = container.cast::<PyDict>()?;
+        let mut total = 0usize;
+        for (_, value) in dict.iter() {
+            let count = append_findings(
+                &findings,
+                scan_findings_inner(py, &value, config, str_type, seen)?,
+            )?;
+            total += count;
+        }
+        seen.remove(&object_id);
+        return Ok((total, findings));
+    }
+
+    if container.is_instance_of::<PyDict>() {
+        let mut total = 0usize;
+        for item in container.call_method0("items")?.try_iter()? {
+            let item = item?;
+            let pair = item.cast::<PyTuple>()?;
+            let value = pair.get_item(1)?;
+            let count = append_findings(
+                &findings,
+                scan_findings_inner(py, &value, config, str_type, seen)?,
+            )?;
+            total += count;
+        }
+        seen.remove(&object_id);
+        return Ok((total, findings));
+    }
+
+    if let Ok(list) = container.cast::<PyList>() {
+        let mut total = 0usize;
+        for item in list.iter() {
+            let count = append_findings(
+                &findings,
+                scan_findings_inner(py, &item, config, str_type, seen)?,
+            )?;
+            total += count;
+        }
+        seen.remove(&object_id);
+        return Ok((total, findings));
+    }
+
+    if let Ok(tuple) = container.cast::<PyTuple>() {
+        let mut total = 0usize;
+        for item in tuple.iter() {
+            let count = append_findings(
+                &findings,
+                scan_findings_inner(py, &item, config, str_type, seen)?,
+            )?;
+            total += count;
+        }
+        seen.remove(&object_id);
+        return Ok((total, findings));
+    }
+
+    let object_state = inspect_object_state(py, container)?;
+    let mut total = 0usize;
+    let rebuild_state_for_gate = object_state
+        .rebuild_state
+        .as_ref()
+        .map(|state| state.as_any().clone());
+    let has_rebuild_state = object_state.rebuild_state.is_some();
+
+    if let Some(state) = object_state.rebuild_state {
+        let count = append_findings(
+            &findings,
+            scan_findings_inner(py, state.as_any(), config, str_type, seen)?,
+        )?;
+        total += count;
+    }
+
+    if let Some(scan_state) = object_state.scan_state {
+        let count = append_findings(
+            &findings,
+            scan_findings_inner(py, scan_state.as_any(), config, str_type, seen)?,
+        )?;
+        total += count;
+    }
+
+    if let Some(serialized_state) = object_state.serialized_state
+        && let Some(target) = serialized_scan_target(
+            py,
+            container,
+            rebuild_state_for_gate.as_ref(),
+            &serialized_state,
+            has_rebuild_state,
+        )?
+    {
+        let count = append_findings(
+            &findings,
+            scan_findings_inner(py, &target.state, config, str_type, seen)?,
+        )?;
+        total += count;
+    }
+
+    seen.remove(&object_id);
+    Ok((total, findings))
+}
+
+fn append_findings<'py>(
+    findings: &Bound<'py, PyList>,
+    child: (usize, Bound<'py, PyList>),
+) -> PyResult<usize> {
+    let (count, child_findings) = child;
+    for finding in child_findings.iter() {
+        findings.append(finding)?;
+    }
+    Ok(count)
 }
 
 fn scan_container_inner<'py>(
@@ -60,11 +211,33 @@ fn scan_container_inner<'py>(
         return Ok((0, container.clone(), findings));
     }
 
-    if let Ok(dict) = container.cast::<PyDict>() {
+    if container.is_exact_instance_of::<PyDict>() {
+        let dict = container.cast::<PyDict>()?;
         let new_dict = PyDict::new(py);
         memo.insert(object_id, new_dict.clone().into_any().unbind());
         let mut total = 0usize;
         for (key, value) in dict.iter() {
+            let (count, redacted_value, child_findings) =
+                scan_container_inner(py, &value, config, str_type, seen, memo)?;
+            total += count;
+            for finding in child_findings.iter() {
+                findings.append(finding)?;
+            }
+            new_dict.set_item(key, redacted_value)?;
+        }
+        seen.remove(&object_id);
+        return Ok((total, new_dict.into_any(), findings));
+    }
+
+    if container.is_instance_of::<PyDict>() {
+        let new_dict = PyDict::new(py);
+        memo.insert(object_id, new_dict.clone().into_any().unbind());
+        let mut total = 0usize;
+        for item in container.call_method0("items")?.try_iter()? {
+            let item = item?;
+            let pair = item.cast::<PyTuple>()?;
+            let key = pair.get_item(0)?;
+            let value = pair.get_item(1)?;
             let (count, redacted_value, child_findings) =
                 scan_container_inner(py, &value, config, str_type, seen, memo)?;
             total += count;
@@ -140,7 +313,6 @@ fn scan_container_inner<'py>(
     seen.remove(&object_id);
     Ok((0, container.clone(), findings))
 }
-
 struct SerializedScanTarget<'py> {
     state: Bound<'py, PyAny>,
     object_state: Option<InspectedObjectState<'py>>,

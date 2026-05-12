@@ -28,6 +28,7 @@ class TestSecretsDetectionHookDispatch:
         config_path = tmp_path / "secrets_detection.yaml"
         configured_hooks = hooks or [
             PromptHookType.PROMPT_PRE_FETCH.value,
+            ToolHookType.TOOL_PRE_INVOKE.value,
             ToolHookType.TOOL_POST_INVOKE.value,
             ResourceHookType.RESOURCE_POST_FETCH.value,
         ]
@@ -180,6 +181,28 @@ class TestSecretsDetectionHookDispatch:
             )
             result, _ = await manager.invoke_hook(
                 ToolHookType.TOOL_POST_INVOKE,
+                payload,
+                global_context=self.global_context(),
+            )
+            assert result.continue_processing is False
+            assert result.violation.code == "SECRETS_DETECTED"
+            assert result.modified_payload == payload
+        finally:
+            await manager.shutdown()
+
+    async def test_tool_pre_invoke_blocks_without_redaction_via_plugin_manager(
+        self, tmp_path
+    ):
+        manager = await self.manager(
+            tmp_path, {"block_on_detection": True, "redact": False}
+        )
+        try:
+            payload = ToolPreInvokePayload(
+                name="echo",
+                args={"message": "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"},
+            )
+            result, _ = await manager.invoke_hook(
+                ToolHookType.TOOL_PRE_INVOKE,
                 payload,
                 global_context=self.global_context(),
             )
