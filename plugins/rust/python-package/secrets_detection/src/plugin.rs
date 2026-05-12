@@ -104,7 +104,7 @@ impl SecretsDetectionPluginCore {
             );
         }
 
-        if let (true, true) = (self.config.redact, has_findings(count)) {
+        if self.config.redact && has_findings(count) {
             let modified_content =
                 copy_with_update(py, &content, [("text", redacted_text.unbind())])?;
             let modified_payload = copy_with_update(py, payload, [("content", modified_content)])?;
@@ -155,6 +155,7 @@ impl SecretsDetectionPluginCore {
         let (mut count, mut findings) = scan_container_findings(py, &value, &self.config)?;
         let redacted_value = if self.config.redact {
             if has_findings(count) {
+                // Two-pass: avoid copy allocation on clean payloads; dirty payloads scan twice.
                 let (redacted_count, redacted, redacted_findings) =
                     scan_container(py, &value, &self.config)?;
                 count = redacted_count;
@@ -188,7 +189,7 @@ impl SecretsDetectionPluginCore {
             );
         }
 
-        if let (true, true) = (self.config.redact, has_findings(count)) {
+        if self.config.redact && has_findings(count) {
             let redacted = redacted_value.expect("redacted value exists");
             let modified_payload = copy_with_update(py, payload, [(attr, redacted.unbind())])?;
             return build_framework_object(
