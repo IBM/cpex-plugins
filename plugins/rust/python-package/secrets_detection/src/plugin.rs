@@ -573,4 +573,36 @@ class ResourcePostFetchResult(PromptPrehookResult):
         })
         .unwrap();
     }
+
+    #[test]
+    fn resource_post_fetch_reports_findings_without_redaction_when_redact_disabled() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let plugin = SecretsDetectionPluginCore::new(config(py, false, false, 1)?.as_any())?;
+            let module = module(py)?;
+            let payload = module
+                .getattr("ResourcePayload")?
+                .call1(("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE",))?;
+            let context = PyDict::new(py);
+
+            let result = plugin.resource_post_fetch(py, &payload, context.as_any())?;
+            let result = result.bind(py);
+
+            assert!(result.getattr("continue_processing")?.extract::<bool>()?);
+            assert!(result.getattr("violation")?.is_none());
+            assert!(result.getattr("modified_payload")?.is_none());
+            assert_eq!(
+                result
+                    .getattr("metadata")?
+                    .cast_into::<PyDict>()?
+                    .get_item("count")?
+                    .expect("count exists")
+                    .extract::<usize>()?,
+                1
+            );
+
+            Ok(())
+        })
+        .unwrap();
+    }
 }
