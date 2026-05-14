@@ -23,7 +23,6 @@ SHARED_PATH_PREFIXES = (
     ".config/",
     ".github/workflows/",
     "Cargo.toml",
-    "Cargo.lock",
     "deny.toml",
     "crates/",
     "README.md",
@@ -520,10 +519,12 @@ def _changed_plugins_for_records(
     root: Path, plugins: list[PluginRecord], changed_paths: list[str]
 ) -> list[str]:
     plugin_lookup = {record.slug: record for record in plugins}
+    normalized_changed_paths = [path.removeprefix("./") for path in changed_paths]
+    changed_path_set = set(normalized_changed_paths)
 
     if any(
         path == prefix.rstrip("/") or path.startswith(prefix)
-        for path in changed_paths
+        for path in normalized_changed_paths
         for prefix in SHARED_PATH_PREFIXES
     ):
         return sorted(plugin_lookup)
@@ -531,7 +532,10 @@ def _changed_plugins_for_records(
     changed: set[str] = set()
     managed_prefix = f"{MANAGED_ROOT.as_posix()}/"
     integration_prefix = "plugins/tests/"
-    for path in changed_paths:
+    has_lockfile_change = "Cargo.lock" in changed_path_set
+    for path in normalized_changed_paths:
+        if path == "Cargo.lock":
+            continue
         if not path.startswith(managed_prefix):
             if not path.startswith(integration_prefix):
                 continue
@@ -544,6 +548,8 @@ def _changed_plugins_for_records(
         slug = relative.split("/", maxsplit=1)[0]
         if slug in plugin_lookup:
             changed.add(slug)
+    if has_lockfile_change and not changed:
+        return sorted(plugin_lookup)
     return sorted(changed)
 
 

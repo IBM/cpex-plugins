@@ -1921,6 +1921,57 @@ class PluginCatalogTests(unittest.TestCase):
                 },
             )
 
+    def test_ci_selection_keeps_cargo_lock_with_plugin_change_plugin_scoped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            git = lambda *args: subprocess.run(  # noqa: E731
+                ["git", *args],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            git("init")
+            git("config", "user.name", "Test User")
+            git("config", "user.email", "test@example.com")
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/rate_limiter", "plugins/rust/python-package/pii_filter"]\n'
+            )
+            rate_limiter = self._create_plugin(root, "rate_limiter")
+            pii_filter = self._create_plugin(root, "pii_filter")
+            (rate_limiter / "src").mkdir()
+            (pii_filter / "src").mkdir()
+            (root / "Cargo.lock").write_text("# seed\n")
+            git("add", ".")
+            git("commit", "--no-verify", "-m", "seed layout")
+            base_sha = git("rev-parse", "HEAD").stdout.strip()
+
+            (rate_limiter / "src" / "lib.rs").write_text("// rate_limiter update\n")
+            (root / "Cargo.lock").write_text("# updated\n")
+            git("add", ".")
+            git("commit", "--no-verify", "-m", "plugin lockfile update")
+
+            result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["plugins"], ["rate_limiter"])
+            self.assertEqual(payload["cargo_packages"], ["rate_limiter"])
+            self.assertEqual(payload["plugin_count"], 1)
+
+            base_sha = git("rev-parse", "HEAD").stdout.strip()
+            (rate_limiter / "src" / "lib.rs").write_text("// rate_limiter update 2\n")
+            (pii_filter / "src" / "lib.rs").write_text("// pii_filter update\n")
+            (root / "Cargo.lock").write_text("# updated again\n")
+            git("add", ".")
+            git("commit", "--no-verify", "-m", "multi-plugin lockfile update")
+
+            result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["plugins"], ["pii_filter", "rate_limiter"])
+            self.assertEqual(payload["cargo_packages"], ["pii_filter", "rate_limiter"])
+            self.assertEqual(payload["plugin_count"], 2)
+
     def test_ci_selection_treats_deny_config_change_as_all_plugins(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
