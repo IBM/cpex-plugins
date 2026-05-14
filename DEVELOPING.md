@@ -139,6 +139,10 @@ new version of an existing managed plugin to PyPI.
    and invokes `.github/workflows/release-rust-python-package.yaml` with PyPI
    publishing enabled.
 
+   The workflow uses `GITHUB_TOKEN` to push release tags. Repository tag
+   protection or rulesets for release tag patterns must allow that token, or
+   the workflow must be updated to use an approved GitHub App or PAT token.
+
    Release tags use the hyphenated plugin slug, not the directory/module
    underscore form. CI creates tags in this form:
 

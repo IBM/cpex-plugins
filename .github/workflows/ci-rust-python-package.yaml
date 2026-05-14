@@ -418,27 +418,35 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          python3 -c 'import json, os; [print(tag) for tag in json.loads(os.environ["RELEASE_TAGS"])]' | while IFS= read -r tag; do
-            if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
-              echo "Tag ${tag} already exists; skipping."
-              continue
+          while IFS= read -r tag; do
+            if [[ ! "${tag}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+              echo "ERROR: unexpected characters in tag '${tag}'; aborting." >&2
+              exit 1
             fi
             git tag "${tag}" "${GITHUB_SHA}"
-            git push origin "refs/tags/${tag}"
-          done
+            git push origin "refs/tags/${tag}" || {
+              if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+                echo "Tag ${tag} already exists remotely; skipping."
+              else
+                echo "FATAL: push of '${tag}' failed." >&2
+                exit 1
+              fi
+            }
+          done < <(python3 -c 'import json, os; [print(tag) for tag in json.loads(os.environ["RELEASE_TAGS"])]')
 
   publish-release-tags:
     needs:
       - validate-and-detect
       - create-release-tags
-    if: needs.create-release-tags.result == 'success'
+    if: needs.create-release-tags.result == 'success' && needs.validate-and-detect.outputs.release_validation_tags != '[]'
     strategy:
       fail-fast: false
       matrix:
-        tag: ${{ fromJson(needs.validate-and-detect.outputs.release_validation_tags) }}
+        tag: ${{ fromJson(needs.validate-and-detect.outputs.release_validation_tags || '[]') }}
     permissions:
       contents: read
       id-token: write
+    secrets: inherit
     uses: ./.github/workflows/release-rust-python-package.yaml
     with:
       tag: ${{ matrix.tag }}
