@@ -380,3 +380,75 @@ jobs:
       tag: ${{ matrix.tag }}
       repository: testpypi
       publish_enabled: false
+
+  create-release-tags:
+    needs:
+      - validate-and-detect
+      - build-test
+      - security-policy
+      - mutation-testing
+      - coverage
+      - documentation
+      - release-validation
+    if: >-
+      ${{
+        always() &&
+        github.event_name == 'push' &&
+        github.ref == 'refs/heads/main' &&
+        needs.validate-and-detect.outputs.has_release_validation_tags == 'true' &&
+        needs.build-test.result == 'success' &&
+        needs.security-policy.result == 'success' &&
+        needs.coverage.result == 'success' &&
+        needs.documentation.result == 'success' &&
+        (needs.mutation-testing.result == 'success' || needs.mutation-testing.result == 'skipped') &&
+        (needs.release-validation.result == 'success' || needs.release-validation.result == 'skipped')
+      }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+
+      - name: Create release tags for bumped plugin versions
+        env:
+          RELEASE_TAGS: ${{ needs.validate-and-detect.outputs.release_validation_tags }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          while IFS= read -r tag; do
+            if [[ ! "${tag}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+              echo "ERROR: unexpected characters in tag '${tag}'; aborting." >&2
+              exit 1
+            fi
+            git tag "${tag}" "${GITHUB_SHA}"
+            git push origin "refs/tags/${tag}" || {
+              if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+                echo "Tag ${tag} already exists remotely; skipping."
+              else
+                echo "FATAL: push of '${tag}' failed." >&2
+                exit 1
+              fi
+            }
+          done < <(python3 -c 'import json, os; [print(tag) for tag in json.loads(os.environ["RELEASE_TAGS"])]')
+
+  publish-release-tags:
+    needs:
+      - validate-and-detect
+      - create-release-tags
+    if: needs.create-release-tags.result == 'success' && needs.validate-and-detect.outputs.release_validation_tags != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: ${{ fromJson(needs.validate-and-detect.outputs.release_validation_tags || '[]') }}
+    permissions:
+      contents: read
+      id-token: write
+    secrets: inherit
+    uses: ./.github/workflows/release-rust-python-package.yaml
+    with:
+      tag: ${{ matrix.tag }}
+      repository: pypi
+      publish_enabled: true

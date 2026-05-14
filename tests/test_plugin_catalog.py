@@ -1540,7 +1540,18 @@ class PluginCatalogTests(unittest.TestCase):
             self.assertEqual(payload["plugins"], ["pii_filter", "rate_limiter"])
 
     def test_release_info_accepts_canonical_tag(self) -> None:
-        result = run_catalog("release-info", str(REPO_ROOT), "rate-limiter-v0.1.0")
+        cargo = tomllib.loads(
+            (
+                REPO_ROOT
+                / "plugins"
+                / "rust"
+                / "python-package"
+                / "rate_limiter"
+                / "Cargo.toml"
+            ).read_text()
+        )
+        tag = f"rate-limiter-v{cargo['package']['version']}"
+        result = run_catalog("release-info", str(REPO_ROOT), tag)
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["slug"], "rate_limiter")
@@ -1561,7 +1572,18 @@ class PluginCatalogTests(unittest.TestCase):
         )
 
     def test_release_info_gives_pii_filter_the_same_target_matrix(self) -> None:
-        result = run_catalog("release-info", str(REPO_ROOT), "pii-filter-v0.3.0")
+        cargo = tomllib.loads(
+            (
+                REPO_ROOT
+                / "plugins"
+                / "rust"
+                / "python-package"
+                / "pii_filter"
+                / "Cargo.toml"
+            ).read_text()
+        )
+        tag = f"pii-filter-v{cargo['package']['version']}"
+        result = run_catalog("release-info", str(REPO_ROOT), tag)
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["slug"], "pii_filter")
@@ -1583,7 +1605,18 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("canonical", result.stderr.lower())
 
     def test_release_info_field_supports_kind(self) -> None:
-        result = run_catalog("release-info-field", str(REPO_ROOT), "pii-filter-v0.3.0", "kind")
+        cargo = tomllib.loads(
+            (
+                REPO_ROOT
+                / "plugins"
+                / "rust"
+                / "python-package"
+                / "pii_filter"
+                / "Cargo.toml"
+            ).read_text()
+        )
+        tag = f"pii-filter-v{cargo['package']['version']}"
+        result = run_catalog("release-info-field", str(REPO_ROOT), tag, "kind")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "cpex_pii_filter.pii_filter.PIIFilterPlugin")
 
@@ -2709,8 +2742,6 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("cancel-in-progress: true", workflow)
         self.assertIn("python3 -m unittest tests/test_install_built_wheel.py", workflow)
         self.assertNotIn("tests/test_plugin_catalog.py", workflow)
-        self.assertIn("uses: ./.github/workflows/release-rust-python-package.yaml", workflow)
-        self.assertIn("publish_enabled: false", workflow)
         self.assertIn(
             "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
             workflow,
@@ -2729,6 +2760,12 @@ class PluginCatalogTests(unittest.TestCase):
         coverage_section = self._extract_workflow_job_section(workflow, "coverage")
         documentation_section = self._extract_workflow_job_section(
             workflow, "documentation"
+        )
+        create_tags_section = self._extract_workflow_job_section(
+            workflow, "create-release-tags"
+        )
+        publish_tags_section = self._extract_workflow_job_section(
+            workflow, "publish-release-tags"
         )
         release_validation_section = self._extract_workflow_job_section(
             workflow, "release-validation"
@@ -2793,6 +2830,32 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("if: needs.validate-and-detect.outputs.has_plugins == 'true'", documentation_section)
         self.assertIn("if: github.event_name == 'pull_request' && needs.validate-and-detect.outputs.has_release_validation_tags == 'true'", release_validation_section)
         self.assertIn("tag: ${{ fromJson(needs.validate-and-detect.outputs.release_validation_tags) }}", release_validation_section)
+        self.assertIn("github.event_name == 'push'", create_tags_section)
+        self.assertIn("github.ref == 'refs/heads/main'", create_tags_section)
+        self.assertIn("always()", create_tags_section)
+        self.assertIn("needs.build-test.result == 'success'", create_tags_section)
+        self.assertIn("needs.security-policy.result == 'success'", create_tags_section)
+        self.assertIn("needs.coverage.result == 'success'", create_tags_section)
+        self.assertIn("needs.documentation.result == 'success'", create_tags_section)
+        self.assertIn("needs.mutation-testing.result == 'skipped'", create_tags_section)
+        self.assertIn("needs.release-validation.result == 'skipped'", create_tags_section)
+        self.assertIn("contents: write", create_tags_section)
+        # Keep the tag loop out of a pipeline so bash exits on failures inside the loop.
+        self.assertNotIn("mapfile", create_tags_section)
+        self.assertIn("done < <(python3 -c", create_tags_section)
+        self.assertIn('[[ ! "${tag}" =~ ^[a-zA-Z0-9._-]+$ ]]', create_tags_section)
+        self.assertIn('git tag "${tag}" "${GITHUB_SHA}"', create_tags_section)
+        self.assertIn('git push origin "refs/tags/${tag}"', create_tags_section)
+        self.assertIn(
+            "needs.create-release-tags.result == 'success' && needs.validate-and-detect.outputs.release_validation_tags != '[]'",
+            publish_tags_section,
+        )
+        self.assertIn("tag: ${{ fromJson(needs.validate-and-detect.outputs.release_validation_tags || '[]') }}", publish_tags_section)
+        self.assertIn("repository: pypi", publish_tags_section)
+        self.assertIn("publish_enabled: true", publish_tags_section)
+        self.assertIn("id-token: write", publish_tags_section)
+        self.assertIn("secrets: inherit", publish_tags_section)
+        self.assertIn("uses: ./.github/workflows/release-rust-python-package.yaml", publish_tags_section)
         self.assertNotIn("cargo-audit", security_section)
         self.assertNotIn("cargo audit", security_section)
         self.assertIn("cargo install cargo-deny", security_section)
