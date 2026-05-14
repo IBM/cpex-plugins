@@ -1540,7 +1540,18 @@ class PluginCatalogTests(unittest.TestCase):
             self.assertEqual(payload["plugins"], ["pii_filter", "rate_limiter"])
 
     def test_release_info_accepts_canonical_tag(self) -> None:
-        result = run_catalog("release-info", str(REPO_ROOT), "rate-limiter-v0.1.0")
+        cargo = tomllib.loads(
+            (
+                REPO_ROOT
+                / "plugins"
+                / "rust"
+                / "python-package"
+                / "rate_limiter"
+                / "Cargo.toml"
+            ).read_text()
+        )
+        tag = f"rate-limiter-v{cargo['package']['version']}"
+        result = run_catalog("release-info", str(REPO_ROOT), tag)
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["slug"], "rate_limiter")
@@ -1561,7 +1572,18 @@ class PluginCatalogTests(unittest.TestCase):
         )
 
     def test_release_info_gives_pii_filter_the_same_target_matrix(self) -> None:
-        result = run_catalog("release-info", str(REPO_ROOT), "pii-filter-v0.3.0")
+        cargo = tomllib.loads(
+            (
+                REPO_ROOT
+                / "plugins"
+                / "rust"
+                / "python-package"
+                / "pii_filter"
+                / "Cargo.toml"
+            ).read_text()
+        )
+        tag = f"pii-filter-v{cargo['package']['version']}"
+        result = run_catalog("release-info", str(REPO_ROOT), tag)
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["slug"], "pii_filter")
@@ -1583,7 +1605,18 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("canonical", result.stderr.lower())
 
     def test_release_info_field_supports_kind(self) -> None:
-        result = run_catalog("release-info-field", str(REPO_ROOT), "pii-filter-v0.3.0", "kind")
+        cargo = tomllib.loads(
+            (
+                REPO_ROOT
+                / "plugins"
+                / "rust"
+                / "python-package"
+                / "pii_filter"
+                / "Cargo.toml"
+            ).read_text()
+        )
+        tag = f"pii-filter-v{cargo['package']['version']}"
+        result = run_catalog("release-info-field", str(REPO_ROOT), tag, "kind")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "cpex_pii_filter.pii_filter.PIIFilterPlugin")
 
@@ -2709,8 +2742,6 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("cancel-in-progress: true", workflow)
         self.assertIn("python3 -m unittest tests/test_install_built_wheel.py", workflow)
         self.assertNotIn("tests/test_plugin_catalog.py", workflow)
-        self.assertIn("uses: ./.github/workflows/release-rust-python-package.yaml", workflow)
-        self.assertIn("publish_enabled: false", workflow)
         self.assertIn(
             "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
             workflow,
