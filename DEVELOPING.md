@@ -102,8 +102,8 @@ If you prefer to create a plugin manually:
 
 ## Releasing
 
-Releases are per plugin and tag-driven. Use this process to publish a new
-version of an existing managed plugin to PyPI.
+Releases are per plugin and version-bump driven. Use this process to publish a
+new version of an existing managed plugin to PyPI.
 
 1. Pick the plugin slug and new version.
 
@@ -131,16 +131,19 @@ version of an existing managed plugin to PyPI.
 
 4. Merge the version bump to `main`.
 
-5. Create and push the release tag from `main`.
+5. Let CI create the release tag and publish.
 
-   Release tags must use the hyphenated plugin slug, not the directory/module
-   underscore form:
+   On a `main` push, `.github/workflows/ci-rust-python-package.yaml` detects
+   plugin `Cargo.toml` version bumps. After the build, security, coverage, and
+   documentation jobs are green, it creates the release tag at the merge commit
+   and invokes `.github/workflows/release-rust-python-package.yaml` with PyPI
+   publishing enabled.
+
+   Release tags use the hyphenated plugin slug, not the directory/module
+   underscore form. CI creates tags in this form:
 
    ```bash
-   git switch main
-   git pull --ff-only
-   git tag rate-limiter-v0.0.5
-   git push origin rate-limiter-v0.0.5
+   rate-limiter-v0.0.5
    ```
 
    Examples:
@@ -149,11 +152,13 @@ version of an existing managed plugin to PyPI.
    - `secrets_detection` -> `secrets-detection-v0.2.2`
 
    Use `make plugins-list` to inspect the current managed plugin slugs and
-   package names.
+   package names. Do not create the tag manually for ordinary releases; manual
+   tag pushes are reserved for recovery or explicit release-maintainer action.
 
 6. Watch the release workflow and confirm publish success.
 
    ```bash
+   gh run list --workflow ci-rust-python-package.yaml --branch main --limit 5
    gh run list --workflow release-rust-python-package.yaml --limit 5
    gh run watch <run-id> --exit-status
    ```
@@ -167,10 +172,12 @@ version of an existing managed plugin to PyPI.
    The release page should also exist at
    `https://pypi.org/project/cpex-rate-limiter/0.0.5/`.
 
-The release workflow `.github/workflows/release-rust-python-package.yaml`
-resolves the tag back to the managed plugin path, validates metadata and
-versions, then builds and publishes only that plugin. PyPI publishing is allowed
-only for release tags that point at `main`.
+The CI workflow creates tags only after the required checks pass. It then calls
+the release workflow directly for publishing; it does not rely on a bot-created
+tag push to start another workflow run. The release workflow resolves the tag
+back to the managed plugin path, validates metadata and versions, then builds
+and publishes only that plugin. PyPI publishing is allowed only for release tags
+that point at `main`.
 
 Dependency refresh work is separate from the release process. Track broader
 dependency or ContextForge updates outside a plugin release PR.

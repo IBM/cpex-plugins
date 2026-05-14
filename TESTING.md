@@ -119,6 +119,7 @@ They verify:
 - repository metadata consistency
 - changed-plugin detection for CI
 - canonical release tag resolution
+- automatic release tag and publish workflow wiring
 
 ### 2. Plugin Unit Tests
 
@@ -292,7 +293,8 @@ make plugin-mutants PLUGIN=retry_with_backoff
 - Runs plugin unit tests
 - Runs plugin-framework integration tests (`make test-integration`)
 - Builds and packages plugins
-- Publishes to PyPI on release tags
+- On `main`, creates release tags for plugin version bumps only after required checks are green
+- Invokes the release workflow for PyPI publishing after tag creation
 
 **mcp-context-forge CI**:
 - Runs integration tests with latest plugin versions
@@ -329,7 +331,11 @@ Per-plugin build/test jobs are then scoped by the plugin catalog:
 - plugin-only changes run only the affected plugin jobs
 - shared workflow, workspace, root orchestration, docs, test, and tool changes run all managed plugin jobs
 
-Release CI validates the tag and plugin metadata before any artifact is published.
+For pull requests with plugin version bumps, release validation builds the
+target package with publishing disabled. On `main`, Rust plugin CI creates the
+release tag after required checks are green, then calls release CI with PyPI
+publishing enabled. Release CI validates the tag and plugin metadata before any
+artifact is published.
 
 ## Testing Best Practices
 

@@ -2730,6 +2730,12 @@ class PluginCatalogTests(unittest.TestCase):
         documentation_section = self._extract_workflow_job_section(
             workflow, "documentation"
         )
+        create_tags_section = self._extract_workflow_job_section(
+            workflow, "create-release-tags"
+        )
+        publish_tags_section = self._extract_workflow_job_section(
+            workflow, "publish-release-tags"
+        )
         release_validation_section = self._extract_workflow_job_section(
             workflow, "release-validation"
         )
@@ -2793,6 +2799,22 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("if: needs.validate-and-detect.outputs.has_plugins == 'true'", documentation_section)
         self.assertIn("if: github.event_name == 'pull_request' && needs.validate-and-detect.outputs.has_release_validation_tags == 'true'", release_validation_section)
         self.assertIn("tag: ${{ fromJson(needs.validate-and-detect.outputs.release_validation_tags) }}", release_validation_section)
+        self.assertIn("github.event_name == 'push'", create_tags_section)
+        self.assertIn("github.ref == 'refs/heads/main'", create_tags_section)
+        self.assertIn("needs.build-test.result == 'success'", create_tags_section)
+        self.assertIn("needs.security-policy.result == 'success'", create_tags_section)
+        self.assertIn("needs.coverage.result == 'success'", create_tags_section)
+        self.assertIn("needs.documentation.result == 'success'", create_tags_section)
+        self.assertIn("contents: write", create_tags_section)
+        self.assertNotIn("mapfile", create_tags_section)
+        self.assertIn('git tag "${tag}" "${GITHUB_SHA}"', create_tags_section)
+        self.assertIn('git push origin "refs/tags/${tag}"', create_tags_section)
+        self.assertIn("needs.create-release-tags.result == 'success'", publish_tags_section)
+        self.assertIn("tag: ${{ fromJson(needs.validate-and-detect.outputs.release_validation_tags) }}", publish_tags_section)
+        self.assertIn("repository: pypi", publish_tags_section)
+        self.assertIn("publish_enabled: true", publish_tags_section)
+        self.assertIn("id-token: write", publish_tags_section)
+        self.assertIn("uses: ./.github/workflows/release-rust-python-package.yaml", publish_tags_section)
         self.assertNotIn("cargo-audit", security_section)
         self.assertNotIn("cargo audit", security_section)
         self.assertIn("cargo install cargo-deny", security_section)
