@@ -14,6 +14,7 @@ from cpex.framework import (
     ToolPostInvokePayload,
     ToolPostInvokeResult,
 )
+from cpex.framework.settings import get_settings
 
 from cpex_retry_with_backoff.retry_with_backoff_rust import RetryWithBackoffPluginCore
 
@@ -25,8 +26,31 @@ class RetryWithBackoffPlugin(Plugin):
 
     def __init__(self, config: PluginConfig) -> None:
         super().__init__(config)
-        self._core = RetryWithBackoffPluginCore(config.config or {})
-        log.info("retry_with_backoff: Initialized with Rust core (v0.3.0)")
+        raw_cfg: dict = dict(config.config or {})
+
+        # Enforce the gateway-level ceiling on max_retries so that no plugin
+        # config (global or per-tool override) can exceed the operator limit.
+        ceiling = getattr(get_settings(), "max_tool_retries", None)
+        if ceiling is not None:
+            if raw_cfg.get("max_retries", 0) > ceiling:
+                log.warning(
+                    "retry_with_backoff: max_retries=%d exceeds gateway ceiling=%d, clamping",
+                    raw_cfg["max_retries"],
+                    ceiling,
+                )
+                raw_cfg["max_retries"] = ceiling
+            for tool_name, override in raw_cfg.get("tool_overrides", {}).items():
+                if override.get("max_retries", 0) > ceiling:
+                    log.warning(
+                        "retry_with_backoff: tool_overrides[%s].max_retries=%d exceeds ceiling=%d, clamping",
+                        tool_name,
+                        override["max_retries"],
+                        ceiling,
+                    )
+                    override["max_retries"] = ceiling
+
+        self._core = RetryWithBackoffPluginCore(raw_cfg)
+        log.info("retry_with_backoff: Initialized with Rust core (v0.3.2)")
 
     async def tool_post_invoke(
         self,

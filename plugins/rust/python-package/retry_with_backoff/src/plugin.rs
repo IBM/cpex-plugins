@@ -2,42 +2,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
+use crate::delay::compute_delay_ms;
+use crate::state::{ToolRetryState, maybe_evict_stale, monotonic_secs};
 use cpex_framework_bridge::build_framework_object;
 use log::{debug, warn};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList};
 use pyo3_stub_gen::derive::*;
-use rand::Rng;
 use serde_json::Value;
 
 use crate::config::RetryConfig;
 
-const STATE_TTL_SECS: f64 = 300.0;
-
-#[derive(Debug, Clone)]
-pub struct ToolRetryState {
-    pub consecutive_failures: u32,
-    pub last_failure_at: f64,
-}
-
-impl ToolRetryState {
-    fn new() -> Self {
-        Self {
-            consecutive_failures: 0,
-            last_failure_at: 0.0,
-        }
-    }
-}
-
-static MONO_EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-
-fn monotonic_secs() -> f64 {
-    let epoch = MONO_EPOCH.get_or_init(Instant::now);
-    epoch.elapsed().as_secs_f64()
-}
+static PLUGIN_LAST_EVICTION_MS: AtomicU64 = AtomicU64::new(0);
 
 #[gen_stub_pyclass]
 #[pyclass]
@@ -118,7 +97,7 @@ impl RetryWithBackoffPluginCore {
         let key = format!("{}:{}", tool_name, request_id);
         let state = state_map
             .entry(key.clone())
-            .or_insert_with(ToolRetryState::new);
+            .or_default();
 
         state.consecutive_failures += 1;
         state.last_failure_at = monotonic_secs();
@@ -211,7 +190,11 @@ impl RetryWithBackoffPluginCore {
         }
 
         // Check structuredContent; track presence to gate text content check
-        let has_structured_content = result_dict.get_item("structuredContent")?.is_some();
+        // Treat `"structuredContent": None` as absent (matches original Python semantics)
+        let has_structured_content = result_dict
+            .get_item("structuredContent")?
+            .map(|v| !v.is_none())
+            .unwrap_or(false);
         if let Some(structured) = result_dict.get_item("structuredContent")?
             && let Ok(structured_dict) = structured.cast::<PyDict>()
         {
@@ -290,19 +273,7 @@ impl RetryWithBackoffPluginCore {
 
     #[mutants::skip] // TTL eviction cannot be verified without clock injection
     fn evict_stale(&self, map: &mut HashMap<String, ToolRetryState>) {
-        let cutoff = monotonic_secs() - STATE_TTL_SECS;
-        map.retain(|_, value| value.last_failure_at <= 0.0 || value.last_failure_at >= cutoff);
-    }
-}
-
-fn compute_delay_ms(attempt: u32, base_ms: u64, max_ms: u64, jitter: bool) -> u64 {
-    let ceiling = base_ms
-        .saturating_mul(2u64.saturating_pow(attempt))
-        .min(max_ms);
-    if jitter {
-        rand::thread_rng().gen_range(0..=ceiling)
-    } else {
-        ceiling
+        maybe_evict_stale(map, &PLUGIN_LAST_EVICTION_MS);
     }
 }
 

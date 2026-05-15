@@ -191,7 +191,16 @@ fn parse_tool_overrides(dict: &Bound<'_, PyDict>) -> PyResult<HashMap<String, To
 
     for (key, value) in dict.iter() {
         let tool_name = key.extract::<String>()?;
-        let override_dict = value.cast::<PyDict>()?;
+        let override_dict = value.cast::<PyDict>().map_err(|_| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "tool_overrides['{tool_name}']: expected a dict, got {}",
+                value
+                    .get_type()
+                    .name()
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|_| "<unknown>".to_string()),
+            ))
+        })?;
 
         let tool_override = ToolOverride {
             max_retries: override_dict
