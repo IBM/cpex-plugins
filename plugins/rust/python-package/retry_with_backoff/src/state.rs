@@ -41,6 +41,7 @@ impl ToolRetryState {
 /// time eviction ran for that state store.  The benign race (two threads both
 /// triggering eviction at the boundary) is intentional — duplicate scans are
 /// safe and infrequent.
+#[mutants::skip] // time-dependent logic cannot be verified without clock injection
 pub fn maybe_evict_stale(map: &mut HashMap<String, ToolRetryState>, last_eviction_ms: &AtomicU64) {
     let now_ms = (monotonic_secs() * 1000.0) as u64;
     let last_ms = last_eviction_ms.load(Ordering::Relaxed);

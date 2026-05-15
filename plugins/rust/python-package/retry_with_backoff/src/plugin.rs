@@ -95,9 +95,7 @@ impl RetryWithBackoffPluginCore {
         self.evict_stale(&mut state_map);
 
         let key = format!("{}:{}", tool_name, request_id);
-        let state = state_map
-            .entry(key.clone())
-            .or_default();
+        let state = state_map.entry(key.clone()).or_default();
 
         state.consecutive_failures += 1;
         state.last_failure_at = monotonic_secs();
@@ -616,6 +614,88 @@ class ResourcePostFetchResult:
 
             let is_fail = core.is_failure(py, result_dict.as_any(), &config).unwrap();
             assert!(!is_fail, "non-text content items must be skipped");
+        });
+    }
+
+    #[test]
+    fn test_is_failure_structured_content_none_allows_text_parsing() {
+        // Kills mutant: `delete ! in is_failure` — if `!v.is_none()` becomes
+        // `v.is_none()`, structuredContent:None would be treated as present
+        // and check_text_content would be suppressed.
+        Python::initialize();
+        Python::attach(|py| {
+            setup_cpex_framework(py);
+            let config = RetryConfig {
+                max_retries: 2,
+                backoff_base_ms: 100,
+                max_backoff_ms: 10_000,
+                retry_on_status: vec![500],
+                jitter: false,
+                check_text_content: true,
+                tool_overrides: HashMap::new(),
+            };
+            let core = RetryWithBackoffPluginCore {
+                config: config.clone(),
+                state_manager: Arc::new(Mutex::new(HashMap::new())),
+            };
+
+            // structuredContent is explicitly None — text parsing must still run
+            let item = PyDict::new(py);
+            item.set_item("type", "text").unwrap();
+            item.set_item("text", r#"{"isError": true}"#).unwrap();
+            let content = PyList::empty(py);
+            content.append(item.as_any()).unwrap();
+            let result_dict = PyDict::new(py);
+            result_dict
+                .set_item("structuredContent", py.None())
+                .unwrap();
+            result_dict.set_item("content", content).unwrap();
+
+            let is_fail = core.is_failure(py, result_dict.as_any(), &config).unwrap();
+            assert!(
+                is_fail,
+                "structuredContent:None must not suppress check_text_content"
+            );
+        });
+    }
+
+    #[test]
+    fn test_is_failure_non_null_structured_content_suppresses_text_parsing() {
+        // Companion to the above: non-null structuredContent must suppress text parsing.
+        Python::initialize();
+        Python::attach(|py| {
+            setup_cpex_framework(py);
+            let config = RetryConfig {
+                max_retries: 2,
+                backoff_base_ms: 100,
+                max_backoff_ms: 10_000,
+                retry_on_status: vec![500],
+                jitter: false,
+                check_text_content: true,
+                tool_overrides: HashMap::new(),
+            };
+            let core = RetryWithBackoffPluginCore {
+                config: config.clone(),
+                state_manager: Arc::new(Mutex::new(HashMap::new())),
+            };
+
+            // Non-null structuredContent with no error signals — text must not be parsed
+            let item = PyDict::new(py);
+            item.set_item("type", "text").unwrap();
+            item.set_item("text", r#"{"isError": true}"#).unwrap();
+            let content = PyList::empty(py);
+            content.append(item.as_any()).unwrap();
+            let result_dict = PyDict::new(py);
+            result_dict
+                .set_item("structuredContent", PyDict::new(py))
+                .unwrap();
+            result_dict.set_item("content", content).unwrap();
+
+            let is_fail = core.is_failure(py, result_dict.as_any(), &config).unwrap();
+            assert!(
+                !is_fail,
+                "non-null structuredContent must suppress check_text_content"
+            );
         });
     }
 }
