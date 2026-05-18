@@ -1,61 +1,32 @@
 // Copyright 2026
 // SPDX-License-Identifier: Apache-2.0
 
+pub mod config;
+pub mod delay;
+pub mod plugin;
+pub mod state;
+
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::AtomicU64;
 use std::sync::{Mutex, OnceLock};
-use std::time::Instant;
 
 use log::{debug, warn};
 use pyo3::prelude::*;
 use pyo3_stub_gen::define_stub_info_gatherer;
 use pyo3_stub_gen::derive::*;
-use rand::Rng;
 
-pub struct ToolRetryState {
-    pub consecutive_failures: u32,
-    pub last_failure_at: f64,
-}
-
-impl ToolRetryState {
-    fn new() -> Self {
-        Self {
-            consecutive_failures: 0,
-            last_failure_at: 0.0,
-        }
-    }
-}
+use crate::delay::compute_delay_ms;
+use crate::state::{ToolRetryState, maybe_evict_stale, monotonic_secs};
 
 static STATE: OnceLock<Mutex<HashMap<String, ToolRetryState>>> = OnceLock::new();
-static MONO_EPOCH: OnceLock<Instant> = OnceLock::new();
-const STATE_TTL_SECS: f64 = 300.0;
-
-fn monotonic_secs() -> f64 {
-    let epoch = MONO_EPOCH.get_or_init(Instant::now);
-    epoch.elapsed().as_secs_f64()
-}
+static LAST_EVICTION_MS: AtomicU64 = AtomicU64::new(0);
 
 fn state_map() -> &'static Mutex<HashMap<String, ToolRetryState>> {
     STATE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn evict_stale(map: &mut HashMap<String, ToolRetryState>) {
-    let cutoff = monotonic_secs() - STATE_TTL_SECS;
-    map.retain(|_, value| value.last_failure_at <= 0.0 || value.last_failure_at >= cutoff);
-}
-
 fn make_key(tool: &str, request_id: &str) -> String {
     format!("{tool}:{request_id}")
-}
-
-fn compute_delay_ms(attempt: u32, base_ms: u64, max_ms: u64, jitter: bool) -> u64 {
-    let ceiling = base_ms
-        .saturating_mul(2u64.saturating_pow(attempt))
-        .min(max_ms);
-    if jitter {
-        rand::thread_rng().gen_range(0..=ceiling)
-    } else {
-        ceiling
-    }
 }
 
 fn is_failure_from_signals(
@@ -126,7 +97,7 @@ impl RetryStateManager {
     fn record_failure(&self, tool: &str, request_id: &str) -> u32 {
         let mut map = state_map().lock().unwrap();
         let key = make_key(tool, request_id);
-        let state = map.entry(key).or_insert_with(ToolRetryState::new);
+        let state = map.entry(key).or_default();
         state.consecutive_failures += 1;
         state.last_failure_at = monotonic_secs();
         state.consecutive_failures
@@ -167,11 +138,11 @@ impl RetryStateManager {
     ) -> (bool, u64) {
         let failed = is_failure_from_signals(is_error, status_code, &self.retry_on_status);
         let mut map = state_map().lock().unwrap();
-        evict_stale(&mut map);
+        maybe_evict_stale(&mut map, &LAST_EVICTION_MS);
         let key = make_key(tool, request_id);
 
         if failed {
-            let state = map.entry(key.clone()).or_insert_with(ToolRetryState::new);
+            let state = map.entry(key.clone()).or_default();
             state.consecutive_failures += 1;
             state.last_failure_at = monotonic_secs();
 
@@ -202,6 +173,7 @@ impl RetryStateManager {
 fn retry_with_backoff_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     pyo3_log::init();
     m.add_class::<RetryStateManager>()?;
+    m.add_class::<plugin::RetryWithBackoffPluginCore>()?;
     Ok(())
 }
 

@@ -5,15 +5,11 @@ from __future__ import annotations
 
 
 def __getattr__(name: str):
-    if name in {"RetryConfig", "RetryWithBackoffPlugin"}:
-        from cpex_retry_with_backoff.retry_with_backoff import RetryConfig, RetryWithBackoffPlugin
+    if name == "RetryWithBackoffPlugin":
+        from cpex_retry_with_backoff.retry_with_backoff import RetryWithBackoffPlugin
 
-        exports = {
-            "RetryConfig": RetryConfig,
-            "RetryWithBackoffPlugin": RetryWithBackoffPlugin,
-        }
-        return exports[name]
+        return RetryWithBackoffPlugin
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-__all__ = ["RetryConfig", "RetryWithBackoffPlugin"]
+__all__ = ["RetryWithBackoffPlugin"]
