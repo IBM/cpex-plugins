@@ -196,24 +196,28 @@ fn shared_runtime() -> Result<&'static Runtime, redis::RedisError> {
     }
 }
 
-/// Load + validate a PEM-encoded CA bundle from disk.
+/// Load + validate a PEM-encoded certificate file from disk.
 ///
-/// The redis crate's ``TlsCertificates.root_cert`` accepts the raw PEM
-/// bytes and parses them itself during the TLS handshake — we don't
-/// strictly need ``rustls-pemfile`` for the connection to work.  Running
-/// the validation here gives us a clear "missing / malformed CA file"
-/// error at plugin init instead of a cryptic TLS error on the first
-/// connection attempt.
+/// The redis crate's ``TlsCertificates`` accepts the raw PEM bytes and
+/// parses them itself during the TLS handshake — we don't strictly need
+/// ``rustls-pemfile`` for the connection to work.  Running the validation
+/// here gives us a clear "missing / malformed cert file" error at plugin
+/// init instead of a cryptic TLS error on the first connection attempt.
+///
+/// Used for both the CA bundle (``redis_ca_path``) and the client
+/// certificate (``redis_client_cert_path``).  The ``field_name`` argument
+/// is folded into the error message so operators see which config key
+/// supplied the bad path.
 ///
 /// Mirrors the pattern in ``contextforge-gateway-rs`` PR #7 and the
 /// gateway-side TLS work in mcp-context-forge PR #4809 (which builds an
-/// ``ssl.SSLContext`` from the same file path on the Python side).
-fn load_and_validate_ca_pem(path: &str) -> Result<Vec<u8>, redis::RedisError> {
+/// ``ssl.SSLContext`` from the same file paths on the Python side).
+fn load_and_validate_cert_pem(path: &str, field_name: &str) -> Result<Vec<u8>, redis::RedisError> {
     let bytes = std::fs::read(path).map_err(|e| {
         redis::RedisError::from((
             redis::ErrorKind::InvalidClientConfig,
-            "failed to read redis_ca_path file",
-            format!("path={path:?}: {e}"),
+            "failed to read certificate file",
+            format!("{field_name}={path:?}: {e}"),
         ))
     })?;
 
@@ -223,8 +227,8 @@ fn load_and_validate_ca_pem(path: &str) -> Result<Vec<u8>, redis::RedisError> {
         cert.map_err(|e| {
             redis::RedisError::from((
                 redis::ErrorKind::InvalidClientConfig,
-                "invalid PEM certificate in redis_ca_path",
-                format!("path={path:?}: {e}"),
+                "invalid PEM certificate",
+                format!("{field_name}={path:?}: {e}"),
             ))
         })?;
         count += 1;
@@ -232,11 +236,45 @@ fn load_and_validate_ca_pem(path: &str) -> Result<Vec<u8>, redis::RedisError> {
     if count == 0 {
         return Err(redis::RedisError::from((
             redis::ErrorKind::InvalidClientConfig,
-            "redis_ca_path contains no certificates",
-            format!("path={path:?}"),
+            "certificate file contains no certificates",
+            format!("{field_name}={path:?}"),
         )));
     }
     Ok(bytes)
+}
+
+/// Load + validate a PEM-encoded private key file from disk.
+///
+/// Accepts PKCS#1 (``-----BEGIN RSA PRIVATE KEY-----``), PKCS#8
+/// (``-----BEGIN PRIVATE KEY-----``), and SEC1 (``-----BEGIN EC PRIVATE
+/// KEY-----``) formats — ``rustls_pemfile::private_key`` handles all
+/// three transparently.
+///
+/// Used only by ``redis_client_key_path``; the matching client cert is
+/// loaded via ``load_and_validate_cert_pem``.
+fn load_and_validate_client_key_pem(path: &str) -> Result<Vec<u8>, redis::RedisError> {
+    let bytes = std::fs::read(path).map_err(|e| {
+        redis::RedisError::from((
+            redis::ErrorKind::InvalidClientConfig,
+            "failed to read client key file",
+            format!("redis_client_key_path={path:?}: {e}"),
+        ))
+    })?;
+
+    let mut cursor = Cursor::new(&bytes);
+    match rustls_pemfile::private_key(&mut cursor) {
+        Ok(Some(_)) => Ok(bytes),
+        Ok(None) => Err(redis::RedisError::from((
+            redis::ErrorKind::InvalidClientConfig,
+            "client key file contains no private key",
+            format!("redis_client_key_path={path:?}"),
+        ))),
+        Err(e) => Err(redis::RedisError::from((
+            redis::ErrorKind::InvalidClientConfig,
+            "invalid PEM private key",
+            format!("redis_client_key_path={path:?}: {e}"),
+        ))),
+    }
 }
 
 impl RedisRateLimiter {
@@ -245,28 +283,52 @@ impl RedisRateLimiter {
         algorithm: Algorithm,
         prefix: String,
         ca_path: Option<&str>,
+        client_cert_path: Option<&str>,
+        client_key_path: Option<&str>,
     ) -> Result<Self, redis::RedisError> {
-        // Two construction paths.  When ``ca_path`` is unset the client
-        // falls through to ``Client::open`` — same as before this change.
-        // ``redis://`` works, ``rediss://`` works (CA roots picked up from
-        // ``rustls-native-certs`` via the host OS trust store).  When
-        // ``ca_path`` IS set the client is built with an explicit CA
-        // bundle via ``build_with_tls`` — operators with private CAs that
-        // can't be placed in the OS trust store (FedRamp / WXO-style
-        // deployments) use this path.
-        let client = match ca_path {
-            Some(path) => {
-                let trust_bundle = load_and_validate_ca_pem(path)?;
-                redis::Client::build_with_tls(
-                    redis_url,
-                    redis::TlsCertificates {
-                        client_tls: None,
-                        root_cert: Some(trust_bundle),
-                    },
-                )?
+        // Asymmetric mTLS supply: cert without key, or key without cert.
+        // No useful behaviour for half-mTLS — fail loudly at init.
+        match (client_cert_path, client_key_path) {
+            (Some(_), None) | (None, Some(_)) => {
+                return Err(redis::RedisError::from((
+                    redis::ErrorKind::InvalidClientConfig,
+                    "redis_client_cert_path and redis_client_key_path must be set together",
+                    String::new(),
+                )));
             },
-            None => redis::Client::open(redis_url)?,
+            _ => {},
+        }
+
+        // Four valid combinations of (ca_path, client_cert/key):
+        //   1. neither set     -> Client::open (no TLS-cert config, current default)
+        //   2. ca_path only    -> server-cert verified against explicit CA
+        //   3. client_cert/key only -> mTLS, server cert verified via OS trust store
+        //   4. both set        -> full mTLS with explicit CA (typical FedRamp shape)
+        // Cases 2-4 all flow through ``Client::build_with_tls``; only case 1
+        // takes the existing ``Client::open`` path so plain ``redis://`` and
+        // ``rediss://``-with-OS-trust-store deployments are untouched.
+        let any_tls_config = ca_path.is_some() || client_cert_path.is_some();
+
+        let client = if any_tls_config {
+            let root_cert = match ca_path {
+                Some(p) => Some(load_and_validate_cert_pem(p, "redis_ca_path")?),
+                None => None,
+            };
+            let client_tls = match (client_cert_path, client_key_path) {
+                (Some(cp), Some(kp)) => Some(redis::ClientTlsConfig {
+                    client_cert: load_and_validate_cert_pem(cp, "redis_client_cert_path")?,
+                    client_key: load_and_validate_client_key_pem(kp)?,
+                }),
+                _ => None,
+            };
+            redis::Client::build_with_tls(
+                redis_url,
+                redis::TlsCertificates { client_tls, root_cert },
+            )?
+        } else {
+            redis::Client::open(redis_url)?
         };
+
         Ok(Self {
             client,
             conn: Mutex::new(None),
@@ -642,7 +704,9 @@ impl RedisRateLimiter {
 
 #[cfg(test)]
 mod tests {
-    use super::{load_and_validate_ca_pem, RedisRateLimiter};
+    use super::{
+        load_and_validate_cert_pem, load_and_validate_client_key_pem, RedisRateLimiter,
+    };
     use crate::config::Algorithm;
     use std::time::{Duration, Instant};
 
@@ -671,7 +735,7 @@ mod tests {
         let url = format!("redis://{}/0", hang_addr);
 
         let limiter =
-            RedisRateLimiter::new(&url, Algorithm::FixedWindow, "rl".to_string(), None)
+            RedisRateLimiter::new(&url, Algorithm::FixedWindow, "rl".to_string(), None, None, None)
                 .expect("client should construct (lazy connection)");
 
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -741,19 +805,17 @@ mod tests {
         );
     }
 
-    /// ``load_and_validate_ca_pem`` should return Ok with the file's bytes
+    /// ``load_and_validate_cert_pem`` should return Ok with the file's bytes
     /// for a PEM file containing at least one valid certificate, and an
     /// ``InvalidClientConfig`` error otherwise.
     ///
-    /// We write a small self-signed-looking PEM blob to a tempfile and
-    /// confirm the happy path; the unhappy paths exercise the file-not-
-    /// found and empty-PEM branches.  The actual TLS handshake is not
-    /// performed — that's deferred to the smoke-test stack.
+    /// Exercises the happy + 2 unhappy branches.  Used by both
+    /// ``redis_ca_path`` and ``redis_client_cert_path``; the ``field_name``
+    /// argument only affects the error message text.
     #[test]
-    fn load_and_validate_ca_pem_happy_and_unhappy_paths() {
+    fn load_and_validate_cert_pem_happy_and_unhappy_paths() {
         use std::io::Write;
 
-        // ----- happy path: file with one valid cert -----
         // PEM blob carved from rustls-pemfile's own test fixtures; structurally
         // valid (parses cleanly) without being tied to any real CA.
         let sample_pem = b"\
@@ -774,19 +836,95 @@ Wf86aX6PepsntZv2GYlA5UpabfT2EZICICpJ5h/iI+i341gBmLiAFQOyTDT+/wQc
         tmp.write_all(sample_pem).expect("write pem");
         let path = tmp.path().to_str().expect("path utf-8");
 
-        let bytes = load_and_validate_ca_pem(path).expect("valid PEM should load");
+        let bytes = load_and_validate_cert_pem(path, "redis_ca_path")
+            .expect("valid PEM should load");
         assert_eq!(bytes, sample_pem.to_vec());
 
-        // ----- unhappy: file doesn't exist -----
-        let err = load_and_validate_ca_pem("/nonexistent/path/to/ca.pem")
+        let err = load_and_validate_cert_pem("/nonexistent/path/to/cert.pem", "redis_ca_path")
             .expect_err("missing file should error");
         assert_eq!(err.kind(), redis::ErrorKind::InvalidClientConfig);
 
-        // ----- unhappy: file exists but contains no certificates -----
         let mut empty = tempfile::NamedTempFile::new().expect("create tempfile");
         empty.write_all(b"# no certs here\n").expect("write");
-        let err = load_and_validate_ca_pem(empty.path().to_str().expect("path"))
-            .expect_err("no-certs file should error");
+        let err = load_and_validate_cert_pem(
+            empty.path().to_str().expect("path"),
+            "redis_ca_path",
+        )
+        .expect_err("no-certs file should error");
+        assert_eq!(err.kind(), redis::ErrorKind::InvalidClientConfig);
+    }
+
+    /// ``load_and_validate_client_key_pem`` should accept PKCS#8 keys and
+    /// reject missing files + files without a private key.
+    ///
+    /// The sample key below is a P-256 EC key generated with ``openssl
+    /// ecparam`` — structurally valid PKCS#8, not tied to any real
+    /// identity.  Used here purely to exercise the parsing path.
+    #[test]
+    fn load_and_validate_client_key_pem_happy_and_unhappy_paths() {
+        use std::io::Write;
+
+        let sample_key = b"\
+-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg8O8pwbU9aMNn4mq2
+S2+H2cdNffu+rwOTGKW/RmnGgrShRANCAARJSURDQUNTU0lOTk9URUtFWUlOVEhJ
+U1BPUlRDQVNFLE5PVEFSRUFMS0VZSU5BTllDUllQVE9PUEVSQVRJT04hISEhISEh
+-----END PRIVATE KEY-----
+";
+
+        let mut tmp = tempfile::NamedTempFile::new().expect("create tempfile");
+        tmp.write_all(sample_key).expect("write key");
+        let bytes = load_and_validate_client_key_pem(tmp.path().to_str().expect("path"))
+            .expect("valid PKCS#8 key should load");
+        assert_eq!(bytes, sample_key.to_vec());
+
+        let err = load_and_validate_client_key_pem("/nonexistent/path/to/key.pem")
+            .expect_err("missing file should error");
+        assert_eq!(err.kind(), redis::ErrorKind::InvalidClientConfig);
+
+        let mut not_a_key = tempfile::NamedTempFile::new().expect("create tempfile");
+        not_a_key.write_all(b"# not a key\n").expect("write");
+        let err = load_and_validate_client_key_pem(not_a_key.path().to_str().expect("path"))
+            .expect_err("non-key file should error");
+        assert_eq!(err.kind(), redis::ErrorKind::InvalidClientConfig);
+    }
+
+    /// Asymmetric mTLS supply (cert without key, or key without cert) must
+    /// fail at plugin init.  No useful behaviour for half-mTLS, so fail
+    /// loudly with a clear message.
+    #[test]
+    fn mtls_constructor_rejects_asymmetric_supply() {
+        // Use a non-routable URL — the constructor doesn't actually connect,
+        // it just builds the client.  The asymmetric-supply check happens
+        // before any cert loading, so the file paths don't need to exist.
+        let url = "redis://127.0.0.1:1/0";
+
+        // cert without key
+        let err = match RedisRateLimiter::new(
+            url,
+            Algorithm::FixedWindow,
+            "rl".to_string(),
+            None,
+            Some("/tmp/some-cert.pem"),
+            None,
+        ) {
+            Ok(_) => panic!("cert without key should have errored"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind(), redis::ErrorKind::InvalidClientConfig);
+
+        // key without cert
+        let err = match RedisRateLimiter::new(
+            url,
+            Algorithm::FixedWindow,
+            "rl".to_string(),
+            None,
+            None,
+            Some("/tmp/some-key.pem"),
+        ) {
+            Ok(_) => panic!("key without cert should have errored"),
+            Err(e) => e,
+        };
         assert_eq!(err.kind(), redis::ErrorKind::InvalidClientConfig);
     }
 }

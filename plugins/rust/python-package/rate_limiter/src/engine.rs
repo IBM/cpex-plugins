@@ -158,11 +158,22 @@ impl RateLimiterEngine {
             let ca_path: Option<String> = config
                 .get_item("redis_ca_path")?
                 .and_then(|v| v.extract().ok());
+            // Optional client cert + key for mTLS.  Both must be set or
+            // both unset; asymmetric supply is rejected at constructor
+            // time with a clear error.
+            let client_cert_path: Option<String> = config
+                .get_item("redis_client_cert_path")?
+                .and_then(|v| v.extract().ok());
+            let client_key_path: Option<String> = config
+                .get_item("redis_client_key_path")?
+                .and_then(|v| v.extract().ok());
             let redis_limiter = RedisRateLimiter::new(
                 &redis_url,
                 engine_config.algorithm,
                 prefix,
                 ca_path.as_deref(),
+                client_cert_path.as_deref(),
+                client_key_path.as_deref(),
             )
             .map_err(|e| {
                 warn!("Rust rate limiter: Redis backend init failed: {}", e);
@@ -413,6 +424,8 @@ fn warn_on_unknown_config_keys(config: &Bound<'_, PyDict>) {
         "redis_url",
         "redis_key_prefix",
         "redis_ca_path",
+        "redis_client_cert_path",
+        "redis_client_key_path",
         "fail_mode",
     ];
     let mut unknown: Vec<String> = Vec::new();
