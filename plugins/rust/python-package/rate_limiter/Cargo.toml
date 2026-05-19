@@ -39,10 +39,18 @@ redis = { version = "0.32", features = ["aio", "tokio-comp", "tls-rustls", "toki
 # for the UBI Minimal image mcp-context-forge ships on, and for any
 # distribution that keeps `ca-certificates` in its base.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+# PEM parser for the optional ``redis_ca_path`` config key.  Used purely for
+# fail-fast validation at plugin init — the redis crate itself accepts the
+# raw PEM bytes and parses them internally for the actual TLS handshake.
+# Without this validation, a malformed CA file would surface as a cryptic
+# TLS error on the first connection attempt instead of a clear error at
+# config-load time.
+rustls-pemfile = "2.2.0"
 tokio = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+tempfile = "3.13"
 
 [[bench]]
 name = "rate_limiter"

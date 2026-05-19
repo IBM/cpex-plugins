@@ -151,11 +151,23 @@ impl RateLimiterEngine {
                 .get_item("redis_key_prefix")?
                 .and_then(|v| v.extract().ok())
                 .unwrap_or_else(|| "rl".to_string());
-            let redis_limiter = RedisRateLimiter::new(&redis_url, engine_config.algorithm, prefix)
-                .map_err(|e| {
-                    warn!("Rust rate limiter: Redis backend init failed: {}", e);
-                    pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
-                })?;
+            // Optional CA bundle path for `rediss://` connections where the
+            // CA isn't in the host OS trust store (FedRamp / explicit-cert
+            // deployments).  When unset, the existing
+            // `rustls-native-certs`-from-OS-trust-store path is used.
+            let ca_path: Option<String> = config
+                .get_item("redis_ca_path")?
+                .and_then(|v| v.extract().ok());
+            let redis_limiter = RedisRateLimiter::new(
+                &redis_url,
+                engine_config.algorithm,
+                prefix,
+                ca_path.as_deref(),
+            )
+            .map_err(|e| {
+                warn!("Rust rate limiter: Redis backend init failed: {}", e);
+                pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
+            })?;
             EngineBackend::Redis(Arc::new(redis_limiter))
         } else if backend_str == "memory" {
             EngineBackend::Memory(Arc::new(MemoryStore::new()))
@@ -400,6 +412,7 @@ fn warn_on_unknown_config_keys(config: &Bound<'_, PyDict>) {
         "backend",
         "redis_url",
         "redis_key_prefix",
+        "redis_ca_path",
         "fail_mode",
     ];
     let mut unknown: Vec<String> = Vec::new();
