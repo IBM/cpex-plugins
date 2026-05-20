@@ -1,0 +1,4 @@
+# TLS smoke-test scratch — only the certs/ subdir is private (contains keys).
+# The smoke script + run script + recipe + cert-generation helper are
+# checked in.
+.tls-smoke/certs/
