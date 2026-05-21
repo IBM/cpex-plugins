@@ -253,27 +253,31 @@ class PluginCatalogTests(unittest.TestCase):
         )
         self.assertEqual(
             workspace_deps["criterion"],
-            {"version": "0.8", "features": ["html_reports"]},
+            {"version": "0.8.2", "features": ["html_reports"]},
         )
-        self.assertEqual(workspace_deps["log"], "0.4")
+        self.assertEqual(workspace_deps["log"], "0.4.29")
         self.assertEqual(
             workspace_deps["pyo3-async-runtimes"],
-            {"version": "0.28", "features": ["tokio-runtime"]},
+            {"version": "0.28.0", "features": ["tokio-runtime"]},
         )
         self.assertEqual(
             workspace_deps["pyo3"],
             {"version": "0.28.3", "features": ["abi3-py311"]},
         )
-        self.assertEqual(workspace_deps["pyo3-log"], "0.13")
+        self.assertEqual(workspace_deps["pyo3-log"], "0.13.3")
         self.assertEqual(workspace_deps["pyo3-stub-gen"], "0.22.2")
-        self.assertEqual(workspace_deps["rand"], "0.8")
-        self.assertEqual(workspace_deps["regex"], "1.12")
-        self.assertEqual(workspace_deps["serde_json"], "1.0")
-        self.assertEqual(workspace_deps["thiserror"], "2.0")
+        self.assertEqual(workspace_deps["rand"], "0.10.1")
+        self.assertEqual(workspace_deps["regex"], "1.12.3")
+        self.assertEqual(
+            workspace_deps["serde"],
+            {"version": "1.0.228", "features": ["derive"]},
+        )
+        self.assertEqual(workspace_deps["serde_json"], "1.0.149")
+        self.assertEqual(workspace_deps["thiserror"], "2.0.18")
 
         self.assertEqual(
             workspace_deps["tokio"],
-            {"version": "1", "features": ["full"]},
+            {"version": "1.52.3", "features": ["full"]},
         )
 
         expected_plugin_deps = {
@@ -323,11 +327,14 @@ class PluginCatalogTests(unittest.TestCase):
             },
             "retry_with_backoff": {
                 "dependencies": {
+                    "cpex_framework_bridge": {"workspace": True},
                     "log": {"workspace": True},
                     "pyo3": {"workspace": True},
                     "pyo3-log": {"workspace": True},
                     "pyo3-stub-gen": {"workspace": True},
                     "rand": {"workspace": True},
+                    "serde": {"workspace": True},
+                    "serde_json": {"workspace": True},
                 },
                 "dev-dependencies": {},
             },
@@ -2277,6 +2284,7 @@ class PluginCatalogTests(unittest.TestCase):
                 "encoded_exfil_detection",
                 "pii_filter",
                 "rate_limiter",
+                "retry_with_backoff",
                 "secrets_detection",
             ],
         )
@@ -2358,6 +2366,7 @@ class PluginCatalogTests(unittest.TestCase):
                         "encoded_exfil_detection",
                         "pii_filter",
                         "rate_limiter",
+                        "retry_with_backoff",
                         "secrets_detection",
                     ],
                 },

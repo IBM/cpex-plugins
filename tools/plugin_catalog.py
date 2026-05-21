@@ -38,17 +38,18 @@ MANIFEST_KIND_PATTERN = re.compile(
 )
 REQUIRED_WORKSPACE_DEPENDENCIES = {
     "cpex_framework_bridge": {"path": "crates/framework_bridge"},
-    "criterion": {"version": "0.8", "features": ["html_reports"]},
-    "log": "0.4",
-    "pyo3-async-runtimes": {"version": "0.28", "features": ["tokio-runtime"]},
+    "criterion": {"version": "0.8.2", "features": ["html_reports"]},
+    "log": "0.4.29",
+    "pyo3-async-runtimes": {"version": "0.28.0", "features": ["tokio-runtime"]},
     "pyo3": {"version": "0.28.3", "features": ["abi3-py311"]},
-    "pyo3-log": "0.13",
+    "pyo3-log": "0.13.3",
     "pyo3-stub-gen": "0.22.2",
-    "rand": "0.8",
-    "regex": "1.12",
-    "serde_json": "1.0",
-    "thiserror": "2.0",
-    "tokio": {"version": "1", "features": ["full"]},
+    "rand": "0.10.1",
+    "regex": "1.12.3",
+    "serde": {"version": "1.0.228", "features": ["derive"]},
+    "serde_json": "1.0.149",
+    "thiserror": "2.0.18",
+    "tokio": {"version": "1.52.3", "features": ["full"]},
 }
 REQUIRED_PLUGIN_WORKSPACE_DEPENDENCIES = {
     "encoded_exfil_detection": {
@@ -90,7 +91,16 @@ REQUIRED_PLUGIN_WORKSPACE_DEPENDENCIES = {
         "dev-dependencies": ("criterion",),
     },
     "retry_with_backoff": {
-        "dependencies": ("log", "pyo3", "pyo3-log", "pyo3-stub-gen", "rand"),
+        "dependencies": (
+            "cpex_framework_bridge",
+            "log",
+            "pyo3",
+            "pyo3-log",
+            "pyo3-stub-gen",
+            "rand",
+            "serde",
+            "serde_json",
+        ),
         "dev-dependencies": (),
     },
     "secrets_detection": {

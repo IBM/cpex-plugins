@@ -17,18 +17,18 @@ repository = "https://github.com/IBM/cpex-plugins"
 
 [workspace.dependencies]
 cpex_framework_bridge = { path = "crates/framework_bridge" }
-criterion = { version = "0.8", features = ["html_reports"] }
-log = "0.4"
-pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
+criterion = { version = "0.8.2", features = ["html_reports"] }
+log = "0.4.29"
+pyo3-async-runtimes = { version = "0.28.0", features = ["tokio-runtime"] }
 pyo3 = { version = "0.28.3", features = ["abi3-py311"] }
-pyo3-log = "0.13"
+pyo3-log = "0.13.3"
 pyo3-stub-gen = "0.22.2"
-regex = "1.12"
-serde_json = "1.0"
-thiserror = "2.0"
-tokio = { version = "1", features = ["full"] }
-rand = "0.8"
-serde = { version = "1.0", features = ["derive"] }
+regex = "1.12.3"
+serde_json = "1.0.149"
+thiserror = "2.0.18"
+tokio = { version = "1.52.3", features = ["full"] }
+rand = "0.10.1"
+serde = { version = "1.0.228", features = ["derive"] }
 
 [profile.release]
 opt-level = 3

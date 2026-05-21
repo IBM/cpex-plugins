@@ -224,7 +224,11 @@ fn hash_mask(value: &str, salt: &str) -> String {
     hasher.update(b":");
     hasher.update(value.as_bytes());
     let result = hasher.finalize();
-    format!("[HASH:{}]", &format!("{:x}", result)[..16])
+    let hash_prefix: String = result[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("[HASH:{}]", hash_prefix)
 }
 
 /// Tokenize using UUID v4
