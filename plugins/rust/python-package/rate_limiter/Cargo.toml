@@ -1,6 +1,6 @@
 [package]
 name = "rate_limiter"
-version = "0.1.2"
+version = "0.1.3"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -22,10 +22,11 @@ pyo3 = { workspace = true }
 pyo3-async-runtimes = { workspace = true }
 pyo3-stub-gen = { workspace = true }
 pyo3-log = { workspace = true }
+mutants = "0.0.4"
 parking_lot = "0.12.5"
 thiserror = { workspace = true }
 redis = { version = "1.2.1", features = ["aio", "tokio-comp", "tls-rustls", "tokio-rustls-comp"] }
-# Direct rustls dep with the `ring` crypto provider feature. redis 0.32
+# Direct rustls dep with the `ring` crypto provider feature. redis 1.2
 # pulls rustls in transitively but via `default-features = false`, so no
 # crypto provider is enabled by default — rustls 0.23 then panics at
 # first TLS use ("Call CryptoProvider::install_default()..."). We add

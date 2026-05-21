@@ -308,6 +308,7 @@ impl RedisRateLimiter {
 
     /// REDIS-02: Execute via EVALSHA when the SHA is cached; fall back to EVAL
     /// on NOSCRIPT (Redis restarted and flushed its script cache).
+    #[mutants::skip] // Redis script-cache behavior needs a live Redis integration harness.
     async fn evalsha_or_eval(
         &self,
         conn: &mut MultiplexedConnection,
@@ -414,6 +415,7 @@ impl RedisRateLimiter {
 
     // --- Fixed window ---
 
+    #[mutants::skip] // Redis Lua response handling needs a live Redis integration harness.
     async fn eval_fixed(
         &self,
         conn: &mut MultiplexedConnection,
@@ -466,6 +468,7 @@ impl RedisRateLimiter {
 
     // --- Sliding window ---
 
+    #[mutants::skip] // Redis Lua response handling needs a live Redis integration harness.
     async fn eval_sliding(
         &self,
         conn: &mut MultiplexedConnection,
@@ -526,6 +529,7 @@ impl RedisRateLimiter {
 
     // --- Token bucket ---
 
+    #[mutants::skip] // Redis Lua response handling needs a live Redis integration harness.
     async fn eval_token_bucket(
         &self,
         conn: &mut MultiplexedConnection,
