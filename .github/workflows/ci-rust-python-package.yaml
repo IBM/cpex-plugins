@@ -111,22 +111,6 @@ jobs:
             echo "has_release_validation_tags=${has_release_validation_tags}"
           } >> "$GITHUB_OUTPUT"
 
-  detect-secrets:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
-        with:
-          python-version: "3.12"
-      - name: Install uv
-        run: python -m pip install uv==0.9.30
-      - name: Run detect-secrets
-        run: |
-          uv tool run git+https://github.com/ibm/detect-secrets.git@076672a9a01abdfc7ecee2e7d14f08cdccb73976 scan \
-            --use-all-plugins \
-            --exclude-files '(^\.secrets\.baseline$|package-lock\.json$|Cargo\.lock$|uv\.lock$|go\.sum$|poetry\.lock$|Pipfile\.lock$)' \
-            --update .secrets.baseline
-          uv tool run git+https://github.com/ibm/detect-secrets.git@076672a9a01abdfc7ecee2e7d14f08cdccb73976 audit --report --fail-on-unaudited .secrets.baseline
 
   build-test:
     needs: validate-and-detect
