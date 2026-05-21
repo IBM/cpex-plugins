@@ -72,6 +72,7 @@ REQUIRED_PLUGIN_WORKSPACE_DEPENDENCIES = {
             "pyo3-log",
             "pyo3-stub-gen",
             "regex",
+            "serde",
             "serde_json",
             "thiserror",
         ),

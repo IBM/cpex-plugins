@@ -303,6 +303,7 @@ class PluginCatalogTests(unittest.TestCase):
                     "pyo3-log": {"workspace": True},
                     "pyo3-stub-gen": {"workspace": True},
                     "regex": {"workspace": True},
+                    "serde": {"workspace": True},
                     "serde_json": {"workspace": True},
                     "thiserror": {"workspace": True},
                 },

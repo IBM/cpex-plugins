@@ -1,10 +1,10 @@
 [package]
 name = "cpex_framework_bridge"
 version = "0.1.1"
-edition = "2024"
-authors = ["ContextForge Contributors"]
-license = "Apache-2.0"
-repository = "https://github.com/IBM/cpex-plugins"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Shared PyO3 framework object bridge helpers for CPEX Rust plugins"
 
 [lib]
@@ -12,4 +12,4 @@ name = "cpex_framework_bridge"
 path = "src/lib.rs"
 
 [dependencies]
-pyo3 = { version = "0.28.3", features = ["abi3-py311"] }
+pyo3 = { workspace = true }

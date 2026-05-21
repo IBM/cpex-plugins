@@ -6,6 +6,7 @@
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fmt::Write;
 use uuid::Uuid;
 
 use super::config::{MaskingStrategy, PIIConfig, PIIType};
@@ -224,10 +225,10 @@ fn hash_mask(value: &str, salt: &str) -> String {
     hasher.update(b":");
     hasher.update(value.as_bytes());
     let result = hasher.finalize();
-    let hash_prefix: String = result[..8]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
+    let mut hash_prefix = String::with_capacity(16);
+    for byte in &result[..8] {
+        write!(&mut hash_prefix, "{byte:02x}").expect("writing to String cannot fail");
+    }
     format!("[HASH:{}]", hash_prefix)
 }
 
@@ -262,10 +263,11 @@ mod tests {
 
     #[test]
     fn test_hash_mask() {
-        let result = hash_mask("sensitive", "salt");
-        assert!(result.starts_with("[HASH:"));
-        assert!(result.ends_with("]"));
-        assert_eq!(result.len(), 23); // [HASH:xxxxxxxxxxxxxxxx]
+        assert_eq!(hash_mask("sensitive", "salt"), "[HASH:4e85efdb27bda21e]");
+        assert_ne!(
+            hash_mask("sensitive", "salt"),
+            hash_mask("sensitive", "pepper")
+        );
     }
 
     #[test]
