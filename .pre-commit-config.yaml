@@ -9,3 +9,23 @@ repos:
       - id: mixed-line-ending
         args: [--fix=lf]
       - id: trailing-whitespace
+
+  - repo: https://github.com/ibm/detect-secrets
+    rev: 076672a9a01abdfc7ecee2e7d14f08cdccb73976
+    hooks:
+      - id: detect-secrets
+        args:
+          - '--baseline'
+          - '.secrets.baseline'
+          - --use-all-plugins
+          - --fail-on-unaudited
+        exclude: |
+          (?x)(
+            ^\.secrets\.baseline$
+            |package-lock\.json$
+            |Cargo\.lock$
+            |uv\.lock$
+            |go\.sum$
+            |poetry\.lock$
+            |Pipfile\.lock$
+          )
