@@ -2277,6 +2277,7 @@ class PluginCatalogTests(unittest.TestCase):
                 "encoded_exfil_detection",
                 "pii_filter",
                 "rate_limiter",
+                "retry_with_backoff",
                 "secrets_detection",
             ],
         )
@@ -2358,6 +2359,7 @@ class PluginCatalogTests(unittest.TestCase):
                         "encoded_exfil_detection",
                         "pii_filter",
                         "rate_limiter",
+                        "retry_with_backoff",
                         "secrets_detection",
                     ],
                 },
