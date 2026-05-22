@@ -1,7 +1,9 @@
-.PHONY: help plugins-list plugins-validate plugin-test plugin-mutants plugin-mutants-list plugin-scaffold plugin-scaffold-help
+DETECT_SECRETS_SPEC := git+https://github.com/ibm/detect-secrets.git@076672a9a01abdfc7ecee2e7d14f08cdccb73976
+
+.PHONY: help plugins-list plugins-validate plugin-test plugin-mutants plugin-mutants-list plugin-scaffold plugin-scaffold-help detect-secrets-scan detect-secrets-audit detect-secrets-check
 
 help:
-	@printf "plugins-list\nplugins-validate\nplugin-test PLUGIN=<slug>\nplugin-mutants PLUGIN=<slug>\nplugin-mutants-list PLUGIN=<slug>\nplugin-scaffold\nplugin-scaffold-help\n"
+	@printf "plugins-list\nplugins-validate\nplugin-test PLUGIN=<slug>\nplugin-mutants PLUGIN=<slug>\nplugin-mutants-list PLUGIN=<slug>\nplugin-scaffold\nplugin-scaffold-help\ndetect-secrets-scan\ndetect-secrets-audit\ndetect-secrets-check\n"
 
 plugins-list:
 	@python3 tools/plugin_catalog.py list .
@@ -9,6 +11,18 @@ plugins-list:
 plugins-validate:
 	@python3 tools/plugin_catalog.py validate .
 	@python3 -m unittest tests/test_plugin_catalog.py tests/test_install_built_wheel.py
+
+detect-secrets-scan:  ## Regenerate secrets baseline
+	@uv tool run $(DETECT_SECRETS_SPEC) scan \
+		--update .secrets.baseline \
+		--use-all-plugins
+
+detect-secrets-audit:  ## Audit secrets baseline interactively
+	@test -f .secrets.baseline || (echo "Run make detect-secrets-scan first" && exit 1)
+	@uv tool run $(DETECT_SECRETS_SPEC) audit .secrets.baseline
+
+detect-secrets-check:  ## Verify no unaudited secrets (CI equivalent)
+	@pre-commit run detect-secrets --all-files
 
 plugin-test:
 	@test -n "$(PLUGIN)" || (echo "Set PLUGIN=<slug>" && exit 1)

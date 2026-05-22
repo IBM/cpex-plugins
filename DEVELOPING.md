@@ -56,6 +56,27 @@ make plugin-test PLUGIN=pii_filter
 It runs the catalog validator plus the shared repo contract test modules:
 `tests/test_plugin_catalog.py` and `tests/test_install_built_wheel.py`.
 
+## Secret Detection
+
+IBM detect-secrets helps prevent accidental credential commits.
+
+**Scan and audit:**
+```bash
+make detect-secrets-scan
+make detect-secrets-audit
+```
+
+**Local check:**
+```bash
+pre-commit run detect-secrets --all-files
+# or
+make detect-secrets-check
+```
+
+**CI:** Pull request checks fail on unaudited secrets. Audit findings locally before pushing.
+
+**Baseline:** `.secrets.baseline` stores audited findings and must be committed after baseline changes.
+
 ## Adding a New Managed Plugin
 
 ### Using the Plugin Scaffold Generator (Recommended)
