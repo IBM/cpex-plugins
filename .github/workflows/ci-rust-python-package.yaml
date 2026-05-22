@@ -405,6 +405,7 @@ jobs:
       }}
     runs-on: ubuntu-latest
     permissions:
+      actions: write
       contents: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -413,6 +414,7 @@ jobs:
 
       - name: Create release tags for bumped plugin versions
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAGS: ${{ needs.validate-and-detect.outputs.release_validation_tags }}
         run: |
           set -euo pipefail
@@ -432,23 +434,9 @@ jobs:
                 exit 1
               fi
             }
+            gh workflow run release-rust-python-package.yaml \
+              --ref main \
+              -f "tag=${tag}" \
+              -f repository=pypi
+            echo "Dispatched PyPI release workflow for ${tag}."
           done < <(python3 -c 'import json, os; [print(tag) for tag in json.loads(os.environ["RELEASE_TAGS"])]')
-
-  publish-release-tags:
-    needs:
-      - validate-and-detect
-      - create-release-tags
-    if: needs.create-release-tags.result == 'success' && needs.validate-and-detect.outputs.release_validation_tags != '[]'
-    strategy:
-      fail-fast: false
-      matrix:
-        tag: ${{ fromJson(needs.validate-and-detect.outputs.release_validation_tags || '[]') }}
-    permissions:
-      contents: read
-      id-token: write
-    secrets: inherit
-    uses: ./.github/workflows/release-rust-python-package.yaml
-    with:
-      tag: ${{ matrix.tag }}
-      repository: pypi
-      publish_enabled: true

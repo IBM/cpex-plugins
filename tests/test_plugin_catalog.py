@@ -2825,9 +2825,6 @@ class PluginCatalogTests(unittest.TestCase):
         create_tags_section = self._extract_workflow_job_section(
             workflow, "create-release-tags"
         )
-        publish_tags_section = self._extract_workflow_job_section(
-            workflow, "publish-release-tags"
-        )
         release_validation_section = self._extract_workflow_job_section(
             workflow, "release-validation"
         )
@@ -2900,6 +2897,7 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("needs.documentation.result == 'success'", create_tags_section)
         self.assertIn("needs.mutation-testing.result == 'skipped'", create_tags_section)
         self.assertIn("needs.release-validation.result == 'skipped'", create_tags_section)
+        self.assertIn("actions: write", create_tags_section)
         self.assertIn("contents: write", create_tags_section)
         # Keep the tag loop out of a pipeline so bash exits on failures inside the loop.
         self.assertNotIn("mapfile", create_tags_section)
@@ -2907,16 +2905,12 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn('[[ ! "${tag}" =~ ^[a-zA-Z0-9._-]+$ ]]', create_tags_section)
         self.assertIn('git tag "${tag}" "${GITHUB_SHA}"', create_tags_section)
         self.assertIn('git push origin "refs/tags/${tag}"', create_tags_section)
-        self.assertIn(
-            "needs.create-release-tags.result == 'success' && needs.validate-and-detect.outputs.release_validation_tags != '[]'",
-            publish_tags_section,
-        )
-        self.assertIn("tag: ${{ fromJson(needs.validate-and-detect.outputs.release_validation_tags || '[]') }}", publish_tags_section)
-        self.assertIn("repository: pypi", publish_tags_section)
-        self.assertIn("publish_enabled: true", publish_tags_section)
-        self.assertIn("id-token: write", publish_tags_section)
-        self.assertIn("secrets: inherit", publish_tags_section)
-        self.assertIn("uses: ./.github/workflows/release-rust-python-package.yaml", publish_tags_section)
+        self.assertIn("GH_TOKEN: ${{ github.token }}", create_tags_section)
+        self.assertIn("gh workflow run release-rust-python-package.yaml", create_tags_section)
+        self.assertIn("--ref main", create_tags_section)
+        self.assertIn('-f "tag=${tag}"', create_tags_section)
+        self.assertIn("-f repository=pypi", create_tags_section)
+        self.assertNotIn("publish-release-tags:", workflow)
         self.assertNotIn("cargo-audit", security_section)
         self.assertNotIn("cargo audit", security_section)
         self.assertIn("cargo install cargo-deny", security_section)
