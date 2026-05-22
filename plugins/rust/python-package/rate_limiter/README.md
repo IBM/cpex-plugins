@@ -59,9 +59,13 @@ If any configured dimension is exceeded, the plugin returns a violation with HTT
 | `by_tool` | dict | `{}` | Per-tool overrides, e.g. `{"search": "10/m"}` |
 | `algorithm` | string | `"fixed_window"` | Counting algorithm: `"fixed_window"`, `"sliding_window"`, or `"token_bucket"` |
 | `backend` | string | `"memory"` | `"memory"` or `"redis"` |
-| `redis_url` | string | `null` | Redis connection URL (required when `backend: redis`) |
+| `redis_url` | string | `null` | Redis connection URL (required when `backend: redis`). Use `rediss://` for TLS. |
 | `redis_key_prefix` | string | `"rl"` | Prefix for all Redis keys |
 | `fail_mode` | string | `"open"` | Behaviour when the backend can't be reached: `"open"` allows the request through, `"closed"` blocks with a 503 `BACKEND_UNAVAILABLE` violation |
+| `redis_ssl_ca_certs` | string | `null` | Path to a PEM CA bundle to use instead of the OS trust store. Requires `rediss://` URL. |
+| `redis_ssl_certfile` | string | `null` | Path to a PEM client certificate for mTLS. Must be paired with `redis_ssl_keyfile`. |
+| `redis_ssl_keyfile` | string | `null` | Path to a PEM private key for mTLS. Must be paired with `redis_ssl_certfile`. |
+| `redis_ssl_check_hostname` | bool | `true` | When `false`, **ALL** TLS certificate validation is disabled (see security note below). |
 
 **Rate string format:** `"<count>/<unit>"` where unit is `s`/`sec`/`second`, `m`/`min`/`minute`, or `h`/`hr`/`hour`. Malformed strings raise `ValueError` at startup. Counts above `1_000_000` are rejected as a sanity ceiling — anything higher is almost certainly a misconfig or a denial-of-service vector against the memory backend.
 
@@ -126,6 +130,47 @@ Each identity (user, tenant, tool) has a bucket that holds up to `count` tokens.
   - `"closed"` — the request is blocked with a `PluginViolation` (code `BACKEND_UNAVAILABLE`, HTTP 503, `Retry-After: 1`). Correctness over availability; pick this when a failed rate-limit check is less acceptable than a brief outage.
 
 **Multi-instance deployment (important):** The `memory` backend is local to a single gateway instance — rate limit counters are not shared across replicas. For multi-instance deployments (e.g., behind nginx or on OpenShift with multiple gateway pods), always use `backend: redis` to ensure rate limits are enforced correctly across all instances.
+
+### Redis TLS configuration
+
+Use `rediss://` (double-s) in `redis_url` to enable TLS. Three levels of TLS hardening are supported:
+
+**OS trust store (default for `rediss://`)** — no extra config; Redis's CA must be signed by a CA in the system certificate store:
+
+```yaml
+config:
+  backend: redis
+  redis_url: "rediss://redis:6380/0"
+  by_user: "60/m"
+```
+
+**Custom CA bundle** — use when your Redis server uses a private CA not in the OS trust store:
+
+```yaml
+config:
+  backend: redis
+  redis_url: "rediss://redis:6380/0"
+  redis_ssl_ca_certs: "/etc/certs/my-ca.pem"
+  by_user: "60/m"
+```
+
+**Mutual TLS (mTLS)** — present a client certificate so Redis can authenticate the plugin:
+
+```yaml
+config:
+  backend: redis
+  redis_url: "rediss://redis:6380/0"
+  redis_ssl_ca_certs: "/etc/certs/ca.pem"
+  redis_ssl_certfile: "/etc/certs/client.pem"
+  redis_ssl_keyfile: "/etc/certs/client-key.pem"
+  by_user: "60/m"
+```
+
+**Security note — `redis_ssl_check_hostname: false`:** Due to the underlying redis client API surface, setting this to `false` disables **all** TLS certificate validation (both CA chain and hostname), not only hostname verification. A `WARN` log is emitted at startup. This option is intended only for isolated environments such as local development or integration test rigs. In production, ensure your certificate's CN or SAN matches the hostname instead.
+
+All TLS file paths are validated at plugin init time: missing files and malformed PEM content are surfaced as startup errors rather than at the first request.
+
+> **Note:** The `REDIS_SSL_*` environment variables used by some Redis clients have no effect on this plugin; use the config keys above.
 
 ### Tenant-scoped Redis key layout
 

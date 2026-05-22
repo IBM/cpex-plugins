@@ -24,7 +24,7 @@ use pyo3_stub_gen::derive::*;
 use crate::clock::{Clock, SystemClock};
 use crate::config::{ConfigError, EngineConfig};
 use crate::memory::MemoryStore;
-use crate::redis_backend::RedisRateLimiter;
+use crate::redis_backend::{RedisTlsConfig, RedisRateLimiter};
 use crate::types::{DimResult, EvalResult};
 
 // ---------------------------------------------------------------------------
@@ -101,6 +101,10 @@ impl RateLimiterEngine {
     /// - `backend`: `"memory"` (default) or `"redis"`
     /// - `redis_url`: required when `backend = "redis"`
     /// - `redis_key_prefix`: key namespace prefix (default `"rl"`)
+    /// - `redis_ssl_ca_certs`: optional path to PEM CA bundle (overrides OS trust store)
+    /// - `redis_ssl_certfile`: optional path to PEM client cert (mTLS; requires `redis_ssl_keyfile`)
+    /// - `redis_ssl_keyfile`: optional path to PEM private key (mTLS; requires `redis_ssl_certfile`)
+    /// - `redis_ssl_check_hostname`: when `false`, ALL TLS cert validation is disabled (default `true`)
     /// - `fail_mode`: `"open"` (default) or `"closed"` — handled by the
     ///   plugin shim, but accepted here so it doesn't trip the unknown-key
     ///   warning below.
@@ -151,8 +155,24 @@ impl RateLimiterEngine {
                 .get_item("redis_key_prefix")?
                 .and_then(|v| v.extract().ok())
                 .unwrap_or_else(|| "rl".to_string());
-            let redis_limiter = RedisRateLimiter::new(&redis_url, engine_config.algorithm, prefix)
-                .map_err(|e| {
+            let tls_config = RedisTlsConfig {
+                ca_certs_path: config
+                    .get_item("redis_ssl_ca_certs")?
+                    .and_then(|v| v.extract().ok()),
+                certfile_path: config
+                    .get_item("redis_ssl_certfile")?
+                    .and_then(|v| v.extract().ok()),
+                keyfile_path: config
+                    .get_item("redis_ssl_keyfile")?
+                    .and_then(|v| v.extract().ok()),
+                check_hostname: config
+                    .get_item("redis_ssl_check_hostname")?
+                    .and_then(|v| v.extract().ok())
+                    .unwrap_or(true),
+            };
+            let redis_limiter =
+                RedisRateLimiter::new(&redis_url, engine_config.algorithm, prefix, tls_config)
+                    .map_err(|e| {
                     warn!("Rust rate limiter: Redis backend init failed: {}", e);
                     pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
                 })?;
@@ -401,6 +421,10 @@ fn warn_on_unknown_config_keys(config: &Bound<'_, PyDict>) {
         "redis_url",
         "redis_key_prefix",
         "fail_mode",
+        "redis_ssl_ca_certs",
+        "redis_ssl_certfile",
+        "redis_ssl_keyfile",
+        "redis_ssl_check_hostname",
     ];
     let mut unknown: Vec<String> = Vec::new();
     for (key, _) in config.iter() {

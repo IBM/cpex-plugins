@@ -28,6 +28,10 @@ class RateLimiterConfig:
         "redis_url",
         "redis_key_prefix",
         "fail_mode",
+        "redis_ssl_ca_certs",
+        "redis_ssl_certfile",
+        "redis_ssl_keyfile",
+        "redis_ssl_check_hostname",
     )
 
     def __init__(self, **overrides) -> None:

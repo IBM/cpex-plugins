@@ -12,6 +12,7 @@
 // This preserves the existing Redis counter namespace during rolling upgrades.
 
 use std::cmp::max;
+use std::io;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -163,6 +164,283 @@ fn inner_array(outer: &redis::Value, i: usize) -> Option<&Vec<redis::Value>> {
 }
 
 // ---------------------------------------------------------------------------
+// TLS configuration
+// ---------------------------------------------------------------------------
+
+/// TLS configuration knobs for the Redis backend.
+///
+/// All fields are optional/defaulted so that existing configs (no TLS knobs
+/// set) take the unchanged fast path: `Client::open(redis_url)`.
+///
+/// Validated and materialised into a `redis::Client` at engine init time via
+/// `validate_and_build` so misconfigurations surface before the first request.
+pub struct RedisTlsConfig {
+    /// Path to a PEM CA bundle. Overrides the OS trust store when set.
+    /// Requires `rediss://` URL scheme.
+    pub ca_certs_path: Option<String>,
+    /// Path to a PEM client certificate for mTLS. Must be paired with
+    /// `keyfile_path`.
+    pub certfile_path: Option<String>,
+    /// Path to a PEM private key for mTLS. Must be paired with
+    /// `certfile_path`.
+    pub keyfile_path: Option<String>,
+    /// When `false`, ALL TLS certificate validation is disabled (both CA and
+    /// hostname). Emits a WARN at init. Requires `rediss://` URL scheme.
+    /// Note: due to the redis crate's public API surface, it is not possible
+    /// to disable only hostname checking while keeping CA validation; setting
+    /// this to `false` fully disables cert verification.
+    pub check_hostname: bool,
+}
+
+impl Default for RedisTlsConfig {
+    fn default() -> Self {
+        Self {
+            ca_certs_path: None,
+            certfile_path: None,
+            keyfile_path: None,
+            check_hostname: true,
+        }
+    }
+}
+
+impl RedisTlsConfig {
+    /// Validate the config and, if any TLS knob is active, build a
+    /// `redis::Client` with the appropriate TLS settings.
+    ///
+    /// Returns `Ok(None)` when no TLS knobs are set — caller uses
+    /// `Client::open(redis_url)` directly (zero behavioral change).
+    /// Returns `Ok(Some(client))` on success.
+    /// Returns `Err` on any misconfiguration detected at startup.
+    pub fn validate_and_build(
+        &self,
+        redis_url: &str,
+    ) -> Result<Option<redis::Client>, redis::RedisError> {
+        let has_ca = self.ca_certs_path.is_some();
+        let has_cert = self.certfile_path.is_some();
+        let has_key = self.keyfile_path.is_some();
+        let skip_hostname = !self.check_hostname;
+
+        // Fast path — no TLS knobs active.
+        if !has_ca && !has_cert && !has_key && !skip_hostname {
+            return Ok(None);
+        }
+
+        // All TLS config requires the TLS URL scheme.
+        if !redis_url.starts_with("rediss://") {
+            return Err(redis::RedisError::from((
+                redis::ErrorKind::InvalidClientConfig,
+                "redis_ssl_* config keys require the rediss:// URL scheme",
+                "update redis_url to start with rediss:// to enable TLS".to_string(),
+            )));
+        }
+
+        // Validate file paths exist before reading them.
+        for (path, key) in [
+            (self.ca_certs_path.as_deref(), "redis_ssl_ca_certs"),
+            (self.certfile_path.as_deref(), "redis_ssl_certfile"),
+            (self.keyfile_path.as_deref(), "redis_ssl_keyfile"),
+        ] {
+            if let Some(p) = path
+                && !std::path::Path::new(p).is_file()
+            {
+                    return Err(redis::RedisError::from((
+                        redis::ErrorKind::Io,
+                        "TLS config file not found",
+                        format!("{key}: file not found: {p:?}"),
+                    )));
+                }
+        }
+
+        // mTLS cert and key must appear together.
+        match (has_cert, has_key) {
+            (true, false) => {
+                return Err(redis::RedisError::from((
+                    redis::ErrorKind::InvalidClientConfig,
+                    "incomplete mTLS configuration",
+                    "redis_ssl_certfile requires redis_ssl_keyfile to also be set".to_string(),
+                )))
+            }
+            (false, true) => {
+                return Err(redis::RedisError::from((
+                    redis::ErrorKind::InvalidClientConfig,
+                    "incomplete mTLS configuration",
+                    "redis_ssl_keyfile requires redis_ssl_certfile to also be set".to_string(),
+                )))
+            }
+            _ => {}
+        }
+
+        // check_hostname=false: build a fully insecure client.
+        // The redis 0.32 public API does not support disabling only hostname
+        // verification while keeping CA validation; `insecure: true` disables
+        // all cert checks.  This is documented in the plugin README.
+        if skip_hostname {
+            if has_ca {
+                log::warn!(
+                    "rate limiter: redis_ssl_check_hostname=false with redis_ssl_ca_certs: \
+                     the redis client API does not support CA-only validation without hostname \
+                     checking; redis_ssl_ca_certs is ignored and ALL TLS certificate \
+                     validation is disabled"
+                );
+            } else {
+                log::warn!(
+                    "rate limiter: redis_ssl_check_hostname=false — ALL TLS certificate \
+                     validation is disabled (server identity is not verified); \
+                     use only in isolated environments"
+                );
+            }
+            use redis::IntoConnectionInfo;
+            let conn_info = redis_url.into_connection_info().map_err(|e| {
+                redis::RedisError::from((
+                    redis::ErrorKind::InvalidClientConfig,
+                    "failed to parse redis_url",
+                    e.to_string(),
+                ))
+            })?;
+            let new_addr = match conn_info.addr() {
+                redis::ConnectionAddr::TcpTls {
+                    host,
+                    port,
+                    tls_params,
+                    ..
+                } => redis::ConnectionAddr::TcpTls {
+                    host: host.clone(),
+                    port: *port,
+                    insecure: true,
+                    tls_params: tls_params.clone(),
+                },
+                _ => {
+                    return Err(redis::RedisError::from((
+                        redis::ErrorKind::InvalidClientConfig,
+                        "redis_ssl_check_hostname=false requires a rediss:// URL",
+                    )));
+                }
+            };
+            let conn_info = conn_info.set_addr(new_addr);
+            return Ok(Some(redis::Client::open(conn_info)?));
+        }
+
+        // Standard TLS path: validate + read CA bundle if provided.
+        let root_cert = if let Some(ca_path) = &self.ca_certs_path {
+            let pem_data =
+                std::fs::read(ca_path).map_err(|e| {
+                    redis::RedisError::from((
+                        redis::ErrorKind::Io,
+                        "failed to read redis_ssl_ca_certs",
+                        format!("{ca_path:?}: {e}"),
+                    ))
+                })?;
+            let mut reader = io::BufReader::new(pem_data.as_slice());
+            let certs: Result<Vec<_>, _> = rustls_pemfile::certs(&mut reader).collect();
+            let certs = certs.map_err(|e| {
+                redis::RedisError::from((
+                    redis::ErrorKind::Io,
+                    "PEM parse error in redis_ssl_ca_certs",
+                    format!("{ca_path:?}: {e}"),
+                ))
+            })?;
+            if certs.is_empty() {
+                return Err(redis::RedisError::from((
+                    redis::ErrorKind::InvalidClientConfig,
+                    "no valid certificates found in redis_ssl_ca_certs",
+                    format!(
+                        "{ca_path:?}: file contains no parseable PEM certificates"
+                    ),
+                )));
+            }
+            Some(pem_data)
+        } else {
+            None
+        };
+
+        // Validate + read mTLS client cert and key if provided.
+        let client_tls =
+            if let (Some(cert_path), Some(key_path)) =
+                (&self.certfile_path, &self.keyfile_path)
+            {
+                let cert_data = std::fs::read(cert_path).map_err(|e| {
+                    redis::RedisError::from((
+                        redis::ErrorKind::Io,
+                        "failed to read redis_ssl_certfile",
+                        format!("{cert_path:?}: {e}"),
+                    ))
+                })?;
+                {
+                    let mut reader = io::BufReader::new(cert_data.as_slice());
+                    let certs: Result<Vec<_>, _> =
+                        rustls_pemfile::certs(&mut reader).collect();
+                    let certs = certs.map_err(|e| {
+                        redis::RedisError::from((
+                            redis::ErrorKind::Io,
+                            "PEM parse error in redis_ssl_certfile",
+                            format!("{cert_path:?}: {e}"),
+                        ))
+                    })?;
+                    if certs.is_empty() {
+                        return Err(redis::RedisError::from((
+                            redis::ErrorKind::InvalidClientConfig,
+                            "no valid certificates found in redis_ssl_certfile",
+                            format!(
+                                "{cert_path:?}: file contains no parseable PEM certificates"
+                            ),
+                        )));
+                    }
+                }
+                let key_data = std::fs::read(key_path).map_err(|e| {
+                    redis::RedisError::from((
+                        redis::ErrorKind::Io,
+                        "failed to read redis_ssl_keyfile",
+                        format!("{key_path:?}: {e}"),
+                    ))
+                })?;
+                {
+                    let mut reader = io::BufReader::new(key_data.as_slice());
+                    let key = rustls_pemfile::private_key(&mut reader).map_err(|e| {
+                        redis::RedisError::from((
+                            redis::ErrorKind::Io,
+                            "failed to parse redis_ssl_keyfile",
+                            format!("{key_path:?}: {e}"),
+                        ))
+                    })?;
+                    if key.is_none() {
+                        return Err(redis::RedisError::from((
+                            redis::ErrorKind::InvalidClientConfig,
+                            "no private key found in redis_ssl_keyfile",
+                            format!(
+                                "{key_path:?}: file contains no parseable private key \
+                                 (PKCS8 / RSA / EC)"
+                            ),
+                        )));
+                    }
+                }
+                Some(redis::ClientTlsConfig {
+                    client_cert: cert_data,
+                    client_key: key_data,
+                })
+            } else {
+                None
+            };
+
+        use redis::IntoConnectionInfo;
+        let conn_info = redis_url.into_connection_info().map_err(|e| {
+            redis::RedisError::from((
+                redis::ErrorKind::InvalidClientConfig,
+                "failed to parse redis_url",
+                e.to_string(),
+            ))
+        })?;
+        let client = redis::Client::build_with_tls(
+            conn_info,
+            redis::TlsCertificates {
+                client_tls,
+                root_cert,
+            },
+        )?;
+        Ok(Some(client))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // RedisRateLimiter
 // ---------------------------------------------------------------------------
 
@@ -200,8 +478,12 @@ impl RedisRateLimiter {
         redis_url: &str,
         algorithm: Algorithm,
         prefix: String,
+        tls_config: RedisTlsConfig,
     ) -> Result<Self, redis::RedisError> {
-        let client = redis::Client::open(redis_url)?;
+        let client = match tls_config.validate_and_build(redis_url)? {
+            Some(client) => client,
+            None => redis::Client::open(redis_url)?,
+        };
         Ok(Self {
             client,
             conn: Mutex::new(None),
@@ -592,9 +874,222 @@ impl RedisRateLimiter {
 
 #[cfg(test)]
 mod tests {
-    use super::RedisRateLimiter;
+    use super::{RedisTlsConfig, RedisRateLimiter};
     use crate::config::Algorithm;
+    use std::io::Write;
     use std::time::{Duration, Instant};
+
+    /// Write `content` to a uniquely-named temp file and return its path.
+    /// The file is automatically deleted when the returned guard is dropped.
+    struct TempFile(std::path::PathBuf);
+
+    impl TempFile {
+        fn with_content(content: &[u8]) -> Self {
+            let name = format!(
+                "rl_test_{}.pem",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .subsec_nanos()
+            );
+            let path = std::env::temp_dir().join(name);
+            let mut f = std::fs::File::create(&path).expect("create temp test file");
+            f.write_all(content).expect("write temp test file");
+            Self(path)
+        }
+
+        fn path_str(&self) -> &str {
+            self.0.to_str().unwrap()
+        }
+    }
+
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    /// Generate a self-signed CA cert PEM and its private key PEM using rcgen.
+    #[cfg(test)]
+    fn generate_test_cert_pem() -> (Vec<u8>, Vec<u8>) {
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
+            .expect("rcgen cert generation");
+        (
+            cert.serialize_pem()
+                .expect("cert PEM serialize")
+                .into_bytes(),
+            cert.serialize_private_key_pem().into_bytes(),
+        )
+    }
+
+    // ---------------------------------------------------------------------------
+    // RedisTlsConfig tests
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn tls_no_knobs_returns_none() {
+        // Default config (no TLS knobs) must take the fast path and return None
+        // regardless of the URL scheme.
+        let cfg = RedisTlsConfig::default();
+        assert!(cfg.validate_and_build("redis://127.0.0.1:6379/0").unwrap().is_none());
+        assert!(cfg.validate_and_build("rediss://127.0.0.1:6379/0").unwrap().is_none());
+    }
+
+    #[test]
+    fn tls_ca_certs_requires_rediss_scheme() {
+        let (cert_pem, _) = generate_test_cert_pem();
+        let tmp = TempFile::with_content(&cert_pem);
+        let cfg = RedisTlsConfig {
+            ca_certs_path: Some(tmp.path_str().to_string()),
+            ..RedisTlsConfig::default()
+        };
+        let err = cfg
+            .validate_and_build("redis://127.0.0.1:6379/0")
+            .unwrap_err();
+        let msg = err.to_string().to_lowercase();
+        assert!(
+            msg.contains("rediss://"),
+            "error should mention rediss://; got: {err}"
+        );
+    }
+
+    #[test]
+    fn tls_ca_certs_missing_file_errors() {
+        let cfg = RedisTlsConfig {
+            ca_certs_path: Some("/nonexistent/path/ca.pem".to_string()),
+            ..RedisTlsConfig::default()
+        };
+        let err = cfg
+            .validate_and_build("rediss://127.0.0.1:6379/0")
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("redis_ssl_ca_certs"),
+            "error should name the key; got: {err}"
+        );
+        assert!(
+            msg.contains("nonexistent"),
+            "error should name the path; got: {err}"
+        );
+    }
+
+    #[test]
+    fn tls_ca_certs_garbage_pem_errors() {
+        let tmp = TempFile::with_content(b"this is not a valid PEM certificate");
+        let cfg = RedisTlsConfig {
+            ca_certs_path: Some(tmp.path_str().to_string()),
+            ..RedisTlsConfig::default()
+        };
+        let err = cfg
+            .validate_and_build("rediss://127.0.0.1:6379/0")
+            .unwrap_err();
+        let msg = err.to_string().to_lowercase();
+        assert!(
+            msg.contains("no valid certificates") || msg.contains("pem"),
+            "error should describe the PEM problem; got: {err}"
+        );
+    }
+
+    #[test]
+    fn tls_ca_certs_valid_pem_builds_client() {
+        let (cert_pem, _) = generate_test_cert_pem();
+        let tmp = TempFile::with_content(&cert_pem);
+        let cfg = RedisTlsConfig {
+            ca_certs_path: Some(tmp.path_str().to_string()),
+            ..RedisTlsConfig::default()
+        };
+        let client = cfg
+            .validate_and_build("rediss://127.0.0.1:6379/0")
+            .expect("should succeed")
+            .expect("should return Some(client)");
+        // Client is lazy — it's built successfully; no connection is made here.
+        drop(client);
+    }
+
+    #[test]
+    fn tls_certfile_without_keyfile_errors() {
+        let (cert_pem, _) = generate_test_cert_pem();
+        let tmp = TempFile::with_content(&cert_pem);
+        let cfg = RedisTlsConfig {
+            certfile_path: Some(tmp.path_str().to_string()),
+            keyfile_path: None,
+            ..RedisTlsConfig::default()
+        };
+        let err = cfg
+            .validate_and_build("rediss://127.0.0.1:6379/0")
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("redis_ssl_keyfile"),
+            "error should mention the missing key; got: {err}"
+        );
+    }
+
+    #[test]
+    fn tls_keyfile_without_certfile_errors() {
+        let (_, key_pem) = generate_test_cert_pem();
+        let tmp = TempFile::with_content(&key_pem);
+        let cfg = RedisTlsConfig {
+            certfile_path: None,
+            keyfile_path: Some(tmp.path_str().to_string()),
+            ..RedisTlsConfig::default()
+        };
+        let err = cfg
+            .validate_and_build("rediss://127.0.0.1:6379/0")
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("redis_ssl_certfile"),
+            "error should mention the missing cert; got: {err}"
+        );
+    }
+
+    #[test]
+    fn tls_mtls_valid_pair_builds_client() {
+        let (cert_pem, key_pem) = generate_test_cert_pem();
+        let cert_file = TempFile::with_content(&cert_pem);
+        let key_file = TempFile::with_content(&key_pem);
+        let cfg = RedisTlsConfig {
+            certfile_path: Some(cert_file.path_str().to_string()),
+            keyfile_path: Some(key_file.path_str().to_string()),
+            ..RedisTlsConfig::default()
+        };
+        let client = cfg
+            .validate_and_build("rediss://127.0.0.1:6379/0")
+            .expect("should succeed")
+            .expect("should return Some(client)");
+        drop(client);
+    }
+
+    #[test]
+    fn tls_check_hostname_false_requires_rediss_scheme() {
+        let cfg = RedisTlsConfig {
+            check_hostname: false,
+            ..RedisTlsConfig::default()
+        };
+        let err = cfg
+            .validate_and_build("redis://127.0.0.1:6379/0")
+            .unwrap_err();
+        let msg = err.to_string().to_lowercase();
+        assert!(
+            msg.contains("rediss://"),
+            "error should mention rediss://; got: {err}"
+        );
+    }
+
+    #[test]
+    fn tls_check_hostname_false_builds_insecure_client() {
+        // check_hostname=false should build an insecure (no cert validation) client.
+        let cfg = RedisTlsConfig {
+            check_hostname: false,
+            ..RedisTlsConfig::default()
+        };
+        let client = cfg
+            .validate_and_build("rediss://127.0.0.1:6379/0")
+            .expect("should succeed")
+            .expect("should return Some(client)");
+        drop(client);
+    }
 
     /// `connection_async` must time out within a bounded window when the
     /// Redis endpoint accepts TCP but never speaks at the application layer.
@@ -620,8 +1115,13 @@ mod tests {
         let hang_addr = listener.local_addr().expect("local_addr").to_string();
         let url = format!("redis://{}/0", hang_addr);
 
-        let limiter = RedisRateLimiter::new(&url, Algorithm::FixedWindow, "rl".to_string())
-            .expect("client should construct (lazy connection)");
+        let limiter = RedisRateLimiter::new(
+            &url,
+            Algorithm::FixedWindow,
+            "rl".to_string(),
+            RedisTlsConfig::default(),
+        )
+        .expect("client should construct (lazy connection)");
 
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
