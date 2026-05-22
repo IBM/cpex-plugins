@@ -1,6 +1,6 @@
 [package]
 name = "retry_with_backoff"
-version = "0.3.2"
+version = "0.3.3"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -20,10 +20,10 @@ cpex_framework_bridge = { workspace = true }
 log.workspace = true
 # mutants must be a regular (non-dev) dependency because #[mutants::skip] is
 # used in non-test code; moving it to dev-dependencies would break release builds.
-mutants = "0.0"
+mutants = "0.0.4"
 pyo3.workspace = true
 pyo3-log.workspace = true
 pyo3-stub-gen.workspace = true
 rand.workspace = true
-serde = { workspace = true, features = ["derive"] }
+serde.workspace = true
 serde_json.workspace = true

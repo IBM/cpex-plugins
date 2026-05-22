@@ -188,7 +188,7 @@ fn shared_runtime() -> Result<&'static Runtime, redis::RedisError> {
     match result {
         Ok(rt) => Ok(rt),
         Err(msg) => Err(redis::RedisError::from((
-            redis::ErrorKind::IoError,
+            redis::ErrorKind::Io,
             "tokio runtime init failed",
             msg.clone(),
         ))),
@@ -242,12 +242,12 @@ impl RedisRateLimiter {
         const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
         let conn = timeout(
             CONNECT_TIMEOUT,
-            self.client.get_multiplexed_tokio_connection(),
+            self.client.get_multiplexed_async_connection(),
         )
         .await
         .map_err(|_elapsed| {
             redis::RedisError::from((
-                redis::ErrorKind::IoError,
+                redis::ErrorKind::Io,
                 "connection timeout",
                 format!(
                     "redis connection acquisition exceeded {:?}",
@@ -308,6 +308,7 @@ impl RedisRateLimiter {
 
     /// REDIS-02: Execute via EVALSHA when the SHA is cached; fall back to EVAL
     /// on NOSCRIPT (Redis restarted and flushed its script cache).
+    #[mutants::skip] // Redis script-cache behavior needs a live Redis integration harness.
     async fn evalsha_or_eval(
         &self,
         conn: &mut MultiplexedConnection,
@@ -327,7 +328,9 @@ impl RedisRateLimiter {
             }
             match cmd.query_async::<redis::Value>(conn).await {
                 Ok(val) => return Ok(val),
-                Err(e) if e.kind() == redis::ErrorKind::NoScriptError => {
+                Err(e)
+                    if e.kind() == redis::ErrorKind::Server(redis::ServerErrorKind::NoScript) =>
+                {
                     // NOSCRIPT — clear cached SHA, fall through to EVAL.
                     *self.script_sha.lock() = None;
                 }
@@ -412,6 +415,7 @@ impl RedisRateLimiter {
 
     // --- Fixed window ---
 
+    #[mutants::skip] // Redis Lua response handling needs a live Redis integration harness.
     async fn eval_fixed(
         &self,
         conn: &mut MultiplexedConnection,
@@ -432,7 +436,10 @@ impl RedisRateLimiter {
 
         for (i, (_, limit, _)) in checks.iter().enumerate() {
             let inner = inner_array(&raw, i).ok_or_else(|| {
-                redis::RedisError::from((redis::ErrorKind::TypeError, "expected inner array"))
+                redis::RedisError::from((
+                    redis::ErrorKind::UnexpectedReturnType,
+                    "expected inner array",
+                ))
             })?;
             let count = val_i64(inner.first().unwrap_or(&redis::Value::Int(0))) as u64;
             let ttl = val_i64(inner.get(1).unwrap_or(&redis::Value::Int(0)));
@@ -461,6 +468,7 @@ impl RedisRateLimiter {
 
     // --- Sliding window ---
 
+    #[mutants::skip] // Redis Lua response handling needs a live Redis integration harness.
     async fn eval_sliding(
         &self,
         conn: &mut MultiplexedConnection,
@@ -486,7 +494,10 @@ impl RedisRateLimiter {
 
         for (i, (_, limit, window_nanos)) in checks.iter().enumerate() {
             let inner = inner_array(&raw, i).ok_or_else(|| {
-                redis::RedisError::from((redis::ErrorKind::TypeError, "expected inner array"))
+                redis::RedisError::from((
+                    redis::ErrorKind::UnexpectedReturnType,
+                    "expected inner array",
+                ))
             })?;
             let allowed_int = val_i64(inner.first().unwrap_or(&redis::Value::Int(0)));
             let count = val_i64(inner.get(1).unwrap_or(&redis::Value::Int(0))) as u64;
@@ -518,6 +529,7 @@ impl RedisRateLimiter {
 
     // --- Token bucket ---
 
+    #[mutants::skip] // Redis Lua response handling needs a live Redis integration harness.
     async fn eval_token_bucket(
         &self,
         conn: &mut MultiplexedConnection,
@@ -543,7 +555,10 @@ impl RedisRateLimiter {
 
         for (i, (_, limit, window_nanos)) in checks.iter().enumerate() {
             let inner = inner_array(&raw, i).ok_or_else(|| {
-                redis::RedisError::from((redis::ErrorKind::TypeError, "expected inner array"))
+                redis::RedisError::from((
+                    redis::ErrorKind::UnexpectedReturnType,
+                    "expected inner array",
+                ))
             })?;
             let allowed_int = val_i64(inner.first().unwrap_or(&redis::Value::Int(0)));
             let remaining = val_i64(inner.get(1).unwrap_or(&redis::Value::Int(0))) as u64;
@@ -587,14 +602,14 @@ mod tests {
     /// Test setup: bind a TCP listener but never call `accept()` to read or
     /// write any bytes.  The kernel completes the TCP three-way handshake
     /// into its accept queue; the redis crate's
-    /// `get_multiplexed_tokio_connection` sends its initial handshake bytes
+    /// `get_multiplexed_async_connection` sends its initial handshake bytes
     /// and waits for a response that never comes.
     ///
     /// The outer `tokio::time::timeout(5s)` is the test's runaway-guard so
     /// a regression doesn't hang the test run.  Asserts:
     ///   * `connection_async` returns within ~3 seconds (well under the
     ///     5s guard).
-    ///   * The returned error is `IoError`-shaped, so the existing
+    ///   * The returned error is `Io`-shaped, so the existing
     ///     `fail_mode` path can route it the same way as any other
     ///     connection-side failure.
     #[test]
@@ -643,7 +658,7 @@ mod tests {
              completes the redis handshake), not return Ok",
         );
         // Pin the exact contract: the connection-acquisition timeout maps
-        // into ``redis::ErrorKind::IoError``, the same shape the existing
+        // into ``redis::ErrorKind::Io``, the same shape the existing
         // ``fail_mode`` path routes for any other connection-side failure.
         // Anything else (ResponseError, ClientError, ...) would mean the
         // timeout is being surfaced through a different code path than
@@ -651,8 +666,8 @@ mod tests {
         // operator's fail-open / fail-closed policy.
         assert_eq!(
             err.kind(),
-            redis::ErrorKind::IoError,
-            "expected IoError-shaped timeout error from connection_async; got {:?}: {}",
+            redis::ErrorKind::Io,
+            "expected Io-shaped timeout error from connection_async; got {:?}: {}",
             err.kind(),
             err,
         );
