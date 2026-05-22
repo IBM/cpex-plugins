@@ -24,7 +24,7 @@ use pyo3_stub_gen::derive::*;
 use crate::clock::{Clock, SystemClock};
 use crate::config::{ConfigError, EngineConfig};
 use crate::memory::MemoryStore;
-use crate::redis_backend::{RedisTlsConfig, RedisRateLimiter};
+use crate::redis_backend::{RedisRateLimiter, RedisTlsConfig};
 use crate::types::{DimResult, EvalResult};
 
 // ---------------------------------------------------------------------------
@@ -173,9 +173,9 @@ impl RateLimiterEngine {
             let redis_limiter =
                 RedisRateLimiter::new(&redis_url, engine_config.algorithm, prefix, tls_config)
                     .map_err(|e| {
-                    warn!("Rust rate limiter: Redis backend init failed: {}", e);
-                    pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
-                })?;
+                        warn!("Rust rate limiter: Redis backend init failed: {}", e);
+                        pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
+                    })?;
             EngineBackend::Redis(Arc::new(redis_limiter))
         } else if backend_str == "memory" {
             EngineBackend::Memory(Arc::new(MemoryStore::new()))

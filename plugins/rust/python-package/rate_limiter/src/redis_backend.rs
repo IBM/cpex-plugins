@@ -12,7 +12,6 @@
 // This preserves the existing Redis counter namespace during rolling upgrades.
 
 use std::cmp::max;
-use std::io;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -243,12 +242,12 @@ impl RedisTlsConfig {
             if let Some(p) = path
                 && !std::path::Path::new(p).is_file()
             {
-                    return Err(redis::RedisError::from((
-                        redis::ErrorKind::Io,
-                        "TLS config file not found",
-                        format!("{key}: file not found: {p:?}"),
-                    )));
-                }
+                return Err(redis::RedisError::from((
+                    redis::ErrorKind::Io,
+                    "TLS config file not found",
+                    format!("{key}: file not found: {p:?}"),
+                )));
+            }
         }
 
         // mTLS cert and key must appear together.
@@ -258,14 +257,14 @@ impl RedisTlsConfig {
                     redis::ErrorKind::InvalidClientConfig,
                     "incomplete mTLS configuration",
                     "redis_ssl_certfile requires redis_ssl_keyfile to also be set".to_string(),
-                )))
+                )));
             }
             (false, true) => {
                 return Err(redis::RedisError::from((
                     redis::ErrorKind::InvalidClientConfig,
                     "incomplete mTLS configuration",
                     "redis_ssl_keyfile requires redis_ssl_certfile to also be set".to_string(),
-                )))
+                )));
             }
             _ => {}
         }
@@ -363,16 +362,16 @@ impl RedisTlsConfig {
 
         // Standard TLS path: validate + read CA bundle if provided.
         let root_cert = if let Some(ca_path) = &self.ca_certs_path {
-            let pem_data =
-                std::fs::read(ca_path).map_err(|e| {
-                    redis::RedisError::from((
-                        redis::ErrorKind::Io,
-                        "failed to read redis_ssl_ca_certs",
-                        format!("{ca_path:?}: {e}"),
-                    ))
-                })?;
-            let mut reader = io::BufReader::new(pem_data.as_slice());
-            let certs: Result<Vec<_>, _> = rustls_pemfile::certs(&mut reader).collect();
+            let pem_data = std::fs::read(ca_path).map_err(|e| {
+                redis::RedisError::from((
+                    redis::ErrorKind::Io,
+                    "failed to read redis_ssl_ca_certs",
+                    format!("{ca_path:?}: {e}"),
+                ))
+            })?;
+            use rustls_pki_types::pem::PemObject;
+            let certs: Result<Vec<rustls_pki_types::CertificateDer<'static>>, _> =
+                rustls_pki_types::CertificateDer::pem_slice_iter(&pem_data).collect();
             let certs = certs.map_err(|e| {
                 redis::RedisError::from((
                     redis::ErrorKind::Io,
@@ -384,9 +383,7 @@ impl RedisTlsConfig {
                 return Err(redis::RedisError::from((
                     redis::ErrorKind::InvalidClientConfig,
                     "no valid certificates found in redis_ssl_ca_certs",
-                    format!(
-                        "{ca_path:?}: file contains no parseable PEM certificates"
-                    ),
+                    format!("{ca_path:?}: file contains no parseable PEM certificates"),
                 )));
             }
             Some(pem_data)
@@ -396,9 +393,7 @@ impl RedisTlsConfig {
 
         // Validate + read mTLS client cert and key if provided.
         let client_tls =
-            if let (Some(cert_path), Some(key_path)) =
-                (&self.certfile_path, &self.keyfile_path)
-            {
+            if let (Some(cert_path), Some(key_path)) = (&self.certfile_path, &self.keyfile_path) {
                 let cert_data = std::fs::read(cert_path).map_err(|e| {
                     redis::RedisError::from((
                         redis::ErrorKind::Io,
@@ -407,9 +402,9 @@ impl RedisTlsConfig {
                     ))
                 })?;
                 {
-                    let mut reader = io::BufReader::new(cert_data.as_slice());
-                    let certs: Result<Vec<_>, _> =
-                        rustls_pemfile::certs(&mut reader).collect();
+                    use rustls_pki_types::pem::PemObject;
+                    let certs: Result<Vec<rustls_pki_types::CertificateDer<'static>>, _> =
+                        rustls_pki_types::CertificateDer::pem_slice_iter(&cert_data).collect();
                     let certs = certs.map_err(|e| {
                         redis::RedisError::from((
                             redis::ErrorKind::Io,
@@ -421,9 +416,7 @@ impl RedisTlsConfig {
                         return Err(redis::RedisError::from((
                             redis::ErrorKind::InvalidClientConfig,
                             "no valid certificates found in redis_ssl_certfile",
-                            format!(
-                                "{cert_path:?}: file contains no parseable PEM certificates"
-                            ),
+                            format!("{cert_path:?}: file contains no parseable PEM certificates"),
                         )));
                     }
                 }
@@ -435,24 +428,17 @@ impl RedisTlsConfig {
                     ))
                 })?;
                 {
-                    let mut reader = io::BufReader::new(key_data.as_slice());
-                    let key = rustls_pemfile::private_key(&mut reader).map_err(|e| {
+                    use rustls_pki_types::pem::PemObject;
+                    rustls_pki_types::PrivateKeyDer::from_pem_slice(&key_data).map_err(|e| {
                         redis::RedisError::from((
-                            redis::ErrorKind::Io,
+                            redis::ErrorKind::InvalidClientConfig,
                             "failed to parse redis_ssl_keyfile",
-                            format!("{key_path:?}: {e}"),
+                            format!(
+                                "{key_path:?}: {e} \
+                                 (expected PEM-encoded PKCS#8, PKCS#1, or SEC1 private key)"
+                            ),
                         ))
                     })?;
-                    if key.is_none() {
-                        return Err(redis::RedisError::from((
-                            redis::ErrorKind::InvalidClientConfig,
-                            "no private key found in redis_ssl_keyfile",
-                            format!(
-                                "{key_path:?}: file contains no parseable private key \
-                                 (PKCS8 / RSA / EC)"
-                            ),
-                        )));
-                    }
                 }
                 Some(redis::ClientTlsConfig {
                     client_cert: cert_data,
@@ -915,7 +901,7 @@ impl RedisRateLimiter {
 
 #[cfg(test)]
 mod tests {
-    use super::{RedisTlsConfig, RedisRateLimiter};
+    use super::{RedisRateLimiter, RedisTlsConfig};
     use crate::config::Algorithm;
     use std::io::Write;
     use std::time::{Duration, Instant};
@@ -972,8 +958,16 @@ mod tests {
         // Default config (no TLS knobs) must take the fast path and return None
         // regardless of the URL scheme.
         let cfg = RedisTlsConfig::default();
-        assert!(cfg.validate_and_build("redis://127.0.0.1:6379/0").unwrap().is_none());
-        assert!(cfg.validate_and_build("rediss://127.0.0.1:6379/0").unwrap().is_none());
+        assert!(
+            cfg.validate_and_build("redis://127.0.0.1:6379/0")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            cfg.validate_and_build("rediss://127.0.0.1:6379/0")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -1123,6 +1117,151 @@ mod tests {
         // check_hostname=false should build an insecure (no cert validation) client.
         let cfg = RedisTlsConfig {
             check_hostname: false,
+            ..RedisTlsConfig::default()
+        };
+        let client = cfg
+            .validate_and_build("rediss://127.0.0.1:6379/0")
+            .expect("should succeed")
+            .expect("should return Some(client)");
+        drop(client);
+    }
+
+    #[test]
+    fn tls_check_hostname_false_with_mtls_builds_client() {
+        // Insecure mode must still load and present the mTLS client cert/key
+        // so the server can authenticate the client.
+        let (cert_pem, key_pem) = generate_test_cert_pem();
+        let cert_file = TempFile::with_content(&cert_pem);
+        let key_file = TempFile::with_content(&key_pem);
+        let cfg = RedisTlsConfig {
+            check_hostname: false,
+            certfile_path: Some(cert_file.path_str().to_string()),
+            keyfile_path: Some(key_file.path_str().to_string()),
+            ..RedisTlsConfig::default()
+        };
+        let client = cfg
+            .validate_and_build("rediss://127.0.0.1:6379/0")
+            .expect("should succeed")
+            .expect("should return Some(client)");
+        drop(client);
+    }
+
+    #[test]
+    fn tls_check_hostname_false_with_ca_certs_builds_client() {
+        // Insecure mode logs a warning and ignores the CA bundle; the build
+        // still succeeds.
+        let (cert_pem, _) = generate_test_cert_pem();
+        let ca_file = TempFile::with_content(&cert_pem);
+        let cfg = RedisTlsConfig {
+            check_hostname: false,
+            ca_certs_path: Some(ca_file.path_str().to_string()),
+            ..RedisTlsConfig::default()
+        };
+        let client = cfg
+            .validate_and_build("rediss://127.0.0.1:6379/0")
+            .expect("should succeed")
+            .expect("should return Some(client)");
+        drop(client);
+    }
+
+    #[test]
+    fn tls_mtls_garbage_certfile_pem_errors() {
+        // Garbage content in redis_ssl_certfile must surface a PEM error
+        // before any client is built.
+        let (_, key_pem) = generate_test_cert_pem();
+        let cert_file = TempFile::with_content(b"this is not a valid PEM certificate");
+        let key_file = TempFile::with_content(&key_pem);
+        let cfg = RedisTlsConfig {
+            certfile_path: Some(cert_file.path_str().to_string()),
+            keyfile_path: Some(key_file.path_str().to_string()),
+            ..RedisTlsConfig::default()
+        };
+        let err = cfg
+            .validate_and_build("rediss://127.0.0.1:6379/0")
+            .unwrap_err();
+        let msg = err.to_string().to_lowercase();
+        assert!(
+            msg.contains("redis_ssl_certfile") || msg.contains("no valid certificates"),
+            "error should describe the PEM problem; got: {err}"
+        );
+    }
+
+    #[test]
+    fn tls_mtls_malformed_certfile_pem_errors() {
+        // A PEM-shaped block with malformed body (invalid base64) must surface
+        // a PEM parse error from pem_slice_iter (not the empty-cert branch).
+        let (_, key_pem) = generate_test_cert_pem();
+        let malformed =
+            b"-----BEGIN CERTIFICATE-----\n!!!not valid base64!!!\n-----END CERTIFICATE-----\n";
+        let cert_file = TempFile::with_content(malformed);
+        let key_file = TempFile::with_content(&key_pem);
+        let cfg = RedisTlsConfig {
+            certfile_path: Some(cert_file.path_str().to_string()),
+            keyfile_path: Some(key_file.path_str().to_string()),
+            ..RedisTlsConfig::default()
+        };
+        let err = cfg
+            .validate_and_build("rediss://127.0.0.1:6379/0")
+            .unwrap_err();
+        let msg = err.to_string().to_lowercase();
+        assert!(
+            msg.contains("redis_ssl_certfile") || msg.contains("pem"),
+            "error should mention the certfile or PEM; got: {err}"
+        );
+    }
+
+    #[test]
+    fn tls_ca_certs_malformed_pem_errors() {
+        // Malformed PEM in CA bundle must surface a PEM parse error.
+        let malformed =
+            b"-----BEGIN CERTIFICATE-----\n!!!not valid base64!!!\n-----END CERTIFICATE-----\n";
+        let tmp = TempFile::with_content(malformed);
+        let cfg = RedisTlsConfig {
+            ca_certs_path: Some(tmp.path_str().to_string()),
+            ..RedisTlsConfig::default()
+        };
+        let err = cfg
+            .validate_and_build("rediss://127.0.0.1:6379/0")
+            .unwrap_err();
+        let msg = err.to_string().to_lowercase();
+        assert!(
+            msg.contains("redis_ssl_ca_certs") || msg.contains("pem"),
+            "error should mention CA certs or PEM; got: {err}"
+        );
+    }
+
+    #[test]
+    fn tls_mtls_garbage_keyfile_pem_errors() {
+        // Garbage content in redis_ssl_keyfile must surface a parse error.
+        let (cert_pem, _) = generate_test_cert_pem();
+        let cert_file = TempFile::with_content(&cert_pem);
+        let key_file = TempFile::with_content(b"this is not a valid PEM private key");
+        let cfg = RedisTlsConfig {
+            certfile_path: Some(cert_file.path_str().to_string()),
+            keyfile_path: Some(key_file.path_str().to_string()),
+            ..RedisTlsConfig::default()
+        };
+        let err = cfg
+            .validate_and_build("rediss://127.0.0.1:6379/0")
+            .unwrap_err();
+        let msg = err.to_string().to_lowercase();
+        assert!(
+            msg.contains("redis_ssl_keyfile"),
+            "error should mention the keyfile; got: {err}"
+        );
+    }
+
+    #[test]
+    fn tls_mtls_with_ca_certs_builds_client() {
+        // CA bundle + mTLS together must build a client successfully.
+        let (cert_pem, key_pem) = generate_test_cert_pem();
+        let ca_file = TempFile::with_content(&cert_pem);
+        let cert_file = TempFile::with_content(&cert_pem);
+        let key_file = TempFile::with_content(&key_pem);
+        let cfg = RedisTlsConfig {
+            ca_certs_path: Some(ca_file.path_str().to_string()),
+            certfile_path: Some(cert_file.path_str().to_string()),
+            keyfile_path: Some(key_file.path_str().to_string()),
             ..RedisTlsConfig::default()
         };
         let client = cfg

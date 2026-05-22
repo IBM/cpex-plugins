@@ -40,7 +40,7 @@ redis = { version = "1.2.1", features = ["aio", "tokio-comp", "tls-rustls", "tls
 # for the UBI Minimal image mcp-context-forge ships on, and for any
 # distribution that keeps `ca-certificates` in its base.
 rustls = { version = "0.23.40", default-features = false, features = ["ring", "std"] }
-rustls-pemfile = "2"
+rustls-pki-types = "1.14"
 tokio = { workspace = true }
 
 [dev-dependencies]
