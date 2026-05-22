@@ -270,25 +270,55 @@ impl RedisTlsConfig {
             _ => {}
         }
 
-        // check_hostname=false: build a fully insecure client.
-        // The redis 0.32 public API does not support disabling only hostname
-        // verification while keeping CA validation; `insecure: true` disables
-        // all cert checks.  This is documented in the plugin README.
+        // check_hostname=false: build a fully insecure client.  The
+        // `tls-rustls-insecure` feature enables `NoCertificateVerification` in
+        // the rustls config so the `insecure: true` flag on `ConnectionAddr` is
+        // actually honoured at connection time.
+        //
+        // CA certs are not loaded (cert pinning has no value without server-cert
+        // verification).  mTLS client cert/key is still loaded and presented if
+        // configured — the caller may need to authenticate even against a server
+        // whose cert we don't verify.
         if skip_hostname {
             if has_ca {
                 log::warn!(
                     "rate limiter: redis_ssl_check_hostname=false with redis_ssl_ca_certs: \
-                     the redis client API does not support CA-only validation without hostname \
-                     checking; redis_ssl_ca_certs is ignored and ALL TLS certificate \
-                     validation is disabled"
-                );
-            } else {
-                log::warn!(
-                    "rate limiter: redis_ssl_check_hostname=false — ALL TLS certificate \
-                     validation is disabled (server identity is not verified); \
-                     use only in isolated environments"
+                     CA certificate is not loaded in insecure mode (all TLS validation \
+                     is disabled); redis_ssl_ca_certs is ignored"
                 );
             }
+            log::warn!(
+                "rate limiter: redis_ssl_check_hostname=false — ALL TLS certificate \
+                 validation is disabled (server identity is not verified); \
+                 use only in isolated environments"
+            );
+
+            // Still load and present client cert/key (mTLS) even in insecure mode.
+            let client_tls = if let (Some(cert_path), Some(key_path)) =
+                (&self.certfile_path, &self.keyfile_path)
+            {
+                let cert_data = std::fs::read(cert_path).map_err(|e| {
+                    redis::RedisError::from((
+                        redis::ErrorKind::Io,
+                        "failed to read redis_ssl_certfile",
+                        format!("{cert_path:?}: {e}"),
+                    ))
+                })?;
+                let key_data = std::fs::read(key_path).map_err(|e| {
+                    redis::RedisError::from((
+                        redis::ErrorKind::Io,
+                        "failed to read redis_ssl_keyfile",
+                        format!("{key_path:?}: {e}"),
+                    ))
+                })?;
+                Some(redis::ClientTlsConfig {
+                    client_cert: cert_data,
+                    client_key: key_data,
+                })
+            } else {
+                None
+            };
+
             use redis::IntoConnectionInfo;
             let conn_info = redis_url.into_connection_info().map_err(|e| {
                 redis::RedisError::from((
@@ -317,7 +347,18 @@ impl RedisTlsConfig {
                 }
             };
             let conn_info = conn_info.set_addr(new_addr);
-            return Ok(Some(redis::Client::open(conn_info)?));
+            let client = if let Some(client_tls) = client_tls {
+                redis::Client::build_with_tls(
+                    conn_info,
+                    redis::TlsCertificates {
+                        client_tls: Some(client_tls),
+                        root_cert: None,
+                    },
+                )?
+            } else {
+                redis::Client::open(conn_info)?
+            };
+            return Ok(Some(client));
         }
 
         // Standard TLS path: validate + read CA bundle if provided.
@@ -885,12 +926,12 @@ mod tests {
 
     impl TempFile {
         fn with_content(content: &[u8]) -> Self {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static COUNTER: AtomicU64 = AtomicU64::new(0);
             let name = format!(
-                "rl_test_{}.pem",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .subsec_nanos()
+                "rl_test_{}_{}.pem",
+                std::process::id(),
+                COUNTER.fetch_add(1, Ordering::Relaxed),
             );
             let path = std::env::temp_dir().join(name);
             let mut f = std::fs::File::create(&path).expect("create temp test file");
@@ -909,7 +950,7 @@ mod tests {
         }
     }
 
-    /// Generate a self-signed CA cert PEM and its private key PEM using rcgen.
+    /// Generate a self-signed certificate PEM and its private key PEM using rcgen.
     #[cfg(test)]
     fn generate_test_cert_pem() -> (Vec<u8>, Vec<u8>) {
         let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
