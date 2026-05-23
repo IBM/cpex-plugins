@@ -102,6 +102,10 @@ class RateLimiterEngine:
         - `backend`: `"memory"` (default) or `"redis"`
         - `redis_url`: required when `backend = "redis"`
         - `redis_key_prefix`: key namespace prefix (default `"rl"`)
+        - `redis_ssl_ca_certs`: optional path to PEM CA bundle (overrides OS trust store)
+        - `redis_ssl_certfile`: optional path to PEM client cert (mTLS; requires `redis_ssl_keyfile`)
+        - `redis_ssl_keyfile`: optional path to PEM private key (mTLS; requires `redis_ssl_certfile`)
+        - `redis_ssl_check_hostname`: when `false`, ALL TLS cert validation is disabled (default `true`)
         - `fail_mode`: `"open"` (default) or `"closed"` — handled by the
           plugin shim, but accepted here so it doesn't trip the unknown-key
           warning below.

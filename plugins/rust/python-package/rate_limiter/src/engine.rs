@@ -24,7 +24,7 @@ use pyo3_stub_gen::derive::*;
 use crate::clock::{Clock, SystemClock};
 use crate::config::{ConfigError, EngineConfig};
 use crate::memory::MemoryStore;
-use crate::redis_backend::RedisRateLimiter;
+use crate::redis_backend::{RedisRateLimiter, RedisTlsConfig};
 use crate::types::{DimResult, EvalResult};
 
 // ---------------------------------------------------------------------------
@@ -101,6 +101,10 @@ impl RateLimiterEngine {
     /// - `backend`: `"memory"` (default) or `"redis"`
     /// - `redis_url`: required when `backend = "redis"`
     /// - `redis_key_prefix`: key namespace prefix (default `"rl"`)
+    /// - `redis_ssl_ca_certs`: optional path to PEM CA bundle (overrides OS trust store)
+    /// - `redis_ssl_certfile`: optional path to PEM client cert (mTLS; requires `redis_ssl_keyfile`)
+    /// - `redis_ssl_keyfile`: optional path to PEM private key (mTLS; requires `redis_ssl_certfile`)
+    /// - `redis_ssl_check_hostname`: when `false`, ALL TLS cert validation is disabled (default `true`)
     /// - `fail_mode`: `"open"` (default) or `"closed"` — handled by the
     ///   plugin shim, but accepted here so it doesn't trip the unknown-key
     ///   warning below.
@@ -110,7 +114,7 @@ impl RateLimiterEngine {
     /// silently ignored.
     #[new]
     pub fn new(config: &Bound<'_, PyDict>) -> PyResult<Self> {
-        warn_on_unknown_config_keys(config);
+        let _ = warn_on_unknown_config_keys(config);
 
         let by_user: Option<String> = config.get_item("by_user")?.and_then(|v| v.extract().ok());
         let by_tenant: Option<String> =
@@ -151,11 +155,27 @@ impl RateLimiterEngine {
                 .get_item("redis_key_prefix")?
                 .and_then(|v| v.extract().ok())
                 .unwrap_or_else(|| "rl".to_string());
-            let redis_limiter = RedisRateLimiter::new(&redis_url, engine_config.algorithm, prefix)
-                .map_err(|e| {
-                    warn!("Rust rate limiter: Redis backend init failed: {}", e);
-                    pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
-                })?;
+            let tls_config = RedisTlsConfig {
+                ca_certs_path: config
+                    .get_item("redis_ssl_ca_certs")?
+                    .and_then(|v| v.extract().ok()),
+                certfile_path: config
+                    .get_item("redis_ssl_certfile")?
+                    .and_then(|v| v.extract().ok()),
+                keyfile_path: config
+                    .get_item("redis_ssl_keyfile")?
+                    .and_then(|v| v.extract().ok()),
+                check_hostname: config
+                    .get_item("redis_ssl_check_hostname")?
+                    .and_then(|v| v.extract().ok())
+                    .unwrap_or(true),
+            };
+            let redis_limiter =
+                RedisRateLimiter::new(&redis_url, engine_config.algorithm, prefix, tls_config)
+                    .map_err(|e| {
+                        warn!("Rust rate limiter: Redis backend init failed: {}", e);
+                        pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
+                    })?;
             EngineBackend::Redis(Arc::new(redis_limiter))
         } else if backend_str == "memory" {
             EngineBackend::Memory(Arc::new(MemoryStore::new()))
@@ -388,10 +408,12 @@ impl RateLimiterEngine {
     }
 }
 
-/// Emit a single WARN-level log listing config keys we don't recognise.
+/// Emit a single WARN-level log listing config keys we don't recognise and
+/// return the sorted list (empty when every key is known). Returning the list
+/// keeps the helper unit-testable without a log-capture harness.
 /// Catches misspellings (e.g. ``redis_ur`` instead of ``redis_url``) that
 /// would otherwise silently default and surprise the operator at runtime.
-fn warn_on_unknown_config_keys(config: &Bound<'_, PyDict>) {
+fn warn_on_unknown_config_keys(config: &Bound<'_, PyDict>) -> Vec<String> {
     const KNOWN: &[&str] = &[
         "by_user",
         "by_tenant",
@@ -401,6 +423,10 @@ fn warn_on_unknown_config_keys(config: &Bound<'_, PyDict>) {
         "redis_url",
         "redis_key_prefix",
         "fail_mode",
+        "redis_ssl_ca_certs",
+        "redis_ssl_certfile",
+        "redis_ssl_keyfile",
+        "redis_ssl_check_hostname",
     ];
     let mut unknown: Vec<String> = Vec::new();
     for (key, _) in config.iter() {
@@ -419,6 +445,7 @@ fn warn_on_unknown_config_keys(config: &Bound<'_, PyDict>) {
             KNOWN.join(", "),
         );
     }
+    unknown
 }
 
 /// Build HTTP rate-limit headers dict — mirrors Python `_make_headers()`.
@@ -738,5 +765,52 @@ mod tests {
         for ((k1, _, _), (k2, _, _)) in checks_none.iter().zip(checks_empty.iter()) {
             assert_eq!(k1, k2);
         }
+    }
+
+    // --- warn_on_unknown_config_keys: returns sorted list of unrecognised keys ---
+
+    #[test]
+    fn warn_on_unknown_config_keys_returns_empty_for_all_known_keys() {
+        init_python();
+        Python::attach(|py| {
+            let cfg = PyDict::new(py);
+            // Every key the engine recognises today, including the four TLS knobs.
+            for k in [
+                "by_user",
+                "by_tenant",
+                "by_tool",
+                "algorithm",
+                "backend",
+                "redis_url",
+                "redis_key_prefix",
+                "fail_mode",
+                "redis_ssl_ca_certs",
+                "redis_ssl_certfile",
+                "redis_ssl_keyfile",
+                "redis_ssl_check_hostname",
+            ] {
+                cfg.set_item(k, py.None()).unwrap();
+            }
+            let unknown = warn_on_unknown_config_keys(&cfg);
+            assert!(
+                unknown.is_empty(),
+                "expected no unknown keys, got {unknown:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn warn_on_unknown_config_keys_returns_sorted_unknown_keys() {
+        init_python();
+        Python::attach(|py| {
+            let cfg = PyDict::new(py);
+            // Mix of known and unknown — only unknowns should be returned, sorted.
+            cfg.set_item("redis_url", "redis://localhost").unwrap();
+            cfg.set_item("redis_ur", "typo").unwrap(); // misspelling
+            cfg.set_item("foo", 1).unwrap();
+            cfg.set_item("algorithm", "fixed_window").unwrap();
+            let unknown = warn_on_unknown_config_keys(&cfg);
+            assert_eq!(unknown, vec!["foo".to_string(), "redis_ur".to_string()]);
+        });
     }
 }

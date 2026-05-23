@@ -1,6 +1,6 @@
 [package]
 name = "rate_limiter"
-version = "0.1.2"
+version = "0.1.3"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -25,7 +25,7 @@ pyo3-log = { workspace = true }
 mutants = "0.0.4"
 parking_lot = "0.12.5"
 thiserror = { workspace = true }
-redis = { version = "1.2.1", features = ["aio", "tokio-comp", "tls-rustls", "tokio-rustls-comp"] }
+redis = { version = "1.2.1", features = ["aio", "tokio-comp", "tls-rustls", "tls-rustls-insecure", "tokio-rustls-comp"] }
 # Direct rustls dep with the `ring` crypto provider feature. redis 1.2
 # pulls rustls in transitively but via `default-features = false`, so no
 # crypto provider is enabled by default — rustls 0.23 then panics at
@@ -40,9 +40,11 @@ redis = { version = "1.2.1", features = ["aio", "tokio-comp", "tls-rustls", "tok
 # for the UBI Minimal image mcp-context-forge ships on, and for any
 # distribution that keeps `ca-certificates` in its base.
 rustls = { version = "0.23.40", default-features = false, features = ["ring", "std"] }
+rustls-pki-types = "1.14"
 tokio = { workspace = true }
 
 [dev-dependencies]
+rcgen = { version = "0.12", default-features = false, features = ["ring", "pem"] }
 criterion = { workspace = true }
 
 [[bench]]

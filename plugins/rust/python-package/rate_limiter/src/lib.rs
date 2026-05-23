@@ -32,6 +32,10 @@ fn compat_default_config(py: Python<'_>) -> PyResult<Py<PyDict>> {
     defaults.set_item("redis_url", py.None())?;
     defaults.set_item("redis_key_prefix", "rl")?;
     defaults.set_item("fail_mode", "open")?;
+    defaults.set_item("redis_ssl_ca_certs", py.None())?;
+    defaults.set_item("redis_ssl_certfile", py.None())?;
+    defaults.set_item("redis_ssl_keyfile", py.None())?;
+    defaults.set_item("redis_ssl_check_hostname", true)?;
     Ok(defaults.unbind())
 }
 
