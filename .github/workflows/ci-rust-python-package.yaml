@@ -437,6 +437,8 @@ jobs:
             gh workflow run release-rust-python-package.yaml \
               --ref main \
               -f "tag=${tag}" \
-              -f repository=pypi
-            echo "Dispatched PyPI release workflow for ${tag}."
+              -f repository=pypi \
+              -f publish_enabled=true
+            release_run_url="$(gh run list -w release-rust-python-package.yaml --limit 1 --json url --jq '.[0].url')"
+            echo "Dispatched PyPI release workflow for ${tag}: ${release_run_url}"
           done < <(python3 -c 'import json, os; [print(tag) for tag in json.loads(os.environ["RELEASE_TAGS"])]')

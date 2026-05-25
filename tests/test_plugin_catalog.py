@@ -2910,6 +2910,13 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("--ref main", create_tags_section)
         self.assertIn('-f "tag=${tag}"', create_tags_section)
         self.assertIn("-f repository=pypi", create_tags_section)
+        self.assertIn("-f publish_enabled=true", create_tags_section)
+        self.assertIn("gh run list -w release-rust-python-package.yaml", create_tags_section)
+        self.assertIn("--json url --jq '.[0].url'", create_tags_section)
+        self.assertLess(
+            create_tags_section.index('git push origin "refs/tags/${tag}"'),
+            create_tags_section.index("gh workflow run release-rust-python-package.yaml"),
+        )
         self.assertNotIn("publish-release-tags:", workflow)
         self.assertNotIn("cargo-audit", security_section)
         self.assertNotIn("cargo audit", security_section)
@@ -3477,6 +3484,8 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("workflow_call:", workflow)
         self.assertIn("publish_enabled:", workflow)
         self.assertIn('default: false', workflow)
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn('default: true', workflow)
         self.assertIn('git fetch --force origin "refs/heads/main:refs/remotes/origin/main"', workflow)
         self.assertIn('if git merge-base --is-ancestor "${tag_ref}" "refs/remotes/origin/main"; then', workflow)
         self.assertIn("tag_on_main: ${{ steps.resolve.outputs.tag_on_main }}", workflow)

@@ -33,6 +33,11 @@ on:
         options:
           - testpypi
           - pypi
+      publish_enabled:
+        description: "Whether to run the publish job"
+        required: false
+        default: true
+        type: boolean
 permissions:
   contents: read
 
