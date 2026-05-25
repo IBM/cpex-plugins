@@ -6,6 +6,8 @@ on:
     paths:
       - "tests/test_plugin_catalog.py"
       - "tools/plugin_catalog.py"
+      - "plugins/rust/python-package/*/Cargo.toml"
+      - "plugins/rust/python-package/*/plugin-manifest.yaml"
       - ".github/workflows/ci-plugin-catalog.yaml"
       - ".github/workflows/ci-rust-python-package.yaml"
       - ".github/workflows/release-rust-python-package.yaml"
@@ -14,6 +16,8 @@ on:
     paths:
       - "tests/test_plugin_catalog.py"
       - "tools/plugin_catalog.py"
+      - "plugins/rust/python-package/*/Cargo.toml"
+      - "plugins/rust/python-package/*/plugin-manifest.yaml"
       - ".github/workflows/ci-plugin-catalog.yaml"
       - ".github/workflows/ci-rust-python-package.yaml"
       - ".github/workflows/release-rust-python-package.yaml"
