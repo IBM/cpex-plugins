@@ -25,13 +25,27 @@ pub fn detect_and_redact(text: &str, config: &SecretsDetectionConfig) -> (Vec<Fi
             continue;
         }
 
-        for matched in pattern.find_iter(text) {
-            candidates.push(MatchCandidate {
-                name,
-                start: matched.start(),
-                end: matched.end(),
-                text: matched.as_str(),
-            });
+        if *name == "base64_24" {
+            for captures in pattern.captures_iter(text) {
+                let Some(matched) = captures.get(1) else {
+                    continue;
+                };
+                candidates.push(MatchCandidate {
+                    name,
+                    start: matched.start(),
+                    end: matched.end(),
+                    text: matched.as_str(),
+                });
+            }
+        } else {
+            for matched in pattern.find_iter(text) {
+                candidates.push(MatchCandidate {
+                    name,
+                    start: matched.start(),
+                    end: matched.end(),
+                    text: matched.as_str(),
+                });
+            }
         }
     }
 

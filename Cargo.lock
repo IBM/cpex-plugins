@@ -1694,7 +1694,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "secrets_detection"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "cpex_framework_bridge",
  "criterion",
