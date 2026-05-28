@@ -1,7 +1,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyList, PyString};
+use pyo3::types::{PyAny, PyDict, PyList, PyMapping, PyString, PyTuple};
 use pyo3_stub_gen::define_stub_info_gatherer;
 use pyo3_stub_gen::derive::*;
 use regex::Regex;
@@ -756,12 +756,15 @@ fn scan_container<'py>(
         ));
     }
 
-    if let Ok(dict) = container.cast::<PyDict>() {
+    if let Ok(mapping) = container.cast::<PyMapping>() {
         let new_dict = PyDict::new(py);
         let all_findings = PyList::empty(py);
         let mut total = 0usize;
 
-        for (key, value) in dict.iter() {
+        for item in mapping.items()?.iter() {
+            let item = item.cast::<PyTuple>()?;
+            let key = item.get_item(0)?;
+            let value = item.get_item(1)?;
             let key_str = key.str()?.to_string_lossy().into_owned();
             let child_path = if path.is_empty() {
                 key_str.clone()

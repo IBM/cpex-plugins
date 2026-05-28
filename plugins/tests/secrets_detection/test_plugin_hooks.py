@@ -1,5 +1,8 @@
 import pytest
 
+from cpex.framework.hooks.policies import HookPayloadPolicy, apply_policy
+from cpex.framework.memory import wrap_payload_for_isolation
+
 from secrets_detection.helpers import *  # noqa: F403,F405
 
 
@@ -22,6 +25,26 @@ class TestPluginHooks:
         assert result.modified_payload is not None
         assert result.modified_payload.args["input"] == "AWS_ACCESS_KEY_ID=[REDACTED]"
         assert result.metadata == {"secrets_redacted": True, "count": 1}
+
+    async def test_prompt_pre_fetch_redaction_survives_cpex_policy_with_isolated_payload(self, plugin):
+        payload = PromptPrehookPayload(
+            prompt_id="prompt-1",
+            args={"input": "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"},
+        )
+        plugin_input = wrap_payload_for_isolation(payload)
+
+        result = await plugin.prompt_pre_fetch(plugin_input, make_context())
+
+        assert result.modified_payload is not None
+        filtered = apply_policy(
+            plugin_input,
+            result.modified_payload,
+            HookPayloadPolicy(writable_fields=frozenset({"args"})),
+            apply_to=payload,
+        )
+        assert filtered is not None
+        assert payload.args["input"] == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+        assert filtered.args["input"] == "AWS_ACCESS_KEY_ID=[REDACTED]"
 
     async def test_prompt_pre_fetch_leaves_clean_payload_unmodified(self, plugin):
         payload = PromptPrehookPayload(
@@ -68,6 +91,26 @@ class TestPluginHooks:
         )
         assert payload.args["message"] == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
         assert result.metadata == {"secrets_redacted": True, "count": 1}
+
+    async def test_tool_pre_invoke_redaction_survives_cpex_policy_with_isolated_payload(self, plugin):
+        payload = ToolPreInvokePayload(
+            name="echo",
+            args={"message": "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"},
+        )
+        plugin_input = wrap_payload_for_isolation(payload)
+
+        result = await plugin.tool_pre_invoke(plugin_input, make_context())
+
+        assert result.modified_payload is not None
+        filtered = apply_policy(
+            plugin_input,
+            result.modified_payload,
+            HookPayloadPolicy(writable_fields=frozenset({"args"})),
+            apply_to=payload,
+        )
+        assert filtered is not None
+        assert payload.args["message"] == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+        assert filtered.args["message"] == "AWS_ACCESS_KEY_ID=[REDACTED]"
 
     async def test_tool_pre_invoke_detects_copy_on_write_dict_arguments(self):
         class CopyOnWriteDict(dict):
