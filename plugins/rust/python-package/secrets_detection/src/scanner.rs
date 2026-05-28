@@ -315,4 +315,21 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn redacts_padded_base64_secret_without_leaving_padding() {
+        let config = SecretsDetectionConfig {
+            enabled: std::collections::HashMap::from([("base64_24".to_string(), true)]),
+            redact: true,
+            redaction_text: "[REDACTED]".to_string(),
+            ..Default::default()
+        };
+
+        let sample = ["mZ8qL2vYwT1p", "Nc4Rb6HxUg", "=="].concat();
+        let (findings, redacted) = detect_and_redact(&format!("token={sample}"), &config);
+
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].pii_type, "base64_24");
+        assert_eq!(redacted, "token=[REDACTED]");
+    }
 }

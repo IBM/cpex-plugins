@@ -60,7 +60,10 @@ pub static PATTERNS: LazyLock<HashMap<&'static str, Regex>> = LazyLock::new(|| {
     );
     patterns.insert(
         "base64_24",
-        Regex::new(r"\b[A-Za-z0-9+/]{24,}={0,2}\b").expect("valid base64_24 regex"),
+        Regex::new(
+            r"(?:^|[^A-Za-z0-9+/])((?:[A-Za-z0-9+/]{24,}={0,2}|[A-Za-z0-9+/]{22}==|[A-Za-z0-9+/]{23}=))(?:$|[^A-Za-z0-9+/=])",
+        )
+            .expect("valid base64_24 regex"),
     );
     patterns
 });
