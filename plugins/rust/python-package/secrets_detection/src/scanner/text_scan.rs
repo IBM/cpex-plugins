@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::config::SecretsDetectionConfig;
-use crate::patterns::PATTERNS;
+use crate::patterns::{CAPTURE_PATTERNS, PATTERNS};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
@@ -25,13 +25,32 @@ pub fn detect_and_redact(text: &str, config: &SecretsDetectionConfig) -> (Vec<Fi
             continue;
         }
 
-        for matched in pattern.find_iter(text) {
-            candidates.push(MatchCandidate {
-                name,
-                start: matched.start(),
-                end: matched.end(),
-                text: matched.as_str(),
-            });
+        if CAPTURE_PATTERNS.contains(name) {
+            // Capturing patterns exclude boundary chars from findings. Rust
+            // regex has no lookbehind, so group 1 is the actual secret span.
+            for captures in pattern.captures_iter(text) {
+                let Some(matched) = captures.get(1) else {
+                    continue;
+                };
+                if is_base64_boundary_char(text[matched.end()..].chars().next()) {
+                    continue;
+                }
+                candidates.push(MatchCandidate {
+                    name,
+                    start: matched.start(),
+                    end: matched.end(),
+                    text: matched.as_str(),
+                });
+            }
+        } else {
+            for matched in pattern.find_iter(text) {
+                candidates.push(MatchCandidate {
+                    name,
+                    start: matched.start(),
+                    end: matched.end(),
+                    text: matched.as_str(),
+                });
+            }
         }
     }
 
@@ -110,4 +129,8 @@ fn pattern_specificity(name: &str) -> usize {
         "base64_24" => 3,
         _ => 0,
     }
+}
+
+fn is_base64_boundary_char(ch: Option<char>) -> bool {
+    ch.is_some_and(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '/' | '='))
 }

@@ -315,4 +315,82 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn redacts_padded_base64_secret_without_leaving_padding() {
+        let config = SecretsDetectionConfig {
+            enabled: std::collections::HashMap::from([("base64_24".to_string(), true)]),
+            redact: true,
+            redaction_text: "[REDACTED]".to_string(),
+            ..Default::default()
+        };
+
+        let sample = "mZ8qL2vYwT1pNc4Rb6HxUg=="; // pragma: allowlist secret
+        let (findings, redacted) = detect_and_redact(&format!("token={sample}"), &config);
+
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].pii_type, "base64_24");
+        assert_eq!(redacted, "token=[REDACTED]");
+    }
+
+    #[test]
+    fn detects_each_adjacent_padded_base64_secret() {
+        let config = SecretsDetectionConfig {
+            enabled: std::collections::HashMap::from([("base64_24".to_string(), true)]),
+            redact: true,
+            redaction_text: "[REDACTED]".to_string(),
+            ..Default::default()
+        };
+
+        let (findings, redacted) = detect_and_redact(
+            "tokens=ABCDEFGHIJKLMNOPQRSTUV==,ABCDEFGHIJKLMNOPQRSTUVW=", // pragma: allowlist secret
+            &config,
+        );
+
+        assert_eq!(findings.len(), 2, "{findings:?}");
+        assert!(
+            findings
+                .iter()
+                .all(|finding| finding.pii_type == "base64_24")
+        );
+        assert_eq!(redacted, "tokens=[REDACTED],[REDACTED]");
+    }
+
+    #[test]
+    fn detects_single_padding_base64_secret() {
+        let config = SecretsDetectionConfig {
+            enabled: std::collections::HashMap::from([("base64_24".to_string(), true)]),
+            ..Default::default()
+        };
+
+        let (findings, _) = detect_and_redact("token=ABCDEFGHIJKLMNOPQRSTUVW=", &config); // pragma: allowlist secret
+
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].pii_type, "base64_24");
+    }
+
+    #[test]
+    fn detects_padded_base64_secret_with_plus_and_slash() {
+        let config = SecretsDetectionConfig {
+            enabled: std::collections::HashMap::from([("base64_24".to_string(), true)]),
+            ..Default::default()
+        };
+
+        let (findings, _) = detect_and_redact("token=ABCD+FGH/IJKLMNOPQRSTU==", &config); // pragma: allowlist secret
+
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].pii_type, "base64_24");
+    }
+
+    #[test]
+    fn ignores_padded_base64_prefix_followed_by_base64_char() {
+        let config = SecretsDetectionConfig {
+            enabled: std::collections::HashMap::from([("base64_24".to_string(), true)]),
+            ..Default::default()
+        };
+
+        let (findings, _) = detect_and_redact("token=ABCDEFGHIJKLMNOPQRSTUV==A", &config); // pragma: allowlist secret
+
+        assert!(findings.is_empty(), "{findings:?}");
+    }
 }
