@@ -381,4 +381,16 @@ mod tests {
         assert_eq!(findings.len(), 1, "{findings:?}");
         assert_eq!(findings[0].pii_type, "base64_24");
     }
+
+    #[test]
+    fn ignores_padded_base64_prefix_followed_by_base64_char() {
+        let config = SecretsDetectionConfig {
+            enabled: std::collections::HashMap::from([("base64_24".to_string(), true)]),
+            ..Default::default()
+        };
+
+        let (findings, _) = detect_and_redact("token=ABCDEFGHIJKLMNOPQRSTUV==A", &config); // pragma: allowlist secret
+
+        assert!(findings.is_empty(), "{findings:?}");
+    }
 }
