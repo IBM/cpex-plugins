@@ -23,6 +23,8 @@ from cpex.framework import (
     ToolHookType,
     ToolPostInvokePayload,
 )
+from cpex.framework.hooks.policies import HookPayloadPolicy, apply_policy
+from cpex.framework.memory import wrap_payload_for_isolation
 
 from cpex_encoded_exfil_detection.encoded_exfil_detection import (
     _prefix_finding_paths,
@@ -226,6 +228,25 @@ class TestEncodedExfilPluginHooks:
         assert result.metadata is not None
         assert result.metadata.get("encoded_exfil_redacted") is True
 
+    async def test_prompt_pre_fetch_redaction_survives_cpex_policy_with_isolated_payload(self):
+        plugin = self._plugin({"block_on_detection": False, "redact": True, "redaction_text": "[ENCODED]"})
+        encoded = base64.b64encode(b"api_key=super-secret").decode()
+        payload = PromptPrehookPayload(prompt_id="prompt-1", args={"input": encoded})
+        plugin_input = wrap_payload_for_isolation(payload)
+
+        result = await plugin.prompt_pre_fetch(plugin_input, self._context())
+
+        assert result.modified_payload is not None
+        filtered = apply_policy(
+            plugin_input,
+            result.modified_payload,
+            HookPayloadPolicy(writable_fields=frozenset({"args"})),
+            apply_to=payload,
+        )
+        assert filtered is not None
+        assert payload.args["input"] == encoded
+        assert filtered.args["input"] == "[ENCODED]"
+
     async def test_tool_post_invoke_blocks(self):
         plugin = self._plugin({"block_on_detection": True})
         encoded_hex = b"password=this-should-not-leave".hex()
@@ -249,6 +270,28 @@ class TestEncodedExfilPluginHooks:
         assert result.modified_payload.result["message"] == "***BLOCKED***"
         assert result.metadata is not None
         assert result.metadata.get("encoded_exfil_redacted") is True
+
+    async def test_tool_post_invoke_redaction_survives_cpex_policy_with_isolated_payload(self):
+        plugin = self._plugin({"block_on_detection": False, "redact": True, "redaction_text": "***BLOCKED***"})
+        encoded = base64.b64encode(b"client_secret=ultra-secret").decode()
+        payload = ToolPostInvokePayload(
+            name="generator",
+            result={"content": [{"type": "text", "text": encoded}], "isError": False},
+        )
+        plugin_input = wrap_payload_for_isolation(payload)
+
+        result = await plugin.tool_post_invoke(plugin_input, self._context())
+
+        assert result.modified_payload is not None
+        filtered = apply_policy(
+            plugin_input,
+            result.modified_payload,
+            HookPayloadPolicy(writable_fields=frozenset({"result"})),
+            apply_to=payload,
+        )
+        assert filtered is not None
+        assert payload.result["content"][0]["text"] == encoded
+        assert filtered.result["content"][0]["text"] == "***BLOCKED***"
 
     async def test_tool_post_invoke_clean_payload(self):
         plugin = self._plugin({"block_on_detection": True})
@@ -283,6 +326,25 @@ class TestEncodedExfilPluginHooks:
         examples = result.violation.details["examples"]
         for ex in examples:
             assert set(ex.keys()) == {"encoding", "path", "score"}
+
+    async def test_resource_post_fetch_redaction_survives_cpex_policy_with_isolated_payload(self):
+        plugin = self._plugin({"block_on_detection": False, "redact": True, "redaction_text": "[ENCODED]"})
+        encoded = base64.b64encode(b"api_key=super-secret").decode()
+        payload = ResourcePostFetchPayload(uri="file:///tmp/data.txt", content={"text": encoded})
+        plugin_input = wrap_payload_for_isolation(payload)
+
+        result = await plugin.resource_post_fetch(plugin_input, self._context())
+
+        assert result.modified_payload is not None
+        filtered = apply_policy(
+            plugin_input,
+            result.modified_payload,
+            HookPayloadPolicy(writable_fields=frozenset({"content"})),
+            apply_to=payload,
+        )
+        assert filtered is not None
+        assert payload.content["text"] == encoded
+        assert filtered.content["text"] == "[ENCODED]"
 
 
 class TestEncodedExfilHelpers:

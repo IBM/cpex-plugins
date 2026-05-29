@@ -1,5 +1,8 @@
 import pytest
 
+from cpex.framework.hooks.policies import HookPayloadPolicy, apply_policy
+from cpex.framework.memory import wrap_payload_for_isolation
+
 from secrets_detection.helpers import *  # noqa: F403,F405
 
 
@@ -33,6 +36,37 @@ class TestPluginHookResults:
         )
         assert result.modified_payload.result["isError"] is False
         assert result.metadata == {"secrets_redacted": True, "count": 1}
+
+    async def test_tool_post_invoke_redaction_survives_cpex_policy_with_isolated_payload(self, plugin):
+        payload = ToolPostInvokePayload(
+            name="writer",
+            result={
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE",
+                    }
+                ],
+                "isError": False,
+            },
+        )
+        plugin_input = wrap_payload_for_isolation(payload)
+
+        result = await plugin.tool_post_invoke(plugin_input, make_context())
+
+        assert result.modified_payload is not None
+        filtered = apply_policy(
+            plugin_input,
+            result.modified_payload,
+            HookPayloadPolicy(writable_fields=frozenset({"result"})),
+            apply_to=payload,
+        )
+        assert filtered is not None
+        assert (
+            payload.result["content"][0]["text"]
+            == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+        )
+        assert filtered.result["content"][0]["text"] == "AWS_ACCESS_KEY_ID=[REDACTED]"
 
     async def test_tool_post_invoke_preserves_tuple_shape_when_redacted(self, plugin):
         payload = ToolPostInvokePayload(
@@ -290,6 +324,34 @@ class TestPluginHookResults:
         assert result.modified_payload is not None
         assert result.modified_payload.content.text == "SLACK_TOKEN=[REDACTED]"
         assert result.metadata == {"secrets_redacted": True, "count": 1}
+
+    async def test_resource_post_fetch_redaction_survives_cpex_policy_with_isolated_payload(self, plugin):
+        payload = ResourcePostFetchPayload(
+            uri="file:///tmp/secret.txt",
+            content=ResourceContent(
+                type="resource",
+                id="res-1",
+                uri="file:///tmp/secret.txt",
+                text="SLACK_TOKEN=xoxr-fake-000000000-fake000000000-fakefakefakefake",
+            ),
+        )
+        plugin_input = wrap_payload_for_isolation(payload)
+
+        result = await plugin.resource_post_fetch(plugin_input, make_context())
+
+        assert result.modified_payload is not None
+        filtered = apply_policy(
+            plugin_input,
+            result.modified_payload,
+            HookPayloadPolicy(writable_fields=frozenset({"content"})),
+            apply_to=payload,
+        )
+        assert filtered is not None
+        assert (
+            payload.content.text
+            == "SLACK_TOKEN=xoxr-fake-000000000-fake000000000-fakefakefakefake"
+        )
+        assert filtered.content.text == "SLACK_TOKEN=[REDACTED]"
 
     async def test_resource_post_fetch_leaves_clean_payload_unmodified(self, plugin):
         payload = ResourcePostFetchPayload(

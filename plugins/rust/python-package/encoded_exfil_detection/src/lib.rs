@@ -1,7 +1,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyList, PyString};
+use pyo3::types::{PyAny, PyDict, PyList, PyMapping, PyString, PyTuple};
 use pyo3_stub_gen::define_stub_info_gatherer;
 use pyo3_stub_gen::derive::*;
 use regex::Regex;
@@ -756,12 +756,15 @@ fn scan_container<'py>(
         ));
     }
 
-    if let Ok(dict) = container.cast::<PyDict>() {
+    if let Ok(mapping) = container.cast::<PyMapping>() {
         let new_dict = PyDict::new(py);
         let all_findings = PyList::empty(py);
         let mut total = 0usize;
 
-        for (key, value) in dict.iter() {
+        for item in mapping.items()?.iter() {
+            let item = item.cast::<PyTuple>()?;
+            let key = item.get_item(0)?;
+            let value = item.get_item(1)?;
             let key_str = key.str()?.to_string_lossy().into_owned();
             let child_path = if path.is_empty() {
                 key_str.clone()
@@ -868,6 +871,9 @@ define_stub_info_gatherer!(stub_info);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::CString;
+
+    use pyo3::types::PyModule;
 
     #[test]
     fn test_scan_text_detects_base64_sensitive_payload() {
@@ -879,6 +885,59 @@ mod tests {
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].encoding, "base64");
         assert!(findings[0].score >= cfg.min_suspicion_score);
+    }
+
+    #[test]
+    fn test_scan_container_detects_mapping_wrapper_values() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let code = CString::new(
+                r#"
+from collections.abc import Mapping
+
+class MappingWrapper(Mapping):
+    def __init__(self, original):
+        self._original = original
+
+    def __getitem__(self, key):
+        return self._original[key]
+
+    def __iter__(self):
+        return iter(self._original)
+
+    def __len__(self):
+        return len(self._original)
+
+    def items(self):
+        return [(key, self[key]) for key in self._original]
+"#,
+            )
+            .unwrap();
+            let module =
+                PyModule::from_code(py, code.as_c_str(), c"test_module.py", c"test_module")?;
+            let original = PyDict::new(py);
+            let sensitive = [b"api_".as_slice(), b"key=super-secret-token-value"].concat();
+            let encoded = STANDARD.encode(sensitive);
+            original.set_item("message", encoded)?;
+            let payload = module.getattr("MappingWrapper")?.call1((original,))?;
+            let cfg = DetectorConfig {
+                redact: true,
+                redaction_text: "[ENCODED]".to_string(),
+                ..DetectorConfig::default()
+            };
+
+            let (count, redacted, findings) = scan_container(py, &payload, "", &cfg, 0)?;
+
+            assert_eq!(count, 1);
+            assert_eq!(findings.len(), 1);
+            assert_eq!(
+                redacted.get_item("message")?.extract::<String>()?,
+                "[ENCODED]"
+            );
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
