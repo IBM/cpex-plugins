@@ -2314,6 +2314,20 @@ class PluginCatalogTests(unittest.TestCase):
                 capture_output=True,
                 check=True,
             )
+            subprocess.run(
+                ["git", "config", "gc.auto", "0"],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "maintenance.auto", "false"],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
             shutil.copytree(REPO_ROOT / "plugins", root / "plugins")
             shutil.copytree(REPO_ROOT / "crates", root / "crates")
             (root / "Cargo.toml").write_text((REPO_ROOT / "Cargo.toml").read_text())
