@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 pub static PATTERNS: LazyLock<HashMap<&'static str, Regex>> = LazyLock::new(|| {
@@ -60,13 +60,18 @@ pub static PATTERNS: LazyLock<HashMap<&'static str, Regex>> = LazyLock::new(|| {
     );
     patterns.insert(
         "base64_24",
+        // Minimum valid padded base64 secrets are 24 total chars: 22 data
+        // chars plus `==`, or 23 data chars plus `=`.
         Regex::new(
-            r"(?:^|[^A-Za-z0-9+/])((?:[A-Za-z0-9+/]{24,}={0,2}|[A-Za-z0-9+/]{22}==|[A-Za-z0-9+/]{23}=))(?:$|[^A-Za-z0-9+/=])",
+            r"(?:^|[^A-Za-z0-9+/])((?:[A-Za-z0-9+/]{24,}={0,2}|[A-Za-z0-9+/]{22}==|[A-Za-z0-9+/]{23}=))",
         )
-            .expect("valid base64_24 regex"),
+        .expect("valid base64_24 regex"),
     );
     patterns
 });
+
+pub static CAPTURE_PATTERNS: LazyLock<HashSet<&'static str>> =
+    LazyLock::new(|| HashSet::from(["base64_24"]));
 
 #[cfg(test)]
 mod tests {
