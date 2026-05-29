@@ -325,7 +325,7 @@ class TestPluginHookResults:
         assert result.modified_payload.content.text == "SLACK_TOKEN=[REDACTED]"
         assert result.metadata == {"secrets_redacted": True, "count": 1}
 
-    async def test_resource_post_fetch_redaction_survives_cpex_policy(self, plugin):
+    async def test_resource_post_fetch_redaction_survives_cpex_policy_with_isolated_payload(self, plugin):
         payload = ResourcePostFetchPayload(
             uri="file:///tmp/secret.txt",
             content=ResourceContent(

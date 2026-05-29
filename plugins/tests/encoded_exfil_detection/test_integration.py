@@ -327,7 +327,7 @@ class TestEncodedExfilPluginHooks:
         for ex in examples:
             assert set(ex.keys()) == {"encoding", "path", "score"}
 
-    async def test_resource_post_fetch_redaction_survives_cpex_policy(self):
+    async def test_resource_post_fetch_redaction_survives_cpex_policy_with_isolated_payload(self):
         plugin = self._plugin({"block_on_detection": False, "redact": True, "redaction_text": "[ENCODED]"})
         encoded = base64.b64encode(b"api_key=super-secret").decode()
         payload = ResourcePostFetchPayload(uri="file:///tmp/data.txt", content={"text": encoded})
