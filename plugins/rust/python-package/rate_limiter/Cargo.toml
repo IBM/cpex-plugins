@@ -25,23 +25,19 @@ pyo3-log = { workspace = true }
 mutants = "0.0.4"
 parking_lot = "0.12.5"
 thiserror = { workspace = true }
-redis = { version = "1.2.1", features = ["aio", "tokio-comp", "tls-rustls", "tls-rustls-insecure", "tokio-rustls-comp"] }
-# Direct rustls dep with the `ring` crypto provider feature. redis 1.2
-# pulls rustls in transitively but via `default-features = false`, so no
-# crypto provider is enabled by default — rustls 0.23 then panics at
-# first TLS use ("Call CryptoProvider::install_default()..."). We add
-# `ring` here and install it as the default provider once at plugin init.
-#
-# Note on CA roots: by NOT enabling `tls-rustls-webpki-roots`, the redis
-# crate falls back to `rustls-native-certs` (Apache-2.0 / MIT / ISC) which
-# reads CA certificates from the host OS trust store at runtime. This
-# avoids a transitive dep on `webpki-roots` (CDLA-Permissive-2.0). The
-# trade-off: the host container must have a CA bundle installed — true
-# for the UBI Minimal image mcp-context-forge ships on, and for any
-# distribution that keeps `ca-certificates` in its base.
-rustls = { version = "0.23.40", default-features = false, features = ["ring", "std"] }
-rustls-pki-types = "1.14"
+# EXPERIMENT (native-tls): use the OpenSSL-backed TLS path instead of rustls.
+# rustls only completes TLS 1.3 handshakes against some managed Redis — AWS
+# ElastiCache negotiating TLS 1.2 in particular fails — whereas OpenSSL /
+# native-tls handles TLS 1.2 fine (matching redis-py). CA/mTLS PEMs are still
+# passed via redis::TlsCertificates; native-tls parses them.
+redis = { version = "1.2.1", features = ["aio", "tokio-comp", "tls-native-tls", "tokio-native-tls-comp"] }
 tokio = { workspace = true }
+
+# native-tls -> openssl-sys on Linux. `vendored` compiles OpenSSL from source
+# and statically links it so the manylinux wheel is self-contained (no
+# dependency on the host image's OpenSSL version). macOS uses Security.framework.
+[target.'cfg(target_os = "linux")'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
 
 [dev-dependencies]
 rcgen = { version = "0.12", default-features = false, features = ["ring", "pem"] }
