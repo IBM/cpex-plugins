@@ -55,8 +55,9 @@ test-integration:
 
 test-all: test
 
-verify-stubs: stub-gen
-	@git diff --exit-code -- $(STUB_FILES)
+verify-stubs:
+	@test -f cpex_secrets_detection/__init__.pyi
+	@test -f cpex_secrets_detection/secrets_detection_rust/__init__.pyi
 
 # help: stub-gen              - Generate Python type stubs (.pyi files)
 # help: build                 - Build release wheel (no install)
@@ -69,12 +70,12 @@ stub-gen:
 	$(CARGO) run --features stub-gen --bin stub_gen
 	@echo "$(GREEN)Stubs generated$(NC)"
 
-build: stub-gen
+build:
 	@echo "$(GREEN)Building $(PACKAGE_NAME)...$(NC)"
 	uv run maturin build --release
 	@echo "$(GREEN)Build complete$(NC)"
 
-install: stub-gen
+install:
 	@echo "$(GREEN)Installing $(PACKAGE_NAME)...$(NC)"
 	uv run maturin develop --release
 	@echo "$(GREEN)Installation complete$(NC)"

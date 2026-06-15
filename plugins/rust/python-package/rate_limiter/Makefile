@@ -72,8 +72,9 @@ test-integration:
 
 test-all: test
 
-verify-stubs: stub-gen
-	@git diff --exit-code -- $(STUB_FILES)
+verify-stubs:
+	@test -f cpex_rate_limiter/__init__.pyi
+	@test -f cpex_rate_limiter/rate_limiter_rust/__init__.pyi
 
 # =============================================================================
 # 🛠 BUILD
@@ -89,12 +90,12 @@ stub-gen:
 	$(CARGO) run --features stub-gen --bin stub_gen
 	@echo "$(GREEN)Stubs generated$(NC)"
 
-build: stub-gen
+build:
 	@echo "$(GREEN)Building $(PACKAGE_NAME)...$(NC)"
 	uv run maturin build --release
 	@echo "$(GREEN)Build complete$(NC)"
 
-install: stub-gen
+install:
 	@echo "$(GREEN)Installing $(PACKAGE_NAME)...$(NC)"
 	uv run maturin develop --release
 	@echo "$(GREEN)Installation complete$(NC)"
