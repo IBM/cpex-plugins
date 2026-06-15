@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2024 ContextForge Contributors
 use pyo3::prelude::*;
+#[cfg(feature = "stub-gen")]
 use pyo3_stub_gen::define_stub_info_gatherer;
 
 pub mod engine;
@@ -12,4 +13,5 @@ fn {{ rust_lib_name }}(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
+#[cfg(feature = "stub-gen")]
 define_stub_info_gatherer!(stub_info);

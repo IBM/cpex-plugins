@@ -459,6 +459,14 @@ class PluginCatalogTests(unittest.TestCase):
             self.assertNotIn("mcpgateway", generated_source)
             self.assertIn("cpex.framework", generated_source)
             self.assertIn('"cpex>=0.1.0rc1,<0.2"', generated_source)
+            cargo_manifest = tomllib.loads((plugin_dir / "Cargo.toml").read_text())
+            self.assertEqual(cargo_manifest["features"]["default"], [])
+            self.assertEqual(cargo_manifest["features"]["stub-gen"], ["dep:pyo3-stub-gen"])
+            self.assertEqual(
+                cargo_manifest["dependencies"]["pyo3-stub-gen"],
+                {"workspace": True, "optional": True},
+            )
+            self.assertEqual(cargo_manifest["bin"][0]["required-features"], ["stub-gen"])
 
             compile_result = subprocess.run(
                 [
