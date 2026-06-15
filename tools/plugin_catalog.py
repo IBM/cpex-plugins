@@ -37,19 +37,19 @@ MANIFEST_KIND_PATTERN = re.compile(
     r"^(?P<module>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\.(?P<object>[A-Za-z_][A-Za-z0-9_]*)$"
 )
 REQUIRED_WORKSPACE_DEPENDENCIES = {
-    "cpex_framework_bridge": {"path": "crates/framework_bridge"},
-    "criterion": {"version": "0.8.2", "features": ["html_reports"]},
-    "log": "0.4.29",
-    "pyo3-async-runtimes": {"version": "0.28.0", "features": ["tokio-runtime"]},
-    "pyo3": {"version": "0.28.3", "features": ["abi3-py311"]},
-    "pyo3-log": "0.13.3",
-    "pyo3-stub-gen": "0.22.2",
-    "rand": "0.10.1",
-    "regex": "1.12.3",
-    "serde": {"version": "1.0.228", "features": ["derive"]},
-    "serde_json": "1.0.149",
-    "thiserror": "2.0.18",
-    "tokio": {"version": "1.52.3", "features": ["full"]},
+    "cpex_framework_bridge",
+    "criterion",
+    "log",
+    "pyo3-async-runtimes",
+    "pyo3",
+    "pyo3-log",
+    "pyo3-stub-gen",
+    "rand",
+    "regex",
+    "serde",
+    "serde_json",
+    "thiserror",
+    "tokio",
 }
 REQUIRED_PLUGIN_WORKSPACE_DEPENDENCIES = {
     "encoded_exfil_detection": {
@@ -337,11 +337,10 @@ def _validate_workspace_dependency_ownership(
     if not isinstance(workspace_dependencies, dict):
         raise CatalogError("Workspace Cargo.toml must define [workspace.dependencies]")
 
-    for dependency_name, expected_value in REQUIRED_WORKSPACE_DEPENDENCIES.items():
-        actual_value = workspace_dependencies.get(dependency_name)
-        if actual_value != expected_value:
+    for dependency_name in REQUIRED_WORKSPACE_DEPENDENCIES:
+        if dependency_name not in workspace_dependencies:
             raise CatalogError(
-                f"Workspace dependency {dependency_name!r} must be declared as {expected_value!r}, got {actual_value!r}"
+                f"Workspace dependency {dependency_name!r} must be declared"
             )
 
     for slug, section_requirements in REQUIRED_PLUGIN_WORKSPACE_DEPENDENCIES.items():

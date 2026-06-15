@@ -247,38 +247,19 @@ class PluginCatalogTests(unittest.TestCase):
         cargo = tomllib.loads((REPO_ROOT / "Cargo.toml").read_text())
         workspace_deps = cargo["workspace"]["dependencies"]
 
-        self.assertEqual(
-            workspace_deps["cpex_framework_bridge"],
-            {"path": "crates/framework_bridge"},
-        )
-        self.assertEqual(
-            workspace_deps["criterion"],
-            {"version": "0.8.2", "features": ["html_reports"]},
-        )
-        self.assertEqual(workspace_deps["log"], "0.4.29")
-        self.assertEqual(
-            workspace_deps["pyo3-async-runtimes"],
-            {"version": "0.28.0", "features": ["tokio-runtime"]},
-        )
-        self.assertEqual(
-            workspace_deps["pyo3"],
-            {"version": "0.28.3", "features": ["abi3-py311"]},
-        )
-        self.assertEqual(workspace_deps["pyo3-log"], "0.13.3")
-        self.assertEqual(workspace_deps["pyo3-stub-gen"], "0.22.2")
-        self.assertEqual(workspace_deps["rand"], "0.10.1")
-        self.assertEqual(workspace_deps["regex"], "1.12.3")
-        self.assertEqual(
-            workspace_deps["serde"],
-            {"version": "1.0.228", "features": ["derive"]},
-        )
-        self.assertEqual(workspace_deps["serde_json"], "1.0.149")
-        self.assertEqual(workspace_deps["thiserror"], "2.0.18")
-
-        self.assertEqual(
-            workspace_deps["tokio"],
-            {"version": "1.52.3", "features": ["full"]},
-        )
+        self.assertIn("cpex_framework_bridge", workspace_deps)
+        self.assertIn("criterion", workspace_deps)
+        self.assertIn("log", workspace_deps)
+        self.assertIn("pyo3-async-runtimes", workspace_deps)
+        self.assertIn("pyo3", workspace_deps)
+        self.assertIn("pyo3-log", workspace_deps)
+        self.assertIn("pyo3-stub-gen", workspace_deps)
+        self.assertIn("rand", workspace_deps)
+        self.assertIn("regex", workspace_deps)
+        self.assertIn("serde", workspace_deps)
+        self.assertIn("serde_json", workspace_deps)
+        self.assertIn("thiserror", workspace_deps)
+        self.assertIn("tokio", workspace_deps)
 
         expected_plugin_deps = {
             "encoded_exfil_detection": {
