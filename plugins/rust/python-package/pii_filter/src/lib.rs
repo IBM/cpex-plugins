@@ -12,6 +12,7 @@ use std::sync::Once;
 
 use log::debug;
 use pyo3::prelude::*;
+#[cfg(feature = "stub-gen")]
 use pyo3_stub_gen::define_stub_info_gatherer;
 
 pub mod config;
@@ -41,6 +42,7 @@ fn pii_filter_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 // Define stub info gatherer for generating Python type stubs
+#[cfg(feature = "stub-gen")]
 define_stub_info_gatherer!(stub_info);
 
 #[cfg(test)]

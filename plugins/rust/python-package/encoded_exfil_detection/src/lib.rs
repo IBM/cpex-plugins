@@ -2,7 +2,9 @@ use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList, PyMapping, PyString, PyTuple};
+#[cfg(feature = "stub-gen")]
 use pyo3_stub_gen::define_stub_info_gatherer;
+#[cfg(feature = "stub-gen")]
 use pyo3_stub_gen::derive::*;
 use regex::Regex;
 use std::collections::HashMap;
@@ -821,13 +823,13 @@ fn scan_container<'py>(
 }
 
 /// Persistent engine that parses config once at init and reuses it across scans.
-#[gen_stub_pyclass]
+#[cfg_attr(feature = "stub-gen", gen_stub_pyclass)]
 #[pyclass]
 struct ExfilDetectorEngine {
     cfg: DetectorConfig,
 }
 
-#[gen_stub_pymethods]
+#[cfg_attr(feature = "stub-gen", gen_stub_pymethods)]
 #[pymethods]
 impl ExfilDetectorEngine {
     #[new]
@@ -847,7 +849,7 @@ impl ExfilDetectorEngine {
 }
 
 /// Backward-compatible bare function — creates a temporary engine per call.
-#[gen_stub_pyfunction]
+#[cfg_attr(feature = "stub-gen", gen_stub_pyfunction)]
 #[pyfunction]
 fn py_scan_container<'py>(
     py: Python<'py>,
@@ -866,6 +868,7 @@ fn encoded_exfil_detection_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 // Define stub info gatherer for generating Python type stubs
+#[cfg(feature = "stub-gen")]
 define_stub_info_gatherer!(stub_info);
 
 #[cfg(test)]

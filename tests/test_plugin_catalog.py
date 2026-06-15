@@ -8,6 +8,7 @@ import tempfile
 import textwrap
 import tomllib
 import unittest
+from datetime import date
 from pathlib import Path
 import re
 
@@ -243,6 +244,23 @@ class PluginCatalogTests(unittest.TestCase):
         result = run_catalog("validate", str(REPO_ROOT))
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_cargo_deny_advisory_ignores_are_not_expired(self) -> None:
+        deny_config = tomllib.loads((REPO_ROOT / "deny.toml").read_text())
+        ignores = deny_config.get("advisories", {}).get("ignore", [])
+        for entry in ignores:
+            if not isinstance(entry, dict):
+                continue
+            reason = str(entry.get("reason", ""))
+            match = re.search(r"expires (\d{4}-\d{2}-\d{2})", reason)
+            if match is None:
+                continue
+            expiry = date.fromisoformat(match.group(1))
+            self.assertLessEqual(
+                date.today(),
+                expiry,
+                f"{entry.get('id', entry)} advisory ignore expired on {expiry}",
+            )
+
     def test_repo_centralizes_shared_cargo_dependencies(self) -> None:
         cargo = tomllib.loads((REPO_ROOT / "Cargo.toml").read_text())
         workspace_deps = cargo["workspace"]["dependencies"]
@@ -268,7 +286,7 @@ class PluginCatalogTests(unittest.TestCase):
                     "log": {"workspace": True},
                     "pyo3": {"workspace": True},
                     "pyo3-log": {"workspace": True},
-                    "pyo3-stub-gen": {"workspace": True},
+                    "pyo3-stub-gen": {"workspace": True, "optional": True},
                     "regex": {"workspace": True},
                     "serde_json": {"workspace": True},
                 },
@@ -282,7 +300,7 @@ class PluginCatalogTests(unittest.TestCase):
                     "log": {"workspace": True},
                     "pyo3": {"workspace": True},
                     "pyo3-log": {"workspace": True},
-                    "pyo3-stub-gen": {"workspace": True},
+                    "pyo3-stub-gen": {"workspace": True, "optional": True},
                     "regex": {"workspace": True},
                     "serde": {"workspace": True},
                     "serde_json": {"workspace": True},
@@ -299,7 +317,7 @@ class PluginCatalogTests(unittest.TestCase):
                     "pyo3": {"workspace": True},
                     "pyo3-async-runtimes": {"workspace": True},
                     "pyo3-log": {"workspace": True},
-                    "pyo3-stub-gen": {"workspace": True},
+                    "pyo3-stub-gen": {"workspace": True, "optional": True},
                     "thiserror": {"workspace": True},
                     "tokio": {"workspace": True},
                 },
@@ -313,7 +331,7 @@ class PluginCatalogTests(unittest.TestCase):
                     "log": {"workspace": True},
                     "pyo3": {"workspace": True},
                     "pyo3-log": {"workspace": True},
-                    "pyo3-stub-gen": {"workspace": True},
+                    "pyo3-stub-gen": {"workspace": True, "optional": True},
                     "rand": {"workspace": True},
                     "serde": {"workspace": True},
                     "serde_json": {"workspace": True},
@@ -326,7 +344,7 @@ class PluginCatalogTests(unittest.TestCase):
                     "log": {"workspace": True},
                     "pyo3": {"workspace": True},
                     "pyo3-log": {"workspace": True},
-                    "pyo3-stub-gen": {"workspace": True},
+                    "pyo3-stub-gen": {"workspace": True, "optional": True},
                     "regex": {"workspace": True},
                     "serde_json": {"workspace": True},
                 },
@@ -3469,7 +3487,7 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn('cd "${tmpdir}"', workflow)
         self.assertIn('"${tmpdir}/tests/${{ needs.resolve.outputs.slug }}" -v', workflow)
         self.assertNotIn('PYTHONPATH="${GITHUB_WORKSPACE}/${{ needs.resolve.outputs.plugin_path }}/tests"', workflow)
-        self.assertEqual(workflow.count("cargo run --bin stub_gen"), 1)
+        self.assertEqual(workflow.count("cargo run --features stub-gen --bin stub_gen"), 1)
         self.assertIn('git ls-remote --exit-code --tags origin "refs/tags/${tag}"', workflow)
         self.assertIn('elif [[ "${GITHUB_EVENT_NAME}" == "pull_request" && "${PUBLISH_ENABLED}" == "false" ]]; then', workflow)
         self.assertIn('checkout_ref="${GITHUB_SHA}"', workflow)

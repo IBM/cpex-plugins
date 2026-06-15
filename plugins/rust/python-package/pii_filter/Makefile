@@ -69,7 +69,7 @@ verify-stubs: stub-gen
 
 stub-gen:
 	@echo "$(GREEN)Generating Python type stubs...$(NC)"
-	$(CARGO) run --bin stub_gen
+	$(CARGO) run --features stub-gen --bin stub_gen
 	@echo "$(GREEN)Stubs generated$(NC)"
 
 build: stub-gen

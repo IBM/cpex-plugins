@@ -6,6 +6,7 @@
 use log::{debug, warn};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList, PyMapping, PySet, PyString, PyTuple};
+#[cfg(feature = "stub-gen")]
 use pyo3_stub_gen::derive::*;
 use std::collections::HashMap;
 
@@ -131,14 +132,14 @@ struct CandidateDetection {
 /// masked = detector.mask(text, detections)
 /// print(masked)  # "My SSN is [REDACTED] and email is [REDACTED]"
 /// ```
-#[gen_stub_pyclass]
+#[cfg_attr(feature = "stub-gen", gen_stub_pyclass)]
 #[pyclass]
 pub struct PIIDetectorRust {
     pub(crate) patterns: CompiledPatterns,
     pub(crate) config: PIIConfig,
 }
 
-#[gen_stub_pymethods]
+#[cfg_attr(feature = "stub-gen", gen_stub_pymethods)]
 #[pymethods]
 impl PIIDetectorRust {
     /// Create a new PII detector

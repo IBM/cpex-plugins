@@ -352,9 +352,12 @@ def _validate_workspace_dependency_ownership(
             if not isinstance(section, dict):
                 raise CatalogError(f"{cargo_path}: [{section_name}] must be a table")
             for dependency_name in dependency_names:
-                if section.get(dependency_name) != {"workspace": True}:
+                expected_dependency = {"workspace": True}
+                if dependency_name == "pyo3-stub-gen":
+                    expected_dependency["optional"] = True
+                if section.get(dependency_name) != expected_dependency:
                     raise CatalogError(
-                        f"{cargo_path}: {section_name}.{dependency_name} must use workspace = true"
+                        f"{cargo_path}: {section_name}.{dependency_name} must be declared as {expected_dependency!r}"
                     )
 
 

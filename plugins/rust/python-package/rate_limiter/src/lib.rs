@@ -8,6 +8,7 @@
 
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+#[cfg(feature = "stub-gen")]
 use pyo3_stub_gen::define_stub_info_gatherer;
 
 pub mod clock;
@@ -63,4 +64,5 @@ fn rate_limiter_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 // Generate Python type stubs (.pyi files).
+#[cfg(feature = "stub-gen")]
 define_stub_info_gatherer!(stub_info);
