@@ -31,28 +31,8 @@ mutants = "0.0.4"
 parking_lot = "0.12.5"
 thiserror = { workspace = true }
 redis = { version = "1.2.1", features = ["aio", "tokio-comp", "tls-rustls", "tls-rustls-insecure", "tokio-rustls-comp"] }
-# Direct rustls dep with the `ring` crypto provider feature. redis 1.2
-# pulls rustls in transitively but via `default-features = false`, so no
-# crypto provider is enabled by default — rustls 0.23 then panics at
-# first TLS use ("Call CryptoProvider::install_default()..."). We add
-# `ring` here and install it as the default provider once at plugin init.
-#
-# Note on CA roots: by NOT enabling `tls-rustls-webpki-roots`, the redis
-# crate falls back to `rustls-native-certs` (Apache-2.0 / MIT / ISC) which
-# reads CA certificates from the host OS trust store at runtime. This
-# avoids a transitive dep on `webpki-roots` (CDLA-Permissive-2.0). The
-# trade-off: the host container must have a CA bundle installed — true
-# for the UBI Minimal image mcp-context-forge ships on, and for any
-# distribution that keeps `ca-certificates` in its base.
-#
-# `tls12` is REQUIRED. With `default-features = false`, rustls 0.23 compiles
-# WITHOUT TLS 1.2 support (1.3-only), and the redis crate's `tls-rustls`
-# feature does not enable it. Managed Redis that only offers TLS 1.2 (e.g. AWS
-# ElastiCache) then has no protocol version in common with the client, and the
-# handshake dies with "unexpected end of file" — surfacing as BACKEND_UNAVAILABLE
-# even though redis-py (OpenSSL) connects to the same endpoint. Enabling `tls12`
-# restores TLS 1.2 while keeping 1.3.
-rustls = { version = "0.23.40", default-features = false, features = ["ring", "std", "tls12"] }
+# Enable default features (includes tls12 for TLS 1.2 support) plus the ring provider.
+rustls = { version = "0.23.40", features = ["ring"] }
 rustls-pki-types = "1.14"
 tokio = { workspace = true }
 
