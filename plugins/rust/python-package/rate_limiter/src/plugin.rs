@@ -11,6 +11,7 @@ use log::warn;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyModule, PyTuple};
 use pyo3_async_runtimes::tokio::{future_into_py, into_future};
+#[cfg(feature = "stub-gen")]
 use pyo3_stub_gen::derive::*;
 
 use crate::engine::RateLimiterEngine;
@@ -35,7 +36,7 @@ fn ensure_crypto_provider() {
     });
 }
 
-#[gen_stub_pyclass]
+#[cfg_attr(feature = "stub-gen", gen_stub_pyclass)]
 #[pyclass]
 pub struct RateLimiterPluginCore {
     engine: Arc<RateLimiterEngine>,
@@ -46,7 +47,7 @@ pub struct RateLimiterPluginCore {
     fail_closed: bool,
 }
 
-#[gen_stub_pymethods]
+#[cfg_attr(feature = "stub-gen", gen_stub_pymethods)]
 #[pymethods]
 impl RateLimiterPluginCore {
     #[new]

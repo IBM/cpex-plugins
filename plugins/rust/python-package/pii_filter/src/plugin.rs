@@ -9,6 +9,7 @@ use std::collections::{BTreeSet, HashMap};
 use cpex_framework_bridge::{build_framework_object, default_result as bridge_default_result};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyModule};
+#[cfg(feature = "stub-gen")]
 use pyo3_stub_gen::derive::*;
 
 use crate::config::PIIType;
@@ -16,13 +17,13 @@ use crate::detector::{Detection, PIIDetectorRust};
 
 const LOGGER_NAME: &str = "cpex_pii_filter.pii_filter";
 
-#[gen_stub_pyclass]
+#[cfg_attr(feature = "stub-gen", gen_stub_pyclass)]
 #[pyclass]
 pub struct PIIFilterPluginCore {
     detector: PIIDetectorRust,
 }
 
-#[gen_stub_pymethods]
+#[cfg_attr(feature = "stub-gen", gen_stub_pymethods)]
 #[pymethods]
 impl PIIFilterPluginCore {
     #[new]

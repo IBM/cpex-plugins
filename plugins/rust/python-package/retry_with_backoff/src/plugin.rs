@@ -11,6 +11,7 @@ use cpex_framework_bridge::build_framework_object;
 use log::{debug, warn};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList};
+#[cfg(feature = "stub-gen")]
 use pyo3_stub_gen::derive::*;
 use serde_json::Value;
 
@@ -18,14 +19,14 @@ use crate::config::RetryConfig;
 
 static PLUGIN_LAST_EVICTION_MS: AtomicU64 = AtomicU64::new(0);
 
-#[gen_stub_pyclass]
+#[cfg_attr(feature = "stub-gen", gen_stub_pyclass)]
 #[pyclass]
 pub struct RetryWithBackoffPluginCore {
     config: RetryConfig,
     state_manager: Arc<Mutex<HashMap<String, ToolRetryState>>>,
 }
 
-#[gen_stub_pymethods]
+#[cfg_attr(feature = "stub-gen", gen_stub_pymethods)]
 #[pymethods]
 impl RetryWithBackoffPluginCore {
     #[new]

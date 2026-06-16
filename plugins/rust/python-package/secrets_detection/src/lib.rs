@@ -7,7 +7,9 @@ use std::sync::Once;
 
 use log::debug;
 use pyo3::prelude::*;
+#[cfg(feature = "stub-gen")]
 use pyo3_stub_gen::define_stub_info_gatherer;
+#[cfg(feature = "stub-gen")]
 use pyo3_stub_gen::derive::*;
 
 pub mod config;
@@ -19,7 +21,7 @@ mod scanner;
 pub use config::SecretsDetectionConfig;
 pub use scanner::{detect_and_redact, scan_container};
 
-#[gen_stub_pyfunction]
+#[cfg_attr(feature = "stub-gen", gen_stub_pyfunction)]
 #[pyfunction]
 fn py_scan_container<'py>(
     py: Python<'py>,
@@ -46,6 +48,7 @@ fn secrets_detection_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
+#[cfg(feature = "stub-gen")]
 define_stub_info_gatherer!(stub_info);
 
 #[cfg(test)]

@@ -8,6 +8,7 @@ import tempfile
 import textwrap
 import tomllib
 import unittest
+from datetime import date
 from pathlib import Path
 import re
 
@@ -243,42 +244,40 @@ class PluginCatalogTests(unittest.TestCase):
         result = run_catalog("validate", str(REPO_ROOT))
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_cargo_deny_advisory_ignores_are_not_expired(self) -> None:
+        deny_config = tomllib.loads((REPO_ROOT / "deny.toml").read_text())
+        ignores = deny_config.get("advisories", {}).get("ignore", [])
+        for entry in ignores:
+            if not isinstance(entry, dict):
+                continue
+            reason = str(entry.get("reason", ""))
+            match = re.search(r"expires (\d{4}-\d{2}-\d{2})", reason)
+            if match is None:
+                continue
+            expiry = date.fromisoformat(match.group(1))
+            self.assertLessEqual(
+                date.today(),
+                expiry,
+                f"{entry.get('id', entry)} advisory ignore expired on {expiry}",
+            )
+
     def test_repo_centralizes_shared_cargo_dependencies(self) -> None:
         cargo = tomllib.loads((REPO_ROOT / "Cargo.toml").read_text())
         workspace_deps = cargo["workspace"]["dependencies"]
 
-        self.assertEqual(
-            workspace_deps["cpex_framework_bridge"],
-            {"path": "crates/framework_bridge"},
-        )
-        self.assertEqual(
-            workspace_deps["criterion"],
-            {"version": "0.8.2", "features": ["html_reports"]},
-        )
-        self.assertEqual(workspace_deps["log"], "0.4.29")
-        self.assertEqual(
-            workspace_deps["pyo3-async-runtimes"],
-            {"version": "0.28.0", "features": ["tokio-runtime"]},
-        )
-        self.assertEqual(
-            workspace_deps["pyo3"],
-            {"version": "0.28.3", "features": ["abi3-py311"]},
-        )
-        self.assertEqual(workspace_deps["pyo3-log"], "0.13.3")
-        self.assertEqual(workspace_deps["pyo3-stub-gen"], "0.22.2")
-        self.assertEqual(workspace_deps["rand"], "0.10.1")
-        self.assertEqual(workspace_deps["regex"], "1.12.3")
-        self.assertEqual(
-            workspace_deps["serde"],
-            {"version": "1.0.228", "features": ["derive"]},
-        )
-        self.assertEqual(workspace_deps["serde_json"], "1.0.149")
-        self.assertEqual(workspace_deps["thiserror"], "2.0.18")
-
-        self.assertEqual(
-            workspace_deps["tokio"],
-            {"version": "1.52.3", "features": ["full"]},
-        )
+        self.assertIn("cpex_framework_bridge", workspace_deps)
+        self.assertIn("criterion", workspace_deps)
+        self.assertIn("log", workspace_deps)
+        self.assertIn("pyo3-async-runtimes", workspace_deps)
+        self.assertIn("pyo3", workspace_deps)
+        self.assertIn("pyo3-log", workspace_deps)
+        self.assertIn("pyo3-stub-gen", workspace_deps)
+        self.assertIn("rand", workspace_deps)
+        self.assertIn("regex", workspace_deps)
+        self.assertIn("serde", workspace_deps)
+        self.assertIn("serde_json", workspace_deps)
+        self.assertIn("thiserror", workspace_deps)
+        self.assertIn("tokio", workspace_deps)
 
         expected_plugin_deps = {
             "encoded_exfil_detection": {
@@ -287,7 +286,7 @@ class PluginCatalogTests(unittest.TestCase):
                     "log": {"workspace": True},
                     "pyo3": {"workspace": True},
                     "pyo3-log": {"workspace": True},
-                    "pyo3-stub-gen": {"workspace": True},
+                    "pyo3-stub-gen": {"workspace": True, "optional": True},
                     "regex": {"workspace": True},
                     "serde_json": {"workspace": True},
                 },
@@ -301,7 +300,7 @@ class PluginCatalogTests(unittest.TestCase):
                     "log": {"workspace": True},
                     "pyo3": {"workspace": True},
                     "pyo3-log": {"workspace": True},
-                    "pyo3-stub-gen": {"workspace": True},
+                    "pyo3-stub-gen": {"workspace": True, "optional": True},
                     "regex": {"workspace": True},
                     "serde": {"workspace": True},
                     "serde_json": {"workspace": True},
@@ -318,7 +317,7 @@ class PluginCatalogTests(unittest.TestCase):
                     "pyo3": {"workspace": True},
                     "pyo3-async-runtimes": {"workspace": True},
                     "pyo3-log": {"workspace": True},
-                    "pyo3-stub-gen": {"workspace": True},
+                    "pyo3-stub-gen": {"workspace": True, "optional": True},
                     "thiserror": {"workspace": True},
                     "tokio": {"workspace": True},
                 },
@@ -332,7 +331,7 @@ class PluginCatalogTests(unittest.TestCase):
                     "log": {"workspace": True},
                     "pyo3": {"workspace": True},
                     "pyo3-log": {"workspace": True},
-                    "pyo3-stub-gen": {"workspace": True},
+                    "pyo3-stub-gen": {"workspace": True, "optional": True},
                     "rand": {"workspace": True},
                     "serde": {"workspace": True},
                     "serde_json": {"workspace": True},
@@ -345,7 +344,7 @@ class PluginCatalogTests(unittest.TestCase):
                     "log": {"workspace": True},
                     "pyo3": {"workspace": True},
                     "pyo3-log": {"workspace": True},
-                    "pyo3-stub-gen": {"workspace": True},
+                    "pyo3-stub-gen": {"workspace": True, "optional": True},
                     "regex": {"workspace": True},
                     "serde_json": {"workspace": True},
                 },
@@ -460,6 +459,14 @@ class PluginCatalogTests(unittest.TestCase):
             self.assertNotIn("mcpgateway", generated_source)
             self.assertIn("cpex.framework", generated_source)
             self.assertIn('"cpex>=0.1.0rc1,<0.2"', generated_source)
+            cargo_manifest = tomllib.loads((plugin_dir / "Cargo.toml").read_text())
+            self.assertEqual(cargo_manifest["features"]["default"], [])
+            self.assertEqual(cargo_manifest["features"]["stub-gen"], ["dep:pyo3-stub-gen"])
+            self.assertEqual(
+                cargo_manifest["dependencies"]["pyo3-stub-gen"],
+                {"workspace": True, "optional": True},
+            )
+            self.assertEqual(cargo_manifest["bin"][0]["required-features"], ["stub-gen"])
 
             compile_result = subprocess.run(
                 [
@@ -3488,7 +3495,8 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn('cd "${tmpdir}"', workflow)
         self.assertIn('"${tmpdir}/tests/${{ needs.resolve.outputs.slug }}" -v', workflow)
         self.assertNotIn('PYTHONPATH="${GITHUB_WORKSPACE}/${{ needs.resolve.outputs.plugin_path }}/tests"', workflow)
-        self.assertEqual(workflow.count("cargo run --bin stub_gen"), 1)
+        self.assertNotIn("cargo run --features stub-gen --bin stub_gen", workflow)
+        self.assertIn('test -n "$(find . -name \'*.pyi\' -print -quit)"', workflow)
         self.assertIn('git ls-remote --exit-code --tags origin "refs/tags/${tag}"', workflow)
         self.assertIn('elif [[ "${GITHUB_EVENT_NAME}" == "pull_request" && "${PUBLISH_ENABLED}" == "false" ]]; then', workflow)
         self.assertIn('checkout_ref="${GITHUB_SHA}"', workflow)

@@ -4,19 +4,20 @@
 use cpex_framework_bridge::{build_framework_object, default_result};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyModule};
+#[cfg(feature = "stub-gen")]
 use pyo3_stub_gen::derive::*;
 
 use crate::config::SecretsDetectionConfig;
 use crate::object_model::copy_object_with_updates;
 use crate::scanner::{scan_container, scan_container_findings};
 
-#[gen_stub_pyclass]
+#[cfg_attr(feature = "stub-gen", gen_stub_pyclass)]
 #[pyclass]
 pub struct SecretsDetectionPluginCore {
     config: SecretsDetectionConfig,
 }
 
-#[gen_stub_pymethods]
+#[cfg_attr(feature = "stub-gen", gen_stub_pymethods)]
 #[pymethods]
 impl SecretsDetectionPluginCore {
     #[new]

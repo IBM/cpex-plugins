@@ -19,6 +19,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use pyo3_async_runtimes::tokio::future_into_py;
+#[cfg(feature = "stub-gen")]
 use pyo3_stub_gen::derive::*;
 
 use crate::clock::{Clock, SystemClock};
@@ -55,7 +56,7 @@ enum EngineBackend {
 /// - `backend: "redis"` — Rust owns the Redis connection; same batch Lua
 ///   scripts as the Python `RedisBackend`, one EVAL per hook invocation
 #[derive(Clone)]
-#[gen_stub_pyclass]
+#[cfg_attr(feature = "stub-gen", gen_stub_pyclass)]
 #[pyclass(skip_from_py_object)]
 pub struct RateLimiterEngine {
     config: EngineConfig,
@@ -89,7 +90,7 @@ impl RateLimiterEngine {
     }
 }
 
-#[gen_stub_pymethods]
+#[cfg_attr(feature = "stub-gen", gen_stub_pymethods)]
 #[pymethods]
 impl RateLimiterEngine {
     /// Construct from the Python config dict.

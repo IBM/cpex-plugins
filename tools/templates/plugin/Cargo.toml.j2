@@ -14,6 +14,11 @@ crate-type = ["cdylib", "rlib"]
 [[bin]]
 name = "stub_gen"
 path = "src/bin/stub_gen.rs"
+required-features = ["stub-gen"]
+
+[features]
+default = []
+stub-gen = ["dep:pyo3-stub-gen"]
 
 [dependencies]
 {% if use_framework_bridge -%}
@@ -22,7 +27,7 @@ cpex_framework_bridge = { workspace = true }
 log = { workspace = true }
 pyo3 = { workspace = true }
 pyo3-log = { workspace = true }
-pyo3-stub-gen = { workspace = true }
+pyo3-stub-gen = { workspace = true, optional = true }
 {% if has_resource_hooks or has_tool_hooks -%}
 regex = { workspace = true }
 {% endif -%}

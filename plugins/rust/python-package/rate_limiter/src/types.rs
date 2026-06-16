@@ -8,6 +8,7 @@
 // crosses the PyO3 boundary.
 
 use pyo3::prelude::*;
+#[cfg(feature = "stub-gen")]
 use pyo3_stub_gen::derive::*;
 
 /// The outcome of a single dimension check.
@@ -26,7 +27,7 @@ pub struct DimResult {
 
 /// The outcome of a single active dimension, exposed to Python for
 /// per-dimension inspection (e.g. which dimension blocked the request).
-#[gen_stub_pyclass]
+#[cfg_attr(feature = "stub-gen", gen_stub_pyclass)]
 #[pyclass(get_all, from_py_object)]
 #[derive(Debug, Clone)]
 pub struct EvalDimension {
@@ -43,7 +44,7 @@ pub struct EvalDimension {
 /// Contains the most restrictive outcome across all active dimensions
 /// (min remaining, earliest unblock among blocked dimensions — matching
 /// Python `_select_most_restrictive`).
-#[gen_stub_pyclass]
+#[cfg_attr(feature = "stub-gen", gen_stub_pyclass)]
 #[pyclass(get_all, from_py_object)]
 #[derive(Debug, Clone)]
 pub struct EvalResult {
@@ -63,7 +64,7 @@ pub struct EvalResult {
     pub allowed_dimensions: Vec<EvalDimension>,
 }
 
-#[gen_stub_pymethods]
+#[cfg_attr(feature = "stub-gen", gen_stub_pymethods)]
 #[pymethods]
 impl EvalResult {
     fn __repr__(&self) -> String {
