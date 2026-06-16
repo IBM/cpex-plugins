@@ -953,6 +953,19 @@ mod tests {
     // RedisTlsConfig tests
     // ---------------------------------------------------------------------------
 
+    /// Regression guard: the rustls `tls12` feature must stay enabled.
+    /// Without it rustls compiles TLS 1.3-only and cannot connect to a TLS-1.2-only
+    /// managed Redis (e.g. AWS ElastiCache), failing with BACKEND_UNAVAILABLE.
+    /// `rustls::version::TLS12` only exists when the feature is on, so removing it
+    /// breaks this build.
+    #[test]
+    fn rustls_tls12_feature_is_enabled() {
+        assert_eq!(
+            rustls::version::TLS12.version,
+            rustls::ProtocolVersion::TLSv1_2
+        );
+    }
+
     #[test]
     fn tls_no_knobs_returns_none() {
         // Default config (no TLS knobs) must take the fast path and return None
