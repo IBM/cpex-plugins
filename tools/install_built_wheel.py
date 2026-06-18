@@ -167,21 +167,35 @@ def install_wheel(python_bin: str, wheel_path: Path) -> int:
     return completed.returncode
 
 
+def venv_search_paths(venv_dir: str) -> list[Path]:
+    venv_path = Path(venv_dir)
+    if venv_path.is_absolute():
+        return [venv_path]
+
+    paths = [venv_path]
+    for parent in (Path.cwd(), *Path.cwd().parents):
+        candidate = parent / venv_path
+        if candidate not in paths:
+            paths.append(candidate)
+    return paths
+
+
 def resolve_python_bin(explicit_python: str | None, venv_dir: str | None) -> str | None:
     if explicit_python:
         return explicit_python
     if not venv_dir:
         return None
 
-    venv_path = Path(venv_dir)
     candidates = (
-        venv_path / "bin" / "python",
-        venv_path / "Scripts" / "python.exe",
-        venv_path / "Scripts" / "python",
+        ("bin", "python"),
+        ("Scripts", "python.exe"),
+        ("Scripts", "python"),
     )
-    for candidate in candidates:
-        if candidate.exists():
-            return str(candidate)
+    for venv_path in venv_search_paths(venv_dir):
+        for candidate_parts in candidates:
+            candidate = venv_path.joinpath(*candidate_parts)
+            if candidate.exists():
+                return str(candidate)
     return None
 
 

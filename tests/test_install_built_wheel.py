@@ -220,6 +220,25 @@ class InstallBuiltWheelTests(unittest.TestCase):
                 str(venv_python),
             )
 
+    def test_resolves_parent_workspace_venv_python(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            plugin_dir = root / "plugins" / "rust" / "python-package" / "rate_limiter"
+            plugin_dir.mkdir(parents=True)
+            venv_python = root / ".venv" / "bin" / "python"
+            venv_python.parent.mkdir(parents=True)
+            venv_python.write_text("")
+
+            current_dir = Path.cwd()
+            try:
+                os.chdir(plugin_dir)
+                self.assertEqual(
+                    Path(MODULE.resolve_python_bin(None, ".venv")).resolve(),
+                    venv_python.resolve(),
+                )
+            finally:
+                os.chdir(current_dir)
+
     def test_install_wheel_invokes_uv_with_selected_python(self) -> None:
         wheel = Path("/tmp/example.whl")
         with patch.object(MODULE.subprocess, "run") as run_mock:
