@@ -23,6 +23,8 @@ SHARED_PATH_PREFIXES = (
     ".config/",
     ".github/workflows/",
     "Cargo.toml",
+    "pyproject.toml",
+    "uv.lock",
     "deny.toml",
     "crates/",
     "README.md",
