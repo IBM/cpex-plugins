@@ -12,8 +12,9 @@
 // This preserves the existing Redis counter namespace during rolling upgrades.
 
 use std::cmp::max;
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use parking_lot::Mutex;
@@ -471,14 +472,69 @@ impl RedisTlsConfig {
 // RedisRateLimiter
 // ---------------------------------------------------------------------------
 
+/// Per-endpoint state shared by every `RedisRateLimiter` pointing at the same
+/// Redis URL: the one multiplexed connection plus the cached Lua script SHA
+/// (server-side, so valid for any connection to that server).
+///
+/// Why share it: the gateway rebuilds its per-`(team, tool)` plugin manager on a
+/// short TTL, so a fresh `RedisRateLimiter` is constructed frequently. Without
+/// sharing, each one opened its own TLS+AUTH connection, turning a healthy
+/// endpoint into a stream of short-lived connects. With sharing, all of them
+/// reuse one warm connection — the way the gateway shares a single DB pool.
+struct SharedEndpoint {
+    conn: Mutex<Option<MultiplexedConnection>>,
+    /// Single-flight gate: only one task establishes the connection at a time.
+    /// Async mutex so it can be held across the connect `.await`; concurrent
+    /// first-callers (cold start, or after a reset on error) wait here and then
+    /// reuse the elected task's connection instead of each opening a socket.
+    connect_gate: tokio::sync::Mutex<()>,
+    /// Live `RedisRateLimiter` instances sharing this endpoint. The connection
+    /// is closed when the last one is released (shutdown or drop), so it
+    /// survives the gateway's overlapping manager rebuilds but is cleaned up on
+    /// real teardown. The registry entry itself is process-lived.
+    refs: AtomicUsize,
+}
+
+/// Look up (or create) the shared endpoint for a Redis URL.
+///
+/// The registry keeps each entry for the life of the process (so the gate and
+/// refcount are stable), while the connection inside it is opened on first use
+/// and closed once the last referencing instance is released. Keyed by the full
+/// URL, so different endpoints (or DBs) get independent connections.
+fn shared_endpoint(redis_url: &str) -> Arc<SharedEndpoint> {
+    static REGISTRY: OnceLock<Mutex<HashMap<String, Arc<SharedEndpoint>>>> = OnceLock::new();
+    let registry = REGISTRY.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut map = registry.lock();
+    map.entry(redis_url.to_string())
+        .or_insert_with(|| {
+            Arc::new(SharedEndpoint {
+                conn: Mutex::new(None),
+                connect_gate: tokio::sync::Mutex::new(()),
+                refs: AtomicUsize::new(0),
+            })
+        })
+        .clone()
+}
+
 pub struct RedisRateLimiter {
     client: redis::Client,
-    conn: Mutex<Option<MultiplexedConnection>>,
+    /// Shared connection for this Redis URL, reused across instances.
+    shared: Arc<SharedEndpoint>,
     algorithm: Algorithm,
     prefix: String,
-    /// Cached SHA for the active algorithm's batch Lua script (REDIS-02).
-    /// Populated on first use via SCRIPT LOAD; cleared on connection reset.
+    /// Cached SHA for THIS instance's algorithm script (REDIS-02). Per instance,
+    /// not shared: the SHA is algorithm-specific (fixed/sliding/token) while the
+    /// connection is shared across algorithms on the same URL.
     script_sha: Mutex<Option<String>>,
+    /// Set once when this instance releases its endpoint reference, so
+    /// `shutdown()` and `Drop` cannot double-release.
+    released: AtomicBool,
+}
+
+impl Drop for RedisRateLimiter {
+    fn drop(&mut self) {
+        self.release();
+    }
 }
 
 fn shared_runtime() -> Result<&'static Runtime, redis::RedisError> {
@@ -511,18 +567,38 @@ impl RedisRateLimiter {
             Some(client) => client,
             None => redis::Client::open(redis_url)?,
         };
+        let shared = shared_endpoint(redis_url);
+        shared.refs.fetch_add(1, Ordering::AcqRel);
         Ok(Self {
             client,
-            conn: Mutex::new(None),
+            shared,
             algorithm,
             prefix,
             script_sha: Mutex::new(None),
+            released: AtomicBool::new(false),
         })
     }
 
     async fn connection_async(&self) -> Result<MultiplexedConnection, redis::RedisError> {
+        // Fast path: a healthy connection already exists for this endpoint. This
+        // never touches the single-flight gate, so a warm connection has zero
+        // extra cost — the gate is only contended at cold start or after a reset.
         {
-            let conn_guard = self.conn.lock();
+            let conn_guard = self.shared.conn.lock();
+            if let Some(conn) = conn_guard.as_ref() {
+                return Ok(conn.clone());
+            }
+        }
+
+        // Single-flight: serialize connection establishment per endpoint so
+        // concurrent first-callers don't each open a socket. Failures under the
+        // gate serialize (intentional backpressure against a struggling backend);
+        // fail_mode still decides the request outcome.
+        let _gate = self.shared.connect_gate.lock().await;
+
+        // Re-check: another task may have connected while we waited for the gate.
+        {
+            let conn_guard = self.shared.conn.lock();
             if let Some(conn) = conn_guard.as_ref() {
                 return Ok(conn.clone());
             }
@@ -565,24 +641,36 @@ impl RedisRateLimiter {
             ))
         })??;
 
-        let mut conn_guard = self.conn.lock();
-        if let Some(existing) = conn_guard.as_ref() {
-            return Ok(existing.clone());
-        }
-        *conn_guard = Some(conn.clone());
+        // We are the elected connector (we hold `_gate`), so no race to re-check.
+        *self.shared.conn.lock() = Some(conn.clone());
         Ok(conn)
     }
 
+    /// Drop the shared connection and this instance's script SHA so the next
+    /// call reconnects. Invoked from the eval path on a connection-side error;
+    /// the connection is rebuilt lazily by a single caller via `connect_gate`.
     fn reset_connection(&self) {
-        *self.conn.lock() = None;
+        *self.shared.conn.lock() = None;
         *self.script_sha.lock() = None;
     }
 
-    /// Drop the cached multiplexed connection and script SHA so the server
-    /// can close the socket. In-flight requests hold their own clones and
-    /// remain valid. Called from `RateLimiterEngine::shutdown()`.
+    /// Release this instance's reference to the shared endpoint, closing the
+    /// connection only when the last instance is released. Idempotent across
+    /// `shutdown()` and `Drop`. The connection therefore survives the gateway's
+    /// overlapping manager rebuilds (which always hold another reference) but is
+    /// cleaned up on real teardown.
+    fn release(&self) {
+        if self.released.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        if self.shared.refs.fetch_sub(1, Ordering::AcqRel) == 1 {
+            *self.shared.conn.lock() = None;
+        }
+    }
+
+    /// Plugin teardown — releases this instance's endpoint reference.
     pub fn shutdown(&self) {
-        self.reset_connection();
+        self.release();
     }
 
     /// Return the batch Lua script for the active algorithm.
@@ -928,6 +1016,34 @@ mod tests {
         fn path_str(&self) -> &str {
             self.0.to_str().unwrap()
         }
+    }
+
+    /// Two limiters pointing at the same Redis URL must share one endpoint
+    /// (hence one connection); different URLs must not. This is what stops the
+    /// gateway's per-(team, tool) manager rebuilds from each opening a fresh
+    /// connection. `Client::open` is lazy, so this needs no live Redis.
+    #[test]
+    fn same_url_shares_one_endpoint() {
+        let mk = |url: &str| {
+            RedisRateLimiter::new(
+                url,
+                Algorithm::FixedWindow,
+                "rl".to_string(),
+                RedisTlsConfig::default(),
+            )
+            .expect("client should construct (lazy connection)")
+        };
+        let a = mk("redis://127.0.0.1:6379/0");
+        let b = mk("redis://127.0.0.1:6379/0");
+        let c = mk("redis://127.0.0.1:6380/0");
+        assert!(
+            std::sync::Arc::ptr_eq(&a.shared, &b.shared),
+            "limiters with the same URL must share one endpoint",
+        );
+        assert!(
+            !std::sync::Arc::ptr_eq(&a.shared, &c.shared),
+            "limiters with different URLs must not share an endpoint",
+        );
     }
 
     impl Drop for TempFile {
