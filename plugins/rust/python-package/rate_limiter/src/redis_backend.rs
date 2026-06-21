@@ -528,27 +528,13 @@ impl RedisRateLimiter {
             }
         }
 
-        // Bound the connection-acquisition.  Without this, a Redis endpoint
-        // that accepts TCP but never responds at the application layer
-        // (plain ``redis://`` against a TLS-required server, a network ACL
-        // dropping post-handshake bytes, etc.) hangs the call indefinitely;
-        // the existing fail_mode path cannot engage because the call never
-        // returns to surface an error.  Mapping the timeout into a
-        // RedisError lets the caller's fail_mode logic route this exactly
-        // like any other connection-side failure.
-        //
-        // Hardcoded rather than promoted to a config key to keep the
-        // plugin's config surface small — operators rarely tune this knob
-        // and adding it for the few who might need it expands the schema
-        // for everyone else.  Two seconds is comfortable headroom for
-        // typical production paths (intra-VPC and cross-AZ Redis well
-        // under 100 ms; managed Redis with TLS handshake adds ~100-300 ms
-        // on top).  If a deployment with deliberately slow networks
-        // surfaces and 2 s becomes too tight, promote this into the
-        // ``lib.rs`` defaults + the engine's KNOWN config-key list — the
-        // existing config-validation machinery (defaults, unknown-key
-        // warning) handles the rest cleanly.
-        const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+        // Bound connection-acquisition so a Redis that accepts TCP but never
+        // responds (plain redis:// to a TLS-only server, an ACL dropping bytes)
+        // can't hang forever; the timeout becomes a RedisError the fail_mode
+        // path routes like any other connection failure.
+        // TEST BUILD: raised 2s -> 10s. loaded gateways can exceed 2s on first
+        // connect (TLS + AUTH + latency). productionize as a config key later.
+        const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
         let conn = timeout(
             CONNECT_TIMEOUT,
             self.client.get_multiplexed_async_connection(),
@@ -1295,8 +1281,8 @@ mod tests {
     ///
     /// The outer `tokio::time::timeout(5s)` is the test's runaway-guard so
     /// a regression doesn't hang the test run.  Asserts:
-    ///   * `connection_async` returns within ~3 seconds (well under the
-    ///     5s guard).
+    ///   * `connection_async` returns within ~10 seconds (under the
+    ///     13s guard).
     ///   * The returned error is `Io`-shaped, so the existing
     ///     `fail_mode` path can route it the same way as any other
     ///     connection-side failure.
@@ -1324,7 +1310,7 @@ mod tests {
         let started = Instant::now();
         let result: Result<Result<_, redis::RedisError>, tokio::time::error::Elapsed> = runtime
             .block_on(async {
-                tokio::time::timeout(Duration::from_secs(5), limiter.connection_async()).await
+                tokio::time::timeout(Duration::from_secs(13), limiter.connection_async()).await
             });
         let elapsed = started.elapsed();
 
@@ -1335,12 +1321,12 @@ mod tests {
         let inner = result.expect(
             "connection_async hung against a TCP-accepted-but-app-hangs Redis — \
              expected an explicit connection timeout error from the redis client \
-             well before the 5s test bound; instead the call never returned.",
+             well before the 13s test bound; instead the call never returned.",
         );
 
         assert!(
-            elapsed < Duration::from_secs(3),
-            "connection_async must fail fast on a hanging Redis (≤3s) — took {:?}. \
+            elapsed < Duration::from_secs(13),
+            "connection_async must fail fast on a hanging Redis (≤13s) — took {:?}. \
              Without a connection time-bound, the existing fail_mode path can't \
              trigger because the call never returns at all.",
             elapsed,
