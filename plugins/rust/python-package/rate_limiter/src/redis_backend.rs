@@ -624,7 +624,7 @@ impl RedisRateLimiter {
         // ``lib.rs`` defaults + the engine's KNOWN config-key list — the
         // existing config-validation machinery (defaults, unknown-key
         // warning) handles the rest cleanly.
-        const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+        const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
         let conn = timeout(
             CONNECT_TIMEOUT,
             self.client.get_multiplexed_async_connection(),
@@ -643,6 +643,10 @@ impl RedisRateLimiter {
 
         // We are the elected connector (we hold `_gate`), so no race to re-check.
         *self.shared.conn.lock() = Some(conn.clone());
+        log::info!(
+            "rate limiter: opened redis connection (shared across {} instance(s) on this endpoint)",
+            self.shared.refs.load(Ordering::Acquire)
+        );
         Ok(conn)
     }
 
@@ -650,6 +654,7 @@ impl RedisRateLimiter {
     /// call reconnects. Invoked from the eval path on a connection-side error;
     /// the connection is rebuilt lazily by a single caller via `connect_gate`.
     fn reset_connection(&self) {
+        log::info!("rate limiter: redis connection reset; will reconnect on next use");
         *self.shared.conn.lock() = None;
         *self.script_sha.lock() = None;
     }
@@ -1440,23 +1445,24 @@ mod tests {
         let started = Instant::now();
         let result: Result<Result<_, redis::RedisError>, tokio::time::error::Elapsed> = runtime
             .block_on(async {
-                tokio::time::timeout(Duration::from_secs(5), limiter.connection_async()).await
+                tokio::time::timeout(Duration::from_secs(13), limiter.connection_async()).await
             });
         let elapsed = started.elapsed();
 
-        // The outer 5s tokio::time::timeout is the test's runaway-guard.
-        // It firing is the bug shape (hang).  We want the inner Result
-        // to be available — i.e., connection_async must have returned of
-        // its own accord well before 5s.
+        // The outer 13s tokio::time::timeout is the test's runaway-guard
+        // (> the 10s CONNECT_TIMEOUT). It firing is the bug shape (hang).
+        // We want the inner Result to be available — i.e., connection_async
+        // must have returned of its own accord well before 13s.
         let inner = result.expect(
             "connection_async hung against a TCP-accepted-but-app-hangs Redis — \
              expected an explicit connection timeout error from the redis client \
-             well before the 5s test bound; instead the call never returned.",
+             well before the 13s test bound; instead the call never returned.",
         );
 
         assert!(
-            elapsed < Duration::from_secs(3),
-            "connection_async must fail fast on a hanging Redis (≤3s) — took {:?}. \
+            elapsed < Duration::from_secs(13),
+            "connection_async must fail on a hanging Redis within the 10s connect \
+             timeout (≤13s) — took {:?}. \
              Without a connection time-bound, the existing fail_mode path can't \
              trigger because the call never returns at all.",
             elapsed,

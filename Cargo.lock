@@ -1440,7 +1440,7 @@ checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 
 [[package]]
 name = "rate_limiter"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "cpex_framework_bridge",
  "criterion",

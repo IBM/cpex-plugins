@@ -104,8 +104,8 @@ impl RateLimiterPluginCore {
                     meta.bind(py),
                 )?
                 .into_bound(py)),
-                Err(_err) => {
-                    log_exception(py, error_log_message("prompt_pre_fetch", fail_closed))?;
+                Err(err) => {
+                    log_exception(py, error_log_message("prompt_pre_fetch", fail_closed), &err)?;
                     Ok(
                         backend_error_result(py, "PromptPrehookResult", fail_closed)?
                             .into_bound(py),
@@ -135,8 +135,8 @@ impl RateLimiterPluginCore {
                         meta.bind(py),
                     )
                 }),
-                Err(_err) => Python::attach(|py| {
-                    log_exception(py, error_log_message("prompt_pre_fetch", fail_closed))?;
+                Err(err) => Python::attach(|py| {
+                    log_exception(py, error_log_message("prompt_pre_fetch", fail_closed), &err)?;
                     backend_error_result(py, "PromptPrehookResult", fail_closed)
                 }),
             }
@@ -173,8 +173,8 @@ impl RateLimiterPluginCore {
                     meta.bind(py),
                 )?
                 .into_bound(py)),
-                Err(_err) => {
-                    log_exception(py, error_log_message("tool_pre_invoke", fail_closed))?;
+                Err(err) => {
+                    log_exception(py, error_log_message("tool_pre_invoke", fail_closed), &err)?;
                     Ok(
                         backend_error_result(py, "ToolPreInvokeResult", fail_closed)?
                             .into_bound(py),
@@ -204,8 +204,8 @@ impl RateLimiterPluginCore {
                         meta.bind(py),
                     )
                 }),
-                Err(_err) => Python::attach(|py| {
-                    log_exception(py, error_log_message("tool_pre_invoke", fail_closed))?;
+                Err(err) => Python::attach(|py| {
+                    log_exception(py, error_log_message("tool_pre_invoke", fail_closed), &err)?;
                     backend_error_result(py, "ToolPreInvokeResult", fail_closed)
                 }),
             }
@@ -531,19 +531,65 @@ fn normalize_identity(value: &Bound<'_, PyAny>) -> PyResult<String> {
     Ok(value.str()?.to_str()?.trim().to_string())
 }
 
-fn log_exception(py: Python<'_>, message: &str) -> PyResult<()> {
+fn log_exception(py: Python<'_>, message: &str, err: &PyErr) -> PyResult<()> {
     let logging = PyModule::import(py, "logging")?;
     let logger = logging.getattr("getLogger")?.call1((LOGGER_NAME,))?;
-    logger.call_method1("exception", (message,))?;
+    // Log the underlying error so BACKEND_UNAVAILABLE is diagnosable (timeout /
+    // WRONGPASS / TLS), with any URL credentials redacted. Uses `error`, not
+    // `exception` (no active Python exception is in flight here).
+    let detail = redact_credentials(&err.to_string());
+    logger.call_method1("error", (format!("{message}: {detail}"),))?;
     Ok(())
+}
+
+/// Redact `scheme://userinfo@host` credentials from any URL substring so a
+/// Redis password embedded in the connection URL never reaches the logs.
+fn redact_credentials(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(pos) = rest.find("://") {
+        let after = pos + 3;
+        out.push_str(&rest[..after]);
+        let authority = &rest[after..];
+        // userinfo only counts if an '@' appears before any authority delimiter
+        let at = authority.char_indices().find_map(|(j, c)| match c {
+            '@' => Some(Some(j)),
+            '/' | '?' | '#' | ' ' | '"' | '\'' => Some(None),
+            _ => None,
+        });
+        if let Some(Some(j)) = at {
+            out.push_str("***");
+            rest = &authority[j..]; // keep "@host..."
+        } else {
+            rest = authority;
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::await_async_tuple;
     use super::ensure_crypto_provider;
+    use super::redact_credentials;
     use pyo3::prelude::*;
     use pyo3::types::{PyAnyMethods, PyDictMethods, PyModule};
+
+    #[test]
+    fn redact_credentials_strips_password_from_redis_url() {
+        // The Redis password lives in the connection URL; it must never reach
+        // the logs via an error string. Guard against regressions that would
+        // leak it from BACKEND_UNAVAILABLE diagnostics.
+        let msg = "IO error: connection to rediss://:s3cr3tPass@cache.example:6379/0 failed";
+        let out = redact_credentials(msg);
+        assert!(!out.contains("s3cr3tPass"), "password leaked: {out}");
+        assert!(out.contains("rediss://***@cache.example:6379/0"), "host should survive: {out}");
+
+        // No credentials → unchanged.
+        let plain = "connection to redis://cache.example:6379/0 timed out";
+        assert_eq!(redact_credentials(plain), plain);
+    }
 
     #[test]
     fn ensure_crypto_provider_installs_a_default() {
