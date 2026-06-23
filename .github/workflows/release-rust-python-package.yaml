@@ -196,7 +196,7 @@ jobs:
 
       - name: Build wheel
         working-directory: ${{ needs.resolve.outputs.plugin_path }}
-        run: maturin build --release --out dist
+        run: uv run maturin build --release --out dist
 
       - name: Upload wheel artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
@@ -250,7 +250,7 @@ jobs:
 
       - name: Build sdist
         working-directory: ${{ needs.resolve.outputs.plugin_path }}
-        run: maturin sdist --out dist
+        run: uv run maturin sdist --out dist
 
       - name: Upload sdist artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
