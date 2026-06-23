@@ -4,7 +4,7 @@ Monorepo for managed CPEX plugins that are implemented in Rust and published as 
 
 ## Runtime Requirements
 
-These packages target the CPEX release-candidate framework API and intentionally depend on `cpex>=0.1.0rc1,<0.2`. The RC dependency is the migration target for this repository; it is not an accidental pre-stable dependency.
+These packages target the CPEX 0.1 framework API and intentionally depend on `cpex>=0.1.0,<0.2`.
 
 Rust plugin packages require their compiled PyO3 extension at import/runtime. They do not ship Python fallback implementations for missing Rust extensions.
 
@@ -14,8 +14,14 @@ Managed plugins live under `plugins/rust/python-package/<slug>/`.
 
 Current plugins:
 
-- `rate_limiter`
-- `pii_filter`
+| Plugin | Package | Purpose |
+|---|---|---|
+| `encoded_exfil_detection` | `cpex-encoded-exfil-detection` | Detect suspicious encoded payload exfiltration patterns in prompt arguments, tool output, and resource content |
+| `pii_filter` | `cpex-pii-filter` | Detect and mask PII in nested payloads |
+| `rate_limiter` | `cpex-rate-limiter` | Enforce per-user, per-tenant, and per-tool rate limits |
+| `retry_with_backoff` | `cpex-retry-with-backoff` | Apply retry policy and exponential backoff metadata to transient failures |
+| `secrets_detection` | `cpex-secrets-detection` | Detect and redact likely credentials in prompt arguments, tool inputs and outputs, and resource content |
+| `url_reputation` | `cpex-url-reputation` | Apply static URL allowlist, blocklist, pattern, and heuristic checks before resource fetches |
 
 Each managed plugin must include:
 

@@ -6,7 +6,7 @@ Enforces rate limits per user, tenant, and tool across `tool_pre_invoke` and `pr
 
 ## Runtime Requirements
 
-This plugin depends on `cpex>=0.1.0rc1,<0.2` and imports hook models from `cpex.framework`. The compiled Rust extension is mandatory; there is no Python fallback implementation.
+This plugin depends on `cpex>=0.1.0,<0.2` and imports hook models from `cpex.framework`. The compiled Rust extension is mandatory; there is no Python fallback implementation.
 
 ## Hooks
 

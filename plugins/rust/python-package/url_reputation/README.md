@@ -1,177 +1,93 @@
 # URL Reputation (Rust)
-> Author: Matheus Cafalchio
-> Version: 0.1.0
 
-Blocks URLs based on configured blocked domains, patterns and heuristics before resource fetch. Designed for fast and efficient resource checks.
+Static URL policy checks for ContextForge and MCP Gateway resource fetches.
+
+## Features
+
+- Blocks resource fetches before execution with the `resource_pre_fetch` hook
+- Allows trusted domains or URL regex patterns to bypass later checks
+- Blocks configured domains, subdomains, or URL regex patterns
+- Blocks non-HTTPS URLs by default
+- Optional domain heuristics for high entropy, static IANA TLD validity, and Unicode security
+- Case-insensitive domain normalization for allowlist and blocklist entries
+- Pure static policy checks; no external reputation provider or threat-intel feed calls
+
+## Build
+
+```bash
+make install
+```
 
 ## Runtime Requirements
 
-This plugin depends on `cpex>=0.1.0rc1,<0.2` and imports hook models from `cpex.framework`. The compiled Rust extension is mandatory; there is no Python fallback implementation.
+This plugin depends on `cpex>=0.1.0,<0.2` and imports hook models from `cpex.framework`. The compiled Rust extension is mandatory; there is no Python fallback implementation.
 
-## Hooks
-- resource_pre_fetch – triggered before any resource is fetched.
+## Usage
 
-## Config
+The plugin runs on `resource_pre_fetch` before a resource URI is fetched.
+
+Typical uses:
+
+- block known bad domains and subdomains
+- allow trusted internal URL patterns before enforcing HTTPS
+- reject insecure `http://` resource fetches
+- enable lightweight domain heuristics for suspicious generated or Unicode domains
+
+## Configuration
+
 ```yaml
 config:
-    whitelist_domains: ["ibm.com", "yourdomain.com"]
-    allowed_patterns: ["^https://trusted\\.internal/.*"]
-    blocked_domains: ["malicious.example.com"]
-    blocked_patterns: ["casino", "crypto"]
-    use_heuristic_check: true
-    entropy_threshold: 3.65
-    block_non_secure_http: true
-```
-## Config Description
-
-* **whitelist_domains**
-  - A set of domains that are allowed to be fetched without any checks.
-
-* **allowed_patterns**
-  - A list of regex patterns matched against the full URL. If any pattern matches, the URL is allowed and skips all remaining checks — including the non-secure HTTP check. Evaluated after the whitelist, before scheme enforcement.
-
-* **blocked_domains**
-  - A set of domains that will always be blocked.
-
-* **blocked_patterns**
-  - A list of regex patterns matched against the full URL. If any pattern matches, the URL is blocked.
-
-* **use_heuristic_check**
-  - Whether heuristic checks (entropy, TLD validity, unicode security) should be performed. Default: `false`.
-
-* **entropy_threshold**
-  - Maximum allowed Shannon entropy for a domain. Higher entropy may indicate suspicious/malicious domains.
-
-* **block_non_secure_http**
-  - Whether URLs using `http` (non-secure) should be blocked. Default: `true`.
-
-## Architecture
-
-```mermaid
-flowchart LR
-    Start([URL Input]) --> Parse{Parse & Extract Domain}
-    Parse -->|Fail| Block1[❌ Parse Error]
-    Parse -->|Success| DetectIP[Detect IP]
-
-    DetectIP --> Whitelist{Whitelist?}
-    Whitelist -->|Yes| Success[✅ Allow]
-    Whitelist -->|No| AllowPat{Allowed Pattern?}
-
-    AllowPat -->|Yes| Success
-    AllowPat -->|No| HTTP{Scheme = HTTPS<br/>or not enforced?}
-
-    HTTP -->|No| Block2[❌ Non-HTTPS]
-    HTTP -->|Yes| BlockedDom{Blocked Domain<br/>or Pattern?}
-
-    BlockedDom -->|Yes| Block3[❌ Blocked]
-    BlockedDom -->|No| Heuristic{Heuristic Check<br/>Enabled & Not IP?}
-
-    Heuristic -->|No| Success
-    Heuristic -->|Yes| Checks{Pass Entropy,<br/>TLD & Unicode?}
-
-    Checks -->|No| Block4[❌ Heuristic Fail]
-    Checks -->|Yes| Success
-
-    Block1 --> End([Return])
-    Block2 --> End
-    Block3 --> End
-    Block4 --> End
-    Success --> End
-
-    style Start fill:#e1f5ff
-    style End fill:#e1f5ff
-    style Success fill:#c8e6c9
-    style Block1 fill:#ffcdd2
-    style Block2 fill:#ffcdd2
-    style Block3 fill:#ffcdd2
-    style Block4 fill:#ffcdd2
+  whitelist_domains:
+    - "example.com"
+  allowed_patterns:
+    - "^https://trusted\\.internal/.*"
+  blocked_domains:
+    - "malicious.example.com"
+  blocked_patterns:
+    - "casino"
+    - "crypto"
+  use_heuristic_check: false
+  entropy_threshold: 3.65
+  block_non_secure_http: true
 ```
 
-## Logic workflow
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `whitelist_domains` | set | `[]` | Domains and subdomains that bypass remaining checks |
+| `allowed_patterns` | list | `[]` | Regexes matched against the full trimmed URL; a match bypasses remaining checks |
+| `blocked_domains` | set | `[]` | Domains and subdomains that are always blocked unless allowlisted first |
+| `blocked_patterns` | list | `[]` | Regexes matched against the full trimmed URL; a match blocks the request |
+| `use_heuristic_check` | bool | `false` | Enable entropy, TLD, and Unicode domain checks for non-IP hosts |
+| `entropy_threshold` | float | `3.65` | Maximum allowed Shannon entropy for the domain |
+| `block_non_secure_http` | bool | `true` | Block URLs whose scheme is not `https` |
 
-1. **Parse & Normalize URL**
-   - Trim the input URL, then parse it (scheme and host are normalised to lowercase by the URL parser per RFC 3986; path and query retain original casing).
-   - **Fail → Violation:** `"Could not parse url"`.
+## Logic Workflow
 
-2. **Extract Domain**
-   - Get the host string from the URL.
-   - **Fail → Violation:** `"Could not parse domain"`.
+1. Trim and parse the URL.
+2. Extract the host/domain.
+3. Detect IPv4 or IPv6 hosts so domain heuristics can be skipped.
+4. Allow exact or parent-domain matches in `whitelist_domains`.
+5. Allow matches in `allowed_patterns`; this also bypasses HTTPS enforcement.
+6. Block non-HTTPS schemes when `block_non_secure_http=true`.
+7. Block exact or parent-domain matches in `blocked_domains`.
+8. Block matches in `blocked_patterns`.
+9. If heuristics are enabled for a non-IP host, block high-entropy domains, illegal static TLDs, or unsafe Unicode domains.
 
-3. **Detect IP Address**
-   - Determine if domain is an IPv4 or IPv6 address.
-   - Skip heuristic checks for IPs.
+## Returned Metadata
 
-4. **Whitelist Check**
-   - If domain is in `whitelist_domains` → **continue_processing = true**, skip all further checks.
+Allowed URLs return `continue_processing=true`.
 
-5. **Allowed Patterns Check**
-   - If URL matches any regex in `allowed_patterns` → **continue_processing = true**, skip all further checks.
-   - Note: this check runs _before_ scheme enforcement, so an `allowed_patterns` match can bypass the non-secure HTTP block.
-
-6. **Block Non-Secure HTTP**
-   - If scheme ≠ `"https"` **and** `block_non_secure_http` → **Violation:** `"Blocked non secure http url"`.
-
-7. **Blocked Domains**
-   - If domain is in `blocked_domains` → **Violation:** `"Domain in blocked set"`.
-
-8. **Blocked Patterns**
-   - If URL matches any regex in `blocked_patterns` → **Violation:** `"Blocked pattern"`.
-
-9. **Heuristic Checks** *(only for non-IP domains and if `use_heuristic_check = true`)*:
-   9.1 **High Entropy Check** – If Shannon entropy > `entropy_threshold` → **Violation:** `"High entropy domain"`.
-   9.2 **TLD Validity Check** – Validate top-level domain. Fail → **Violation:** `"Illegal TLD"`.
-   9.3 **Unicode Security Check** – Validate domain unicode. Fail → **Violation:** `"Domain unicode is not secure"`.
-
-10. **Final Outcome**
-    - If no violations → **continue_processing = true**.
-    - If any check fails → return first `PluginViolation` and **continue_processing = false**.
-
-
+Blocked URLs return `continue_processing=false` with a `PluginViolation` using code `URL_REPUTATION_BLOCK`. Violation details include the URL or domain involved in the decision.
 
 ## Limitations
 
-    - Static lists only; no external reputation providers.
-    - Ianna valid TLDs are static and will be out of date
-    - Ignores other schemes that are not http and https
-    - No external domain reputation checks
+- Reputation data is static configuration only; there are no external provider lookups.
+- The IANA TLD list is compiled into the plugin and can lag newly delegated TLDs.
+- `allowed_patterns` intentionally runs before HTTPS enforcement, so trusted patterns can allow `http://` URLs.
+- IP addresses skip domain heuristics.
 
-## TODOs
-    - External threat-intel integration with cache – Query external feeds for known malicious domains.
-    - IP address handling policy – Decide rules for IPv4/IPv6 URLs.
-    - Dynamic TLD updates – Fetch latest IANA TLD list automatically.
+## Testing
 
-
-
-
-
-## Tests
-
-**Test Coverage** (24 unit tests, all passing):
-
-| Filename | Function Coverage | Line Coverage | Region Coverage |
-|--------------------------|-------------------|-----------------|-----------------|
-| engine.rs | 96.55% (28/29) | 99.26% (533/537) | 98.60% (634/643) |
-| filters/heuristic.rs | 100.00% (5/5) | 96.49% (55/57) | 97.53% (79/81) |
-| filters/patterns.rs | 100.00% (5/5) | 100.00% (20/20) | 100.00% (38/38) |
-| lib.rs | 0.00% (0/1) | 0.00% (0/5) | 0.00% (0/7) |
-| types.rs | 50.00% (3/6) | 44.12% (15/34) | 23.94% (17/71) |
-| **TOTAL** | **89.13% (41/46)** | **95.43% (627/657)** | **91.45% (770/842)** |
-
-*Note: `lib.rs` and `types.rs` contain PyO3 bindings and module declarations not covered by unit tests.*
-
-**New test coverage includes:**
-- Invalid regex pattern handling (both allowed and blocked patterns)
-- Case-insensitive domain matching (whitelist and blocklist)
-- Subdomain matching validation
-
-**Run tests:**
 ```bash
-cargo nextest run -p url_reputation  # Run Rust unit tests
-cargo llvm-cov --lib --html   # Generate coverage report
+make ci
 ```
-
-## Heuristic methods
-
-The heuristics were based on a research paper.
-
-    A. P. S. Bhadauria and M. Singh, "Domain‑Checker: A Classification of Malicious and Benign Domains Using Multitier Filtering," Springer Nature, 2023.
