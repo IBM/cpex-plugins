@@ -429,15 +429,32 @@ jobs:
               echo "ERROR: unexpected characters in tag '${tag}'; aborting." >&2
               exit 1
             fi
-            git tag "${tag}" "${GITHUB_SHA}"
-            git push origin "refs/tags/${tag}" || {
-              if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
-                echo "Tag ${tag} already exists remotely; skipping."
-              else
-                echo "FATAL: push of '${tag}' failed." >&2
+            if remote_sha="$(git ls-remote --exit-code --tags origin "refs/tags/${tag}" | awk '{print $1}')"; then
+              if [[ "${remote_sha}" != "${GITHUB_SHA}" ]]; then
+                echo "FATAL: tag '${tag}' already exists at ${remote_sha}, expected ${GITHUB_SHA}." >&2
                 exit 1
               fi
-            }
+              echo "Tag ${tag} already exists remotely at ${GITHUB_SHA}; skipping tag creation."
+            else
+              if git show-ref --verify --quiet "refs/tags/${tag}"; then
+                local_sha="$(git rev-list -n 1 "${tag}")"
+                if [[ "${local_sha}" != "${GITHUB_SHA}" ]]; then
+                  echo "FATAL: local tag '${tag}' exists at ${local_sha}, expected ${GITHUB_SHA}." >&2
+                  exit 1
+                fi
+              else
+                git tag "${tag}" "${GITHUB_SHA}"
+              fi
+              git push origin "refs/tags/${tag}" || {
+                if remote_sha="$(git ls-remote --exit-code --tags origin "refs/tags/${tag}" | awk '{print $1}')" &&
+                  [[ "${remote_sha}" == "${GITHUB_SHA}" ]]; then
+                  echo "Tag ${tag} already exists remotely at ${GITHUB_SHA}; skipping."
+                else
+                  echo "FATAL: push of '${tag}' failed." >&2
+                  exit 1
+                fi
+              }
+            fi
             gh workflow run release-rust-python-package.yaml \
               --ref main \
               -f "tag=${tag}" \
