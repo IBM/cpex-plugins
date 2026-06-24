@@ -65,11 +65,11 @@ jobs:
       release_validation_tags: ${{ steps.detect.outputs.release_validation_tags }}
       has_release_validation_tags: ${{ steps.detect.outputs.has_release_validation_tags }}
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v6.2.0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
 
@@ -128,9 +128,9 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: actions/setup-python@v6.2.0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
 
@@ -182,7 +182,7 @@ jobs:
     if: needs.validate-and-detect.outputs.has_plugins == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Verify Rust toolchain
         run: |
@@ -207,11 +207,11 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v6.2.0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
 
@@ -269,9 +269,9 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: actions/setup-python@v6.2.0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
 
@@ -336,7 +336,7 @@ jobs:
         run: python3 tools/plugin_catalog.py coverage-check . coverage/cobertura.xml 90.00 "${PLUGINS}"
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v7.0.0
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           files: ./coverage/cobertura.xml
           flags: rust-python-package-workspace
@@ -350,7 +350,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Verify Rust toolchain
         run: |
@@ -412,7 +412,7 @@ jobs:
       actions: write
       contents: write
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
 

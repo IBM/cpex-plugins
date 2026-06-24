@@ -240,6 +240,24 @@ class PluginCatalogTests(unittest.TestCase):
                 raise AssertionError(f"Unhandled default expression for {key}: {raw}")
         return defaults
 
+    def test_workflow_actions_are_pinned_to_commit_shas(self) -> None:
+        uses_pattern = re.compile(r"^\s*-?\s*uses:\s+(.+?)\s*$")
+        pinned_pattern = re.compile(
+            r"^\s*-?\s*uses:\s+[^@\s]+@[0-9a-f]{40}\s+#\s+\S+\s*$"
+        )
+        for workflow_path in sorted((REPO_ROOT / ".github" / "workflows").glob("*.y*ml")):
+            for line_number, line in enumerate(workflow_path.read_text().splitlines(), start=1):
+                match = uses_pattern.match(line)
+                if match is None:
+                    continue
+                if match.group(1).startswith("./"):
+                    continue
+                self.assertRegex(
+                    line,
+                    pinned_pattern,
+                    f"{workflow_path.relative_to(REPO_ROOT)}:{line_number} should pin third-party actions to commit SHAs",
+                )
+
     def test_repo_validates_managed_plugins_layout(self) -> None:
         result = run_catalog("validate", str(REPO_ROOT))
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -2818,11 +2836,11 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("uv==0.9.30", workflow)
         self.assertIn("maturin==1.12.6", workflow)
         self.assertIn(
-            "actions/checkout@v7.0.0",
+            "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0",
             workflow,
         )
         self.assertIn(
-            "actions/setup-python@v6.2.0",
+            "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0",
             workflow,
         )
         self.assertNotIn("actions/checkout@v4", workflow)
@@ -2843,11 +2861,11 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertNotIn("tests/test_install_built_wheel.py", workflow)
         self.assertNotIn("python3 tools/plugin_catalog.py ci-selection", workflow)
         self.assertIn(
-            "actions/checkout@v7.0.0",
+            "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0",
             workflow,
         )
         self.assertIn(
-            "actions/setup-python@v6.2.0",
+            "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0",
             workflow,
         )
 
@@ -2861,11 +2879,11 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("python3 -m unittest tests/test_install_built_wheel.py", workflow)
         self.assertNotIn("tests/test_plugin_catalog.py", workflow)
         self.assertIn(
-            "actions/checkout@v7.0.0",
+            "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0",
             workflow,
         )
         self.assertIn(
-            "actions/setup-python@v6.2.0",
+            "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0",
             workflow,
         )
 
@@ -3047,7 +3065,10 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("python3 tools/plugin_catalog.py coverage-check . coverage/cobertura.xml 90.00", coverage_check_run)
         self.assertIn('"${PLUGINS}"', coverage_check_run)
         self.assertIn("cobertura.xml", coverage_section)
-        self.assertIn("codecov/codecov-action@", coverage_section)
+        self.assertIn(
+            "codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0",
+            coverage_section,
+        )
         self.assertNotIn("matrix:", coverage_section)
         self.assertIn("CARGO_PACKAGES: ${{ needs.validate-and-detect.outputs.cargo_packages }}", documentation_section)
         self.assertIn('os.environ["CARGO_PACKAGES"]', documentation_run)
@@ -3614,19 +3635,19 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertNotIn('pytest pytest-asyncio PyYAML', workflow)
         self.assertIn('"${venv_python}" -m pytest', workflow)
         self.assertIn(
-            "actions/checkout@v7.0.0",
+            "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0",
             workflow,
         )
         self.assertIn(
-            "actions/setup-python@v6.2.0",
+            "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0",
             workflow,
         )
         self.assertIn(
-            "actions/upload-artifact@v7.0.1",
+            "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
             workflow,
         )
         self.assertIn(
-            "actions/download-artifact@v8.0.1",
+            "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1",
             workflow,
         )
         self.assertLess(
@@ -3638,7 +3659,7 @@ class PluginCatalogTests(unittest.TestCase):
             workflow.index("name: Test built sdist in isolated virtualenv"),
         )
         self.assertIn(
-            "pypa/gh-action-pypi-publish@v1.14.0",
+            "pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0",
             workflow,
         )
         self.assertNotIn("actions/checkout@v4", workflow)
