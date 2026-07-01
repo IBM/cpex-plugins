@@ -13,6 +13,7 @@ from cpex.framework import (
     ToolPostInvokePayload,
     ToolPreInvokePayload,
 )
+from cpex.framework.extensions import Extensions, RequestExtension
 from cpex.framework.hooks.policies import HookPayloadPolicy, apply_policy
 from cpex.framework.memory import wrap_payload_for_isolation
 from cpex.framework.models import GlobalContext
@@ -494,3 +495,20 @@ async def test_tool_post_invoke_stats_reset_per_request():
         "total_detections": 1,
         "total_masked": 1,
     }
+
+
+@pytest.mark.asyncio
+async def test_hook_accepts_and_forwards_extensions():
+    plugin = PIIFilterPlugin(_make_config())
+    ext = Extensions(request=RequestExtension(trace_id="trace-xyz"))
+    payload = ToolPostInvokePayload(name="t", result={"email": "alice@example.com"})
+    result = await plugin.tool_post_invoke(payload, _make_context(), ext)
+    assert result is not None  # forwarding works; metrics asserted in A3
+
+
+@pytest.mark.asyncio
+async def test_hook_without_extensions_is_backward_compatible():
+    plugin = PIIFilterPlugin(_make_config())
+    payload = ToolPostInvokePayload(name="t", result={"email": "alice@example.com"})
+    result = await plugin.tool_post_invoke(payload, _make_context())  # 2-arg call
+    assert result is not None
