@@ -6,7 +6,9 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use cpex_framework_bridge::{build_framework_object, default_result as bridge_default_result};
+use cpex_framework_bridge::{
+    build_framework_object, build_framework_object_dyn, default_result as bridge_default_result,
+};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyModule};
 #[cfg(feature = "stub-gen")]
@@ -41,7 +43,6 @@ impl PIIFilterPluginCore {
         extensions: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let trace_id = read_trace_id(extensions);
-        let _ = &trace_id;
         self.handle_nested_stage(
             py,
             payload,
@@ -55,7 +56,6 @@ impl PIIFilterPluginCore {
                 violation_reason: "PII detected in prompt arguments",
                 violation_description: "Sensitive information detected in prompt arguments",
                 violation_code: "PII_DETECTED",
-                include_stats: false,
             },
         )
     }
@@ -69,7 +69,6 @@ impl PIIFilterPluginCore {
         extensions: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let trace_id = read_trace_id(extensions);
-        let _ = &trace_id;
         let result = payload.getattr("result")?;
         let messages_value = result.getattr("messages")?;
         let Ok(messages) = messages_value.cast::<PyList>() else {
@@ -124,26 +123,34 @@ impl PIIFilterPluginCore {
                     role.as_deref(),
                     true,
                 )?;
-                return build_result(
+                let mut kwargs: Vec<(&str, Py<PyAny>)> = vec![
+                    (
+                        "continue_processing",
+                        false.into_pyobject(py)?.to_owned().into_any().unbind(),
+                    ),
+                    (
+                        "violation",
+                        self.build_violation(
+                            py,
+                            "PII detected in prompt messages",
+                            "Sensitive information detected in prompt result",
+                            "PII_DETECTED_IN_PROMPT_RESULT",
+                            &detections,
+                        )?,
+                    ),
+                ];
+                let type_strings = sorted_detection_types(&detections);
+                let types: Vec<&str> = type_strings.iter().map(String::as_str).collect();
+                push_metrics_kwarg(
                     py,
-                    "PromptPosthookResult",
-                    [
-                        (
-                            "continue_processing",
-                            false.into_pyobject(py)?.to_owned().into_any().unbind(),
-                        ),
-                        (
-                            "violation",
-                            self.build_violation(
-                                py,
-                                "PII detected in prompt messages",
-                                "Sensitive information detected in prompt result",
-                                "PII_DETECTED_IN_PROMPT_RESULT",
-                                &detections,
-                            )?,
-                        ),
-                    ],
+                    trace_id.as_deref(),
+                    &mut kwargs,
+                    count_detections(&detections) as i64,
+                    0,
+                    &types,
+                    "prompt_post_fetch",
                 );
+                return build_result_dyn(py, "PromptPosthookResult", kwargs);
             }
 
             let masked = self.detector.mask_rust(&text, &detections)?;
@@ -165,13 +172,7 @@ impl PIIFilterPluginCore {
             changed = true;
         }
 
-        self.record_metadata_summary(
-            py,
-            context,
-            "prompt_post_fetch",
-            total_count,
-            detected_types.into_iter().collect(),
-        )?;
+        let _ = &context;
         if changed {
             let cloned_messages = PyList::empty(py);
             for message in updated_messages {
@@ -183,14 +184,21 @@ impl PIIFilterPluginCore {
                 "messages",
                 &cloned_messages.into_any().unbind(),
             )?;
-            return build_result(
+            let mut kwargs: Vec<(&str, Py<PyAny>)> = vec![(
+                "modified_payload",
+                clone_payload_with_attr(py, payload, "result", &cloned_result)?,
+            )];
+            let types: Vec<&str> = detected_types.iter().map(String::as_str).collect();
+            push_metrics_kwarg(
                 py,
-                "PromptPosthookResult",
-                [(
-                    "modified_payload",
-                    clone_payload_with_attr(py, payload, "result", &cloned_result)?,
-                )],
+                trace_id.as_deref(),
+                &mut kwargs,
+                total_count as i64,
+                total_count as i64,
+                &types,
+                "prompt_post_fetch",
             );
+            return build_result_dyn(py, "PromptPosthookResult", kwargs);
         }
 
         default_result(py, "PromptPosthookResult")
@@ -205,7 +213,6 @@ impl PIIFilterPluginCore {
         extensions: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let trace_id = read_trace_id(extensions);
-        let _ = &trace_id;
         self.handle_nested_stage(
             py,
             payload,
@@ -219,7 +226,6 @@ impl PIIFilterPluginCore {
                 violation_reason: "PII detected in tool arguments",
                 violation_description: "Sensitive information detected in tool arguments",
                 violation_code: "PII_DETECTED_IN_TOOL_ARGS",
-                include_stats: false,
             },
         )
     }
@@ -233,7 +239,6 @@ impl PIIFilterPluginCore {
         extensions: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let trace_id = read_trace_id(extensions);
-        let _ = &trace_id;
         self.handle_nested_stage(
             py,
             payload,
@@ -247,7 +252,6 @@ impl PIIFilterPluginCore {
                 violation_reason: "PII detected in tool result",
                 violation_description: "Sensitive information detected in tool result",
                 violation_code: "PII_DETECTED_IN_TOOL_RESULT",
-                include_stats: true,
             },
         )
     }
@@ -258,11 +262,10 @@ impl PIIFilterPluginCore {
         &self,
         py: Python<'_>,
         payload: &Bound<'_, PyAny>,
-        context: &Bound<'_, PyAny>,
+        _context: &Bound<'_, PyAny>,
         trace_id: Option<&str>,
         spec: NestedStageSpec<'_>,
     ) -> PyResult<Py<PyAny>> {
-        let _ = &trace_id;
         let source_value = payload.getattr(spec.source_attr)?;
         if source_value.is_none() {
             return default_result(py, spec.result_class);
@@ -282,29 +285,36 @@ impl PIIFilterPluginCore {
                 subject.as_deref(),
                 true,
             )?;
-            return build_result(
+            let mut kwargs: Vec<(&str, Py<PyAny>)> = vec![
+                (
+                    "continue_processing",
+                    false.into_pyobject(py)?.to_owned().into_any().unbind(),
+                ),
+                (
+                    "violation",
+                    self.build_violation(
+                        py,
+                        spec.violation_reason,
+                        spec.violation_description,
+                        spec.violation_code,
+                        &detections,
+                    )?,
+                ),
+            ];
+            let type_strings = sorted_detection_types(&detections);
+            let types: Vec<&str> = type_strings.iter().map(String::as_str).collect();
+            push_metrics_kwarg(
                 py,
-                spec.result_class,
-                [
-                    (
-                        "continue_processing",
-                        false.into_pyobject(py)?.to_owned().into_any().unbind(),
-                    ),
-                    (
-                        "violation",
-                        self.build_violation(
-                            py,
-                            spec.violation_reason,
-                            spec.violation_description,
-                            spec.violation_code,
-                            &detections,
-                        )?,
-                    ),
-                ],
+                trace_id,
+                &mut kwargs,
+                count_detections(&detections) as i64,
+                0,
+                &types,
+                spec.stage,
             );
+            return build_result_dyn(py, spec.result_class, kwargs);
         }
 
-        self.record_metadata(py, context, spec.stage, &detections)?;
         if !detections.is_empty() {
             self.log_detections(
                 py,
@@ -314,19 +324,17 @@ impl PIIFilterPluginCore {
                 subject.as_deref(),
                 false,
             )?;
-            if spec.include_stats {
-                self.record_stats(py, context, &detections)?;
-            }
         }
         if modified {
-            return build_result(
-                py,
-                spec.result_class,
-                [(
-                    "modified_payload",
-                    clone_payload_with_attr(py, payload, spec.source_attr, &new_value)?,
-                )],
-            );
+            let mut kwargs: Vec<(&str, Py<PyAny>)> = vec![(
+                "modified_payload",
+                clone_payload_with_attr(py, payload, spec.source_attr, &new_value)?,
+            )];
+            let type_strings = sorted_detection_types(&detections);
+            let types: Vec<&str> = type_strings.iter().map(String::as_str).collect();
+            let total = count_detections(&detections) as i64;
+            push_metrics_kwarg(py, trace_id, &mut kwargs, total, total, &types, spec.stage);
+            return build_result_dyn(py, spec.result_class, kwargs);
         }
 
         default_result(py, spec.result_class)
@@ -357,67 +365,6 @@ impl PIIFilterPluginCore {
                 ("details", details.into_any().unbind()),
             ],
         )
-    }
-
-    fn record_metadata(
-        &self,
-        py: Python<'_>,
-        context: &Bound<'_, PyAny>,
-        stage: &str,
-        detections: &HashMap<PIIType, Vec<Detection>>,
-    ) -> PyResult<()> {
-        self.record_metadata_summary(
-            py,
-            context,
-            stage,
-            count_detections(detections),
-            sorted_detection_types(detections),
-        )
-    }
-
-    fn record_metadata_summary(
-        &self,
-        py: Python<'_>,
-        context: &Bound<'_, PyAny>,
-        stage: &str,
-        total_count: usize,
-        types: Vec<String>,
-    ) -> PyResult<()> {
-        if !self.detector.config.include_detection_details || total_count == 0 {
-            return Ok(());
-        }
-
-        let metadata = context.getattr("metadata")?.cast_into::<PyDict>()?;
-        let pii_detections = match metadata.get_item("pii_detections")? {
-            Some(existing) => existing.cast_into::<PyDict>()?,
-            None => {
-                let value = PyDict::new(py);
-                metadata.set_item("pii_detections", &value)?;
-                value
-            }
-        };
-
-        let stage_data = PyDict::new(py);
-        stage_data.set_item("detected", true)?;
-        stage_data.set_item("types", types)?;
-        stage_data.set_item("total_count", total_count)?;
-        pii_detections.set_item(stage, stage_data)?;
-        Ok(())
-    }
-
-    fn record_stats(
-        &self,
-        py: Python<'_>,
-        context: &Bound<'_, PyAny>,
-        detections: &HashMap<PIIType, Vec<Detection>>,
-    ) -> PyResult<()> {
-        let metadata = context.getattr("metadata")?.cast_into::<PyDict>()?;
-        let stats = PyDict::new(py);
-        let total = count_detections(detections);
-        stats.set_item("total_detections", total)?;
-        stats.set_item("total_masked", total)?;
-        metadata.set_item("pii_filter_stats", stats)?;
-        Ok(())
     }
 
     fn log_detections(
@@ -463,19 +410,81 @@ struct NestedStageSpec<'a> {
     violation_reason: &'a str,
     violation_description: &'a str,
     violation_code: &'a str,
-    include_stats: bool,
 }
 
-fn build_result<'py, const N: usize>(
-    py: Python<'py>,
+/// Builds a framework result object from a variable-length kwarg list (the
+/// emitting paths conditionally append a `metadata` entry when `trace_id` is
+/// present, so a fixed-size array won't work here).
+fn build_result_dyn(
+    py: Python<'_>,
     class_name: &str,
-    kwargs: [(&str, Py<PyAny>); N],
+    kwargs: Vec<(&str, Py<PyAny>)>,
 ) -> PyResult<Py<PyAny>> {
-    build_framework_object(py, class_name, kwargs)
+    build_framework_object_dyn(py, class_name, kwargs)
 }
 
 fn default_result<'py>(py: Python<'py>, class_name: &str) -> PyResult<Py<PyAny>> {
     bridge_default_result(py, class_name)
+}
+
+const MAX_DETECTION_TYPES: usize = 32;
+
+/// Build the namespaced metrics dict for the result.metadata channel.
+/// Returns None (no work) when trace_id is absent (P-1/L3). Allowlist only:
+/// counts/types/stage — never matched content (S1). Bounded (S3).
+fn build_pii_metrics<'py>(
+    py: Python<'py>,
+    trace_id: Option<&str>,
+    total_detections: i64,
+    total_masked: i64,
+    detection_types: &[&str],
+    stage: &str,
+) -> PyResult<Option<Bound<'py, PyDict>>> {
+    if trace_id.is_none() {
+        return Ok(None);
+    }
+    let inner = PyDict::new(py);
+    inner.set_item("total_detections", total_detections)?;
+    inner.set_item("total_masked", total_masked)?;
+    let mut types: Vec<&str> = detection_types.to_vec();
+    types.sort_unstable();
+    types.dedup();
+    types.truncate(MAX_DETECTION_TYPES);
+    inner.set_item("detection_types", types)?;
+    inner.set_item("stage", stage)?;
+    let outer = PyDict::new(py);
+    outer.set_item("pii_filter", inner)?;
+    Ok(Some(outer))
+}
+
+/// Best-effort attach of the namespaced metrics dict onto `kwargs` when
+/// `trace_id` is present. Never fails the caller (L2): any error from
+/// `build_pii_metrics` is logged once and metrics are omitted, so the normal
+/// filtering result is still returned.
+fn push_metrics_kwarg(
+    py: Python<'_>,
+    trace_id: Option<&str>,
+    kwargs: &mut Vec<(&str, Py<PyAny>)>,
+    total_detections: i64,
+    total_masked: i64,
+    detection_types: &[&str],
+    stage: &str,
+) {
+    let Some(tid) = trace_id else {
+        return;
+    };
+    match build_pii_metrics(
+        py,
+        Some(tid),
+        total_detections,
+        total_masked,
+        detection_types,
+        stage,
+    ) {
+        Ok(Some(md)) => kwargs.push(("metadata", md.into_any().unbind())),
+        Ok(None) => {}
+        Err(e) => log::warn!("pii_filter: metrics build failed, omitting: {e}"),
+    }
 }
 
 fn clone_python_object<'py>(
@@ -559,6 +568,42 @@ fn read_trace_id(extensions: Option<&Bound<'_, PyAny>>) -> Option<String> {
 mod tests {
     use super::*;
     use pyo3::types::{PyDict, PyModule};
+
+    #[test]
+    fn metrics_emitted_only_when_trace_id_present_and_carry_no_content() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            // helper builds an emitting result and returns its .metadata dict (or None)
+            let with_trace = build_pii_metrics(
+                py,
+                Some("t1"),
+                /*total_detections*/ 2,
+                /*total_masked*/ 2,
+                &["email", "ssn"],
+                "tool_post_invoke",
+            )
+            .unwrap();
+            let md = with_trace.unwrap();
+            let inner = md.get_item("pii_filter").unwrap().unwrap();
+            assert_eq!(
+                inner
+                    .get_item("total_detections")
+                    .unwrap()
+                    .extract::<i64>()
+                    .unwrap(),
+                2
+            );
+            // S1: no key/value contains the matched email
+            let dumped = format!("{:?}", inner.str().unwrap());
+            assert!(!dumped.contains("alice@example.com"));
+            // gate: no trace_id => None
+            assert!(
+                build_pii_metrics(py, None, 2, 2, &["email"], "tool_post_invoke")
+                    .unwrap()
+                    .is_none()
+            );
+        });
+    }
 
     #[test]
     fn read_trace_id_returns_value_when_present_and_none_otherwise() {
