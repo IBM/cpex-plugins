@@ -87,9 +87,16 @@ Version `0.2.0` intentionally changes the built-in default masking policy from p
 
 Version `0.2.1` changes custom-pattern inheritance: when `custom_patterns[].mask_strategy` is omitted or set to `null`/`None`, the pattern inherits `default_mask_strategy` instead of forcing `redact`.
 
-Version `0.2.0` also tightens the default privacy posture for observability: detection logging and detection-detail metadata are now disabled unless you opt in with `log_detections: true` or `include_detection_details: true`.
+Version `0.2.0` also tightens the default privacy posture for observability: detection logging is disabled unless you opt in with `log_detections: true`.
 
 Version `0.2.1` validates `default_mask_strategy` and `custom_patterns[].mask_strategy` strictly. Invalid values that older builds silently treated as `redact` now fail fast during plugin initialization.
+
+Version `0.3.6` is a **breaking change** for any existing consumer reading detection metadata:
+
+- The old `context.metadata["pii_filter_stats"]` and `context.metadata["pii_detections"]` channels have been removed entirely. There is no compatibility shim; code reading those keys will silently stop receiving data.
+- Detection/masking metrics are now emitted on `result.metadata["pii_filter"]` instead, with keys `total_detections`, `total_masked`, `detection_types`, and `stage` (see [Metrics and Observability](#metrics-and-observability) above for the full schema).
+- All plugin hooks (`prompt_pre_fetch`, `prompt_post_fetch`, `tool_pre_invoke`, `tool_post_invoke`) now accept a new optional `extensions` parameter carrying OpenTelemetry trace context. Emission to `result.metadata["pii_filter"]` is gated solely on `extensions.request.trace_id` being present and valid — if no trace context is supplied, no metrics are written at all, regardless of any config flag.
+- Consumers that previously read `context.metadata["pii_filter_stats"]` / `context.metadata["pii_detections"]` unconditionally must migrate to reading `result.metadata["pii_filter"]` and must pass a `trace_id` via `extensions` to receive metrics.
 
 ## Detection Coverage
 
@@ -232,7 +239,7 @@ Custom patterns are intended for trusted operators editing plugin configuration,
 ## Security Notes
 
 - Detection logging is disabled by default. Enable it only if your logging pipeline is allowed to receive derived PII metadata.
-- Detection-detail metadata is disabled by default. Enable `include_detection_details` only if downstream consumers are allowed to inspect detected type/count summaries.
+- OTel detection-detail metrics (`result.metadata["pii_filter"]`) are only emitted when a valid `trace_id` is present in the `extensions` hook parameter (`extensions.request.trace_id`); no trace context means no metrics are written. The `include_detection_details` config field does not gate this and is currently a reserved no-op.
 - Whitelist patterns are compiled case-insensitively.
 - Custom patterns must stay within basic length and complexity limits and are meant for trusted admin-authored configuration.
 - Very large strings and oversized nested collections are rejected instead of being scanned indefinitely.
