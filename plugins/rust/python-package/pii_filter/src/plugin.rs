@@ -32,7 +32,6 @@ impl PIIFilterPluginCore {
         Ok(Self { detector })
     }
 
-    #[cfg_attr(feature = "stub-gen", gen_stub_pymethods)]
     #[pyo3(signature = (payload, context, extensions=None))]
     pub fn prompt_pre_fetch(
         &self,
@@ -61,7 +60,6 @@ impl PIIFilterPluginCore {
         )
     }
 
-    #[cfg_attr(feature = "stub-gen", gen_stub_pymethods)]
     #[pyo3(signature = (payload, context, extensions=None))]
     pub fn prompt_post_fetch(
         &self,
@@ -198,7 +196,6 @@ impl PIIFilterPluginCore {
         default_result(py, "PromptPosthookResult")
     }
 
-    #[cfg_attr(feature = "stub-gen", gen_stub_pymethods)]
     #[pyo3(signature = (payload, context, extensions=None))]
     pub fn tool_pre_invoke(
         &self,
@@ -227,7 +224,6 @@ impl PIIFilterPluginCore {
         )
     }
 
-    #[cfg_attr(feature = "stub-gen", gen_stub_pymethods)]
     #[pyo3(signature = (payload, context, extensions=None))]
     pub fn tool_post_invoke(
         &self,
@@ -266,6 +262,7 @@ impl PIIFilterPluginCore {
         trace_id: Option<&str>,
         spec: NestedStageSpec<'_>,
     ) -> PyResult<Py<PyAny>> {
+        let _ = &trace_id;
         let source_value = payload.getattr(spec.source_attr)?;
         if source_value.is_none() {
             return default_result(py, spec.result_class);
