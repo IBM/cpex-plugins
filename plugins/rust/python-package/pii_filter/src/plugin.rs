@@ -557,11 +557,7 @@ fn read_trace_id(extensions: Option<&Bound<'_, PyAny>>) -> Option<String> {
         return None;
     }
     let s: String = trace.extract().ok()?;
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
+    if s.is_empty() { None } else { Some(s) }
 }
 
 #[cfg(test)]
@@ -736,7 +732,9 @@ class Payload:
             // even when more than 32 distinct types are passed in.
             let many: Vec<String> = (0..100).map(|i| format!("t{i}")).collect();
             let refs: Vec<&str> = many.iter().map(|s| s.as_str()).collect();
-            let md = build_pii_metrics(py, Some("t1"), 1, 1, &refs, "s").unwrap().unwrap();
+            let md = build_pii_metrics(py, Some("t1"), 1, 1, &refs, "s")
+                .unwrap()
+                .unwrap();
             let inner = md.get_item("pii_filter").unwrap().unwrap();
             let types_bound = inner.get_item("detection_types").unwrap();
 
