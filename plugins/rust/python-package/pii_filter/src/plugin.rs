@@ -32,16 +32,22 @@ impl PIIFilterPluginCore {
         Ok(Self { detector })
     }
 
+    #[cfg_attr(feature = "stub-gen", gen_stub_pymethods)]
+    #[pyo3(signature = (payload, context, extensions=None))]
     pub fn prompt_pre_fetch(
         &self,
         py: Python<'_>,
         payload: &Bound<'_, PyAny>,
         context: &Bound<'_, PyAny>,
+        extensions: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
+        let trace_id = read_trace_id(extensions);
+        let _ = &trace_id;
         self.handle_nested_stage(
             py,
             payload,
             context,
+            trace_id.as_deref(),
             NestedStageSpec {
                 source_attr: "args",
                 stage: "prompt_pre_fetch",
@@ -55,12 +61,17 @@ impl PIIFilterPluginCore {
         )
     }
 
+    #[cfg_attr(feature = "stub-gen", gen_stub_pymethods)]
+    #[pyo3(signature = (payload, context, extensions=None))]
     pub fn prompt_post_fetch(
         &self,
         py: Python<'_>,
         payload: &Bound<'_, PyAny>,
         context: &Bound<'_, PyAny>,
+        extensions: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
+        let trace_id = read_trace_id(extensions);
+        let _ = &trace_id;
         let result = payload.getattr("result")?;
         let messages_value = result.getattr("messages")?;
         let Ok(messages) = messages_value.cast::<PyList>() else {
@@ -187,16 +198,22 @@ impl PIIFilterPluginCore {
         default_result(py, "PromptPosthookResult")
     }
 
+    #[cfg_attr(feature = "stub-gen", gen_stub_pymethods)]
+    #[pyo3(signature = (payload, context, extensions=None))]
     pub fn tool_pre_invoke(
         &self,
         py: Python<'_>,
         payload: &Bound<'_, PyAny>,
         context: &Bound<'_, PyAny>,
+        extensions: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
+        let trace_id = read_trace_id(extensions);
+        let _ = &trace_id;
         self.handle_nested_stage(
             py,
             payload,
             context,
+            trace_id.as_deref(),
             NestedStageSpec {
                 source_attr: "args",
                 stage: "tool_pre_invoke",
@@ -210,16 +227,22 @@ impl PIIFilterPluginCore {
         )
     }
 
+    #[cfg_attr(feature = "stub-gen", gen_stub_pymethods)]
+    #[pyo3(signature = (payload, context, extensions=None))]
     pub fn tool_post_invoke(
         &self,
         py: Python<'_>,
         payload: &Bound<'_, PyAny>,
         context: &Bound<'_, PyAny>,
+        extensions: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
+        let trace_id = read_trace_id(extensions);
+        let _ = &trace_id;
         self.handle_nested_stage(
             py,
             payload,
             context,
+            trace_id.as_deref(),
             NestedStageSpec {
                 source_attr: "result",
                 stage: "tool_post_invoke",
@@ -240,6 +263,7 @@ impl PIIFilterPluginCore {
         py: Python<'_>,
         payload: &Bound<'_, PyAny>,
         context: &Bound<'_, PyAny>,
+        trace_id: Option<&str>,
         spec: NestedStageSpec<'_>,
     ) -> PyResult<Py<PyAny>> {
         let source_value = payload.getattr(spec.source_attr)?;
@@ -514,10 +538,52 @@ fn sorted_detection_types(detections: &HashMap<PIIType, Vec<Detection>>) -> Vec<
     kinds
 }
 
+/// Best-effort read of `extensions.request.trace_id`. Returns `None` on any
+/// missing attribute, `None` value, wrong type, or PyO3 error — never raises.
+fn read_trace_id(extensions: Option<&Bound<'_, PyAny>>) -> Option<String> {
+    let ext = extensions?;
+    let request = ext.getattr("request").ok()?;
+    if request.is_none() {
+        return None;
+    }
+    let trace = request.getattr("trace_id").ok()?;
+    if trace.is_none() {
+        return None;
+    }
+    let s: String = trace.extract().ok()?;
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use pyo3::types::{PyDict, PyModule};
+
+    #[test]
+    fn read_trace_id_returns_value_when_present_and_none_otherwise() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    "class Req:\n    def __init__(self, t):\n        self.trace_id = t\n\
+                     class Ext:\n    def __init__(self, t):\n        self.request = Req(t)\n"
+                ),
+                pyo3::ffi::c_str!("ext.py"),
+                pyo3::ffi::c_str!("ext"),
+            )
+            .unwrap();
+            let with_id = module.getattr("Ext").unwrap().call1(("abc123",)).unwrap();
+            let without = module.getattr("Ext").unwrap().call1((py.None(),)).unwrap();
+            assert_eq!(read_trace_id(Some(&with_id)), Some("abc123".to_string()));
+            assert_eq!(read_trace_id(Some(&without)), None);
+            assert_eq!(read_trace_id(None), None);
+        });
+    }
 
     #[test]
     fn sorted_detection_types_are_stable() {
