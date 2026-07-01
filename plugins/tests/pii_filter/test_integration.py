@@ -118,6 +118,7 @@ async def test_prompt_pre_fetch_records_metadata_and_logs_when_enabled(caplog):
         _make_config(include_detection_details=True, log_detections=True)
     )
     caplog.set_level(logging.INFO, logger="cpex_pii_filter.pii_filter")
+    ext = Extensions(request=RequestExtension(trace_id="t1"))
     payload = PromptPrehookPayload(
         prompt_id="prompt-1",
         args={
@@ -127,9 +128,9 @@ async def test_prompt_pre_fetch_records_metadata_and_logs_when_enabled(caplog):
     )
     context = _make_context()
 
-    await plugin.prompt_pre_fetch(payload, context)
+    result = await plugin.prompt_pre_fetch(payload, context, ext)
 
-    assert context.metadata["pii_detections"]["prompt_pre_fetch"]["total_count"] == 2
+    assert result.metadata["pii_filter"]["total_detections"] == 2
     assert "PII detected during prompt_pre_fetch" in caplog.text
     assert "action=masked" in caplog.text
 
@@ -285,19 +286,22 @@ async def test_tool_pre_invoke_propagates_nested_depth_errors():
 @pytest.mark.asyncio
 async def test_tool_post_invoke_masks_result_and_updates_context_through_python_shim():
     plugin = PIIFilterPlugin(_make_config())
+    ext = Extensions(request=RequestExtension(trace_id="t1"))
     payload = ToolPostInvokePayload(
         name="search",
         result={"contact": "alice@example.com"},
     )
     context = _make_context()
 
-    result = await plugin.tool_post_invoke(payload, context)
+    result = await plugin.tool_post_invoke(payload, context, ext)
 
     assert result.modified_payload is not None
     assert result.modified_payload.result["contact"] == "[REDACTED]"
-    assert context.metadata["pii_filter_stats"] == {
+    assert result.metadata["pii_filter"] == {
         "total_detections": 1,
         "total_masked": 1,
+        "detection_types": ["email"],
+        "stage": "tool_post_invoke",
     }
 
 
@@ -472,29 +476,26 @@ async def test_tool_post_invoke_custom_pattern_none_mask_strategy_uses_default()
 @pytest.mark.asyncio
 async def test_tool_post_invoke_stats_reset_per_request():
     plugin = PIIFilterPlugin(_make_config())
+    ext = Extensions(request=RequestExtension(trace_id="t1"))
 
     first_payload = ToolPostInvokePayload(
         name="search",
         result={"contact": "alice@example.com"},
     )
     first_context = _make_context()
-    await plugin.tool_post_invoke(first_payload, first_context)
+    first_result = await plugin.tool_post_invoke(first_payload, first_context, ext)
 
     second_payload = ToolPostInvokePayload(
         name="search",
         result={"ssn": "123-45-6789"},
     )
     second_context = _make_context()
-    await plugin.tool_post_invoke(second_payload, second_context)
+    second_result = await plugin.tool_post_invoke(second_payload, second_context, ext)
 
-    assert first_context.metadata["pii_filter_stats"] == {
-        "total_detections": 1,
-        "total_masked": 1,
-    }
-    assert second_context.metadata["pii_filter_stats"] == {
-        "total_detections": 1,
-        "total_masked": 1,
-    }
+    assert first_result.metadata["pii_filter"]["total_detections"] == 1
+    assert first_result.metadata["pii_filter"]["total_masked"] == 1
+    assert second_result.metadata["pii_filter"]["total_detections"] == 1
+    assert second_result.metadata["pii_filter"]["total_masked"] == 1
 
 
 @pytest.mark.asyncio
@@ -512,3 +513,35 @@ async def test_hook_without_extensions_is_backward_compatible():
     payload = ToolPostInvokePayload(name="t", result={"email": "alice@example.com"})
     result = await plugin.tool_post_invoke(payload, _make_context())  # 2-arg call
     assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_no_sensitive_content_in_metrics_or_logs(caplog):
+    """S1: Verify no actual matched secrets leak through result.metadata or logs.
+
+    Feeds a real email through the plugin and asserts it doesn't appear in:
+    - The metrics dict (result.metadata["pii_filter"])
+    - The string dump of metrics
+    - Captured logs
+    """
+    plugin = PIIFilterPlugin(_make_config(log_detections=True))
+    ext = Extensions(request=RequestExtension(trace_id="t1"))
+    secret = "alice@example.com"
+    payload = ToolPostInvokePayload(name="t", result={"email": secret})
+    caplog.set_level(logging.DEBUG)
+
+    result = await plugin.tool_post_invoke(payload, _make_context(), ext)
+
+    # Verify metrics were emitted (trace_id was present and detection occurred)
+    assert result.metadata is not None
+    metrics = result.metadata["pii_filter"]
+
+    # S1: Assert the secret never appears in metrics
+    flat = str(metrics)
+    assert secret not in flat, f"Secret '{secret}' found in metrics: {flat}"
+
+    # S2: Assert allow-list structure (only these keys allowed)
+    assert set(metrics) <= {"total_detections", "total_masked", "detection_types", "stage"}
+
+    # S1: Assert the secret never appears in logs
+    assert secret not in caplog.text, f"Secret '{secret}' found in logs"

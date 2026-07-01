@@ -727,4 +727,45 @@ class Payload:
             assert!(!original_args.is(&cloned_args));
         });
     }
+
+    #[test]
+    fn detection_types_are_bounded_and_deduped() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            // S3: Test that detection_types list is bounded to MAX_DETECTION_TYPES (32)
+            // even when more than 32 distinct types are passed in.
+            let many: Vec<String> = (0..100).map(|i| format!("t{i}")).collect();
+            let refs: Vec<&str> = many.iter().map(|s| s.as_str()).collect();
+            let md = build_pii_metrics(py, Some("t1"), 1, 1, &refs, "s").unwrap().unwrap();
+            let inner = md.get_item("pii_filter").unwrap().unwrap();
+            let types_bound = inner.get_item("detection_types").unwrap();
+
+            // Verify the list is bounded
+            let types_len = types_bound.len().unwrap();
+            assert!(
+                types_len <= MAX_DETECTION_TYPES,
+                "detection_types exceeded bound: {} > {}",
+                types_len,
+                MAX_DETECTION_TYPES
+            );
+            // Verify we got exactly 32 (since we provided 100 distinct types)
+            assert_eq!(types_len, MAX_DETECTION_TYPES);
+
+            // Verify they are sorted
+            let type_list: Vec<String> = types_bound
+                .try_iter()
+                .unwrap()
+                .map(|item| item.unwrap().extract::<String>().unwrap())
+                .collect();
+            let mut sorted = type_list.clone();
+            sorted.sort();
+            assert_eq!(type_list, sorted, "detection_types not sorted");
+
+            // Verify no duplicates (deduped)
+            let mut seen = std::collections::HashSet::new();
+            for t in &type_list {
+                assert!(seen.insert(t), "duplicate type found: {}", t);
+            }
+        });
+    }
 }
