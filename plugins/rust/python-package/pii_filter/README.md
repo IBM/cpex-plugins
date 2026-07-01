@@ -66,10 +66,18 @@ The `extensions` parameter is optional and defaults to `None`. When present, it 
 
 ### Metrics and Observability
 
-When a trace context is present (via `extensions.trace_id`), the plugin emits operational metrics on `result.metadata["pii_filter"]`, including:
-- Detection counts by type (e.g., `detected_email_count`, `detected_ssn_count`)
-- Masking operation counts
-- Gating: metrics are only emitted when a valid `trace_id` is present in the trace context
+When a trace context is present (via `extensions.request.trace_id`), the plugin emits operational metrics on `result.metadata["pii_filter"]` with the following schema:
+
+```python
+result.metadata["pii_filter"] = {
+    "total_detections": 2,       # int — total number of PII detections in this call
+    "total_masked": 2,           # int — total number masked/redacted
+    "detection_types": ["email", "ssn"],  # list[str] — distinct type names, sorted, deduped
+    "stage": "tool_post_invoke", # str — which hook stage emitted this
+}
+```
+
+**Gating:** Metrics are only emitted when a valid `trace_id` is present in the trace context. The `trace_id` itself is an input (read from `extensions.request.trace_id`) and is never included in the output metrics.
 
 **Security Note (S1):** The plugin **never includes raw sensitive content** in any output, logs, or metrics. All PII detection and masking operations are performed with the guarantee that sensitive values are redacted before any externalization.
 

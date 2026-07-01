@@ -220,8 +220,8 @@ def my_hook(
 ```
 
 **Trace Context Input (`extensions` parameter):**
-- The `extensions` parameter carries OpenTelemetry trace context, such as `trace_id` and `span_id`.
-- Plugins can read the trace context to associate their operations with the current request trace.
+- The `extensions` parameter carries OpenTelemetry trace context, including `extensions.request.trace_id` for associating operations with the current request trace.
+- Other fields such as `span_id` may be available on the Extensions object but are not currently consumed by the pii_filter plugin.
 - The parameter is optional and defaults to `None` for backward compatibility.
 
 **Metrics Output (`result.metadata` namespacing):**
@@ -232,14 +232,13 @@ def my_hook(
 **Example (pii_filter plugin):**
 ```python
 result.metadata["pii_filter"] = {
-    "detected_email_count": 2,
-    "detected_ssn_count": 1,
-    "detected_credit_card_count": 0,
-    "masked_email_count": 2,
-    "masked_ssn_count": 1,
-    "trace_id": "abc123def456"  # only present when trace context was available
+    "total_detections": 2,       # total number of PII detections in this call
+    "total_masked": 2,           # total number masked/redacted
+    "detection_types": ["email", "ssn"],  # distinct type names, sorted, deduped
+    "stage": "tool_post_invoke", # which hook stage emitted this
 }
 ```
+Note: `trace_id` is an input only (read from `extensions.request.trace_id`) and is never emitted as part of the output metrics.
 
 **When Implementing Trace Context Support:**
 1. Update your hook signatures to accept the optional `extensions` parameter.
