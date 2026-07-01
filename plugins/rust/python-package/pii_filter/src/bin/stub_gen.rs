@@ -16,7 +16,7 @@ const ORPHAN_EXTENSION_STUB_PATH: &str = "python/pii_filter_rust/__init__.pyi";
 const GENERATED_ALL_MARKER: &str = "\"PIIDetectorRust\",\n]";
 const CURATED_ALL_ENTRY: &str = "\"PIIDetectorRust\",\n    \"PIIFilterPluginCore\",\n]";
 const PLUGIN_CORE_CLASS_MARKER: &str = "class PIIFilterPluginCore:";
-const PLUGIN_CORE_CLASS_DEF: &str = "\n\n@typing.final\nclass PIIFilterPluginCore:\n    def __new__(cls, config: typing.Any) -> PIIFilterPluginCore: ...\n    def prompt_pre_fetch(self, payload: typing.Any, context: typing.Any) -> typing.Any: ...\n    def prompt_post_fetch(self, payload: typing.Any, context: typing.Any) -> typing.Any: ...\n    def tool_pre_invoke(self, payload: typing.Any, context: typing.Any) -> typing.Any: ...\n    def tool_post_invoke(self, payload: typing.Any, context: typing.Any) -> typing.Any: ...\n";
+const PLUGIN_CORE_CLASS_DEF: &str = "\n\n@typing.final\nclass PIIFilterPluginCore:\n    def __new__(cls, config: typing.Any) -> PIIFilterPluginCore: ...\n    def prompt_pre_fetch(self, payload: typing.Any, context: typing.Any, extensions: typing.Any = None) -> typing.Any: ...\n    def prompt_post_fetch(self, payload: typing.Any, context: typing.Any, extensions: typing.Any = None) -> typing.Any: ...\n    def tool_pre_invoke(self, payload: typing.Any, context: typing.Any, extensions: typing.Any = None) -> typing.Any: ...\n    def tool_post_invoke(self, payload: typing.Any, context: typing.Any, extensions: typing.Any = None) -> typing.Any: ...\n";
 
 fn normalize_stub_content(content: &str) -> String {
     let mut lines = content.lines().map(str::trim_end).collect::<Vec<_>>();

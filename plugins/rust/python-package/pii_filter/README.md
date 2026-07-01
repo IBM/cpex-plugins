@@ -28,6 +28,51 @@ This plugin depends on `cpex>=0.1.0,<0.2` and imports hook models from `cpex.fra
 
 The Python plugin requires the compiled Rust extension and uses it for all detection and masking operations.
 
+### Hook Signatures
+
+All plugin hooks now accept an optional `extensions` parameter that carries OpenTelemetry trace context:
+
+```python
+def prompt_pre_fetch(
+    self,
+    payload: typing.Any,
+    context: typing.Any,
+    extensions: typing.Any = None
+) -> typing.Any: ...
+
+def prompt_post_fetch(
+    self,
+    payload: typing.Any,
+    context: typing.Any,
+    extensions: typing.Any = None
+) -> typing.Any: ...
+
+def tool_pre_invoke(
+    self,
+    payload: typing.Any,
+    context: typing.Any,
+    extensions: typing.Any = None
+) -> typing.Any: ...
+
+def tool_post_invoke(
+    self,
+    payload: typing.Any,
+    context: typing.Any,
+    extensions: typing.Any = None
+) -> typing.Any: ...
+```
+
+The `extensions` parameter is optional and defaults to `None`. When present, it carries OpenTelemetry trace context (e.g., `trace_id`), allowing plugins to emit metrics or observability data tied to the current trace.
+
+### Metrics and Observability
+
+When a trace context is present (via `extensions.trace_id`), the plugin emits operational metrics on `result.metadata["pii_filter"]`, including:
+- Detection counts by type (e.g., `detected_email_count`, `detected_ssn_count`)
+- Masking operation counts
+- Gating: metrics are only emitted when a valid `trace_id` is present in the trace context
+
+**Security Note (S1):** The plugin **never includes raw sensitive content** in any output, logs, or metrics. All PII detection and masking operations are performed with the guarantee that sensitive values are redacted before any externalization.
+
 ## Migration Note
 
 Version `0.2.0` intentionally changes the built-in default masking policy from partial masking to `redact`. Set `default_mask_strategy: "partial"` explicitly if you need the previous behavior.
