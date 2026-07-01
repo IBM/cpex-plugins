@@ -106,10 +106,10 @@ async def test_prompt_pre_fetch_leaves_logs_and_metadata_disabled_by_default(cap
     )
     context = _make_context()
 
-    await plugin.prompt_pre_fetch(payload, context)
+    result = await plugin.prompt_pre_fetch(payload, context)
 
     assert "PII detected during" not in caplog.text
-    assert "pii_detections" not in context.metadata
+    assert "pii_filter" not in (result.metadata or {})
 
 
 @pytest.mark.asyncio
@@ -388,7 +388,7 @@ async def test_tool_post_invoke_blocks_when_configured():
     assert result.continue_processing is False
     assert result.violation is not None
     assert result.violation.code == "PII_DETECTED_IN_TOOL_RESULT"
-    assert context.metadata.get("pii_filter_stats") is None
+    assert "pii_filter" not in (result.metadata or {})
 
 
 @pytest.mark.asyncio
