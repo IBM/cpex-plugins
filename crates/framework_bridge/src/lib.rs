@@ -22,6 +22,23 @@ pub fn build_framework_object<'py, const N: usize>(
         .unbind())
 }
 
+/// Sibling of [`build_framework_object`] for callers with a variable kwarg
+/// count (e.g. an optional trailing `metadata` entry). Prefer the fixed-size
+/// array form when `N` is known at the call site; use this when it isn't.
+pub fn build_framework_object_dyn(
+    py: Python<'_>,
+    class_name: &str,
+    kwargs: Vec<(&str, Py<PyAny>)>,
+) -> PyResult<Py<PyAny>> {
+    let kwargs_dict = PyDict::new(py);
+    for (key, value) in kwargs {
+        kwargs_dict.set_item(key, value.bind(py))?;
+    }
+    Ok(framework_class(py, class_name)?
+        .call((), Some(&kwargs_dict))?
+        .unbind())
+}
+
 pub fn default_result(py: Python<'_>, class_name: &str) -> PyResult<Py<PyAny>> {
     framework_class(py, class_name)
         .and_then(|class| class.call0())
@@ -98,6 +115,38 @@ class PluginViolation:
                 py,
                 "PluginViolation",
                 [
+                    ("reason", "blocked".into_py_any(py).unwrap()),
+                    ("code", "POLICY".into_py_any(py).unwrap()),
+                ],
+            )
+            .unwrap();
+            let result = result.bind(py);
+
+            assert_eq!(
+                result
+                    .getattr("reason")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "blocked"
+            );
+            assert_eq!(
+                result.getattr("code").unwrap().extract::<String>().unwrap(),
+                "POLICY"
+            );
+        });
+    }
+
+    #[test]
+    fn build_framework_object_dyn_passes_keyword_arguments() {
+        Python::initialize();
+        Python::attach(|py| {
+            install_framework_module(py).unwrap();
+
+            let result = build_framework_object_dyn(
+                py,
+                "PluginViolation",
+                vec![
                     ("reason", "blocked".into_py_any(py).unwrap()),
                     ("code", "POLICY".into_py_any(py).unwrap()),
                 ],

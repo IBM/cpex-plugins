@@ -202,3 +202,47 @@ When bumping a plugin version, update all of these:
 3. `Cargo.lock` — updates automatically on the next build.
 
 Tag releases as `<plugin>-v<version>` (e.g., `rate-limiter-v0.0.2`) on `main` to trigger the PyPI publish workflow.
+
+## OpenTelemetry Integration and Trace Context
+
+### Trace-In / Metrics-Out Convention
+
+Plugins can accept and respond to OpenTelemetry trace context through the optional `extensions` parameter on all hook signatures:
+
+**Hook Signature Convention:**
+```python
+def my_hook(
+    self,
+    payload: typing.Any,
+    context: typing.Any,
+    extensions: typing.Any = None
+) -> typing.Any: ...
+```
+
+**Trace Context Input (`extensions` parameter):**
+- The `extensions` parameter carries OpenTelemetry trace context, including `extensions.request.trace_id` for associating operations with the current request trace.
+- Other fields such as `span_id` may be available on the Extensions object but are not currently consumed by the pii_filter plugin.
+- The parameter is optional and defaults to `None` for backward compatibility.
+
+**Metrics Output (`result.metadata` namespacing):**
+- Plugins emit operational metrics and observability data via `result.metadata[<plugin-name>]` using a namespaced key (e.g., `result.metadata["pii_filter"]`).
+- Metrics are **gated on the presence of a valid `trace_id`**: metrics are only populated when OpenTelemetry trace context is available.
+- All metrics must be non-sensitive: they contain only counts, type labels, and status indicators — **never raw sensitive data or personally identifiable information**.
+
+**Example (pii_filter plugin):**
+```python
+result.metadata["pii_filter"] = {
+    "total_detections": 2,       # total number of PII detections in this call
+    "total_masked": 2,           # total number masked/redacted
+    "detection_types": ["email", "ssn"],  # distinct type names, sorted, deduped
+    "stage": "tool_post_invoke", # which hook stage emitted this
+}
+```
+Note: `trace_id` is an input only (read from `extensions.request.trace_id`) and is never emitted as part of the output metrics.
+
+**When Implementing Trace Context Support:**
+1. Update your hook signatures to accept the optional `extensions` parameter.
+2. Read `trace_id` from `extensions` when available.
+3. Emit metrics to `result.metadata[<plugin-name>]` only when a valid `trace_id` is present.
+4. Ensure all emitted data is non-sensitive and aggregated (counts, not individual values).
+5. Document the metadata keys and values in your plugin's README.
