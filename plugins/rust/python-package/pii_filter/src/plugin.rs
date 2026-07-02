@@ -563,7 +563,49 @@ fn read_trace_id(extensions: Option<&Bound<'_, PyAny>>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyo3::types::{PyDict, PyModule};
+    use pyo3::types::{PyDict, PyList, PyModule};
+
+    /// Installs a minimal fake `cpex.framework` module (`PromptPrehookResult`,
+    /// `PluginViolation`) into `sys.modules` so tests can exercise the real
+    /// `#[pymethods]` entry points end to end without depending on the real
+    /// `cpex` package being importable in the test environment.
+    fn install_framework_module(py: Python<'_>) -> PyResult<()> {
+        let framework = PyModule::from_code(
+            py,
+            pyo3::ffi::c_str!(
+                r#"
+class PromptPrehookResult:
+    def __init__(self, modified_payload=None, continue_processing=True, violation=None, metadata=None):
+        self.modified_payload = modified_payload
+        self.continue_processing = continue_processing
+        self.violation = violation
+        self.metadata = metadata
+
+class PluginViolation:
+    def __init__(self, reason, code, description=None, details=None):
+        self.reason = reason
+        self.code = code
+        self.description = description
+        self.details = details
+"#
+            ),
+            pyo3::ffi::c_str!("framework.py"),
+            pyo3::ffi::c_str!("cpex.framework"),
+        )?;
+        let cpex = PyModule::from_code(
+            py,
+            pyo3::ffi::c_str!(""),
+            pyo3::ffi::c_str!("cpex.py"),
+            pyo3::ffi::c_str!("cpex"),
+        )?;
+        cpex.setattr("framework", &framework)?;
+        let modules = PyModule::import(py, "sys")?
+            .getattr("modules")?
+            .cast_into::<PyDict>()?;
+        modules.set_item("cpex", cpex)?;
+        modules.set_item("cpex.framework", framework)?;
+        Ok(())
+    }
 
     #[test]
     fn metrics_emitted_only_when_trace_id_present_and_carry_no_content() {
@@ -764,6 +806,113 @@ class Payload:
             for t in &type_list {
                 assert!(seen.insert(t), "duplicate type found: {}", t);
             }
+        });
+    }
+
+    #[test]
+    fn handle_nested_stage_logs_masked_detection_and_emits_metrics_when_not_blocking() {
+        Python::initialize();
+        Python::attach(|py| {
+            install_framework_module(py).unwrap();
+
+            // Mask (don't block) on email detection, with detection logging enabled.
+            let config = PyDict::new(py);
+            config.set_item("detect_email", true).unwrap();
+            config.set_item("block_on_detection", false).unwrap();
+            config.set_item("log_detections", true).unwrap();
+            let core = PIIFilterPluginCore::new(config.as_any()).unwrap();
+
+            let payload_module = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    r#"
+class Payload:
+    def __init__(self):
+        self.prompt_id = "p1"
+        self.args = {"email": "alice@example.com"}
+"#
+                ),
+                pyo3::ffi::c_str!("payload.py"),
+                pyo3::ffi::c_str!("payload"),
+            )
+            .unwrap();
+            let payload = payload_module.getattr("Payload").unwrap().call0().unwrap();
+            let context = PyDict::new(py);
+
+            let ext_module = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    "class Req:\n    def __init__(self, t):\n        self.trace_id = t\n\
+                     class Ext:\n    def __init__(self, t):\n        self.request = Req(t)\n"
+                ),
+                pyo3::ffi::c_str!("ext.py"),
+                pyo3::ffi::c_str!("ext"),
+            )
+            .unwrap();
+            let ext = ext_module.getattr("Ext").unwrap().call1(("t1",)).unwrap();
+
+            // Capture Python-side log records emitted by the pii_filter logger.
+            let handler_module = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    r#"
+import logging
+
+class ListHandler(logging.Handler):
+    def __init__(self, records):
+        super().__init__()
+        self.records = records
+
+    def emit(self, record):
+        self.records.append(self.format(record))
+"#
+                ),
+                pyo3::ffi::c_str!("handler.py"),
+                pyo3::ffi::c_str!("handler"),
+            )
+            .unwrap();
+            let records = PyList::empty(py);
+            let handler = handler_module
+                .getattr("ListHandler")
+                .unwrap()
+                .call1((&records,))
+                .unwrap();
+            let logging = PyModule::import(py, "logging").unwrap();
+            let logger = logging
+                .getattr("getLogger")
+                .unwrap()
+                .call1((LOGGER_NAME,))
+                .unwrap();
+            logger.call_method1("addHandler", (&handler,)).unwrap();
+            logger
+                .call_method1("setLevel", (logging.getattr("DEBUG").unwrap(),))
+                .unwrap();
+
+            let result = core
+                .prompt_pre_fetch(py, &payload, context.as_any(), Some(&ext))
+                .unwrap();
+            let result = result.bind(py);
+
+            // Kills "delete ! in handle_nested_stage": the masked-detection log line must
+            // actually fire when a detection is found and block_on_detection is false.
+            assert_eq!(records.len(), 1);
+            let message: String = records.get_item(0).unwrap().extract().unwrap();
+            assert!(message.contains("action=masked"), "message was: {message}");
+
+            // Kills "replace push_metrics_kwarg with ()": metadata must be attached to the
+            // result when a trace_id is present, even on the masked (non-blocking) path.
+            let metadata = result.getattr("metadata").unwrap();
+            assert!(!metadata.is_none());
+            let metadata = metadata.cast::<PyDict>().unwrap();
+            let pii_metrics = metadata.get_item("pii_filter").unwrap().unwrap();
+            assert_eq!(
+                pii_metrics
+                    .get_item("total_detections")
+                    .unwrap()
+                    .extract::<i64>()
+                    .unwrap(),
+                1
+            );
         });
     }
 }
