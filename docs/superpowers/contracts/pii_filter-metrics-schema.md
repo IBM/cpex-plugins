@@ -27,7 +27,7 @@ The following fields are the **only fields** permitted in the metrics dict. Gate
 
 ### Semantics
 
-- **total_detections**: Incremented for each distinct PII match found, regardless of masking outcome.
+- **total_detections**: Incremented for each distinct PII match found, regardless of masking outcome. For `prompt_post_fetch`, which scans messages one at a time and returns as soon as a blocking message is found, a blocked result's `total_detections` covers only the message that triggered the block, not the whole message list (later messages are never scanned). The non-blocking (masked) path always covers every message in the payload.
 - **total_masked**: Set to `total_detections` when PII is masked in-place; set to `0` when detection blocks the payload without masking.
 - **detection_types**: Contains the canonical string name of each pattern type (e.g., `"email"`, `"ssn"`, `"credit_card"`), sorted alphabetically, deduplicated, and bounded to 32 types.
 - **stage**: One of `"prompt_pre_fetch"`, `"prompt_post_fetch"`, `"tool_pre_invoke"`, or `"tool_post_invoke"`.

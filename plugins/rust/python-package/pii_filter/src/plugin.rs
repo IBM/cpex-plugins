@@ -4,7 +4,7 @@
 // Rust-owned PII filter plugin core. Python only keeps a tiny compatibility
 // shim so the gateway can continue importing a `Plugin` subclass.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 
 use cpex_framework_bridge::{
     build_framework_object, build_framework_object_dyn, default_result as bridge_default_result,
@@ -42,11 +42,11 @@ impl PIIFilterPluginCore {
         context: &Bound<'_, PyAny>,
         extensions: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
+        let _ = &context;
         let trace_id = read_trace_id(extensions);
         self.handle_nested_stage(
             py,
             payload,
-            context,
             trace_id.as_deref(),
             NestedStageSpec {
                 source_attr: "args",
@@ -77,8 +77,7 @@ impl PIIFilterPluginCore {
 
         let mut updated_messages = Vec::with_capacity(messages.len());
         let mut changed = false;
-        let mut total_count = 0usize;
-        let mut detected_types = BTreeSet::new();
+        let mut accumulated_detections: HashMap<PIIType, Vec<Detection>> = HashMap::new();
 
         for message in messages.iter() {
             let Ok(content) = message.getattr("content") else {
@@ -110,8 +109,6 @@ impl PIIFilterPluginCore {
                 continue;
             }
 
-            total_count += count_detections(&detections);
-            detected_types.extend(sorted_detection_types(&detections));
             let role = message.getattr("role")?.extract::<String>().ok();
 
             if self.detector.config.block_on_detection {
@@ -123,34 +120,21 @@ impl PIIFilterPluginCore {
                     role.as_deref(),
                     true,
                 )?;
-                let mut kwargs: Vec<(&str, Py<PyAny>)> = vec![
-                    (
-                        "continue_processing",
-                        false.into_pyobject(py)?.to_owned().into_any().unbind(),
-                    ),
-                    (
-                        "violation",
-                        self.build_violation(
-                            py,
-                            "PII detected in prompt messages",
-                            "Sensitive information detected in prompt result",
-                            "PII_DETECTED_IN_PROMPT_RESULT",
-                            &detections,
-                        )?,
-                    ),
-                ];
-                let type_strings = sorted_detection_types(&detections);
-                let types: Vec<&str> = type_strings.iter().map(String::as_str).collect();
-                push_metrics_kwarg(
+                let violation = self.build_violation(
+                    py,
+                    "PII detected in prompt messages",
+                    "Sensitive information detected in prompt result",
+                    "PII_DETECTED_IN_PROMPT_RESULT",
+                    &detections,
+                )?;
+                return build_blocked_result(
                     py,
                     trace_id.as_deref(),
-                    &mut kwargs,
-                    count_detections(&detections) as i64,
-                    0,
-                    &types,
+                    "PromptPosthookResult",
+                    violation,
+                    &detections,
                     "prompt_post_fetch",
                 );
-                return build_result_dyn(py, "PromptPosthookResult", kwargs);
             }
 
             let masked = self.detector.mask_rust(&text, &detections)?;
@@ -170,6 +154,12 @@ impl PIIFilterPluginCore {
                 masked_text.bind(py),
             )?);
             changed = true;
+            for (kind, items) in detections {
+                accumulated_detections
+                    .entry(kind)
+                    .or_default()
+                    .extend(items);
+            }
         }
 
         let _ = &context;
@@ -188,14 +178,12 @@ impl PIIFilterPluginCore {
                 "modified_payload",
                 clone_payload_with_attr(py, payload, "result", &cloned_result)?,
             )];
-            let types: Vec<&str> = detected_types.iter().map(String::as_str).collect();
             push_metrics_kwarg(
                 py,
                 trace_id.as_deref(),
                 &mut kwargs,
-                total_count as i64,
-                total_count as i64,
-                &types,
+                &accumulated_detections,
+                true,
                 "prompt_post_fetch",
             );
             return build_result_dyn(py, "PromptPosthookResult", kwargs);
@@ -212,11 +200,11 @@ impl PIIFilterPluginCore {
         context: &Bound<'_, PyAny>,
         extensions: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
+        let _ = &context;
         let trace_id = read_trace_id(extensions);
         self.handle_nested_stage(
             py,
             payload,
-            context,
             trace_id.as_deref(),
             NestedStageSpec {
                 source_attr: "args",
@@ -238,11 +226,11 @@ impl PIIFilterPluginCore {
         context: &Bound<'_, PyAny>,
         extensions: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
+        let _ = &context;
         let trace_id = read_trace_id(extensions);
         self.handle_nested_stage(
             py,
             payload,
-            context,
             trace_id.as_deref(),
             NestedStageSpec {
                 source_attr: "result",
@@ -262,7 +250,6 @@ impl PIIFilterPluginCore {
         &self,
         py: Python<'_>,
         payload: &Bound<'_, PyAny>,
-        _context: &Bound<'_, PyAny>,
         trace_id: Option<&str>,
         spec: NestedStageSpec<'_>,
     ) -> PyResult<Py<PyAny>> {
@@ -285,34 +272,21 @@ impl PIIFilterPluginCore {
                 subject.as_deref(),
                 true,
             )?;
-            let mut kwargs: Vec<(&str, Py<PyAny>)> = vec![
-                (
-                    "continue_processing",
-                    false.into_pyobject(py)?.to_owned().into_any().unbind(),
-                ),
-                (
-                    "violation",
-                    self.build_violation(
-                        py,
-                        spec.violation_reason,
-                        spec.violation_description,
-                        spec.violation_code,
-                        &detections,
-                    )?,
-                ),
-            ];
-            let type_strings = sorted_detection_types(&detections);
-            let types: Vec<&str> = type_strings.iter().map(String::as_str).collect();
-            push_metrics_kwarg(
+            let violation = self.build_violation(
+                py,
+                spec.violation_reason,
+                spec.violation_description,
+                spec.violation_code,
+                &detections,
+            )?;
+            return build_blocked_result(
                 py,
                 trace_id,
-                &mut kwargs,
-                count_detections(&detections) as i64,
-                0,
-                &types,
+                spec.result_class,
+                violation,
+                &detections,
                 spec.stage,
             );
-            return build_result_dyn(py, spec.result_class, kwargs);
         }
 
         if !detections.is_empty() {
@@ -330,10 +304,7 @@ impl PIIFilterPluginCore {
                 "modified_payload",
                 clone_payload_with_attr(py, payload, spec.source_attr, &new_value)?,
             )];
-            let type_strings = sorted_detection_types(&detections);
-            let types: Vec<&str> = type_strings.iter().map(String::as_str).collect();
-            let total = count_detections(&detections) as i64;
-            push_metrics_kwarg(py, trace_id, &mut kwargs, total, total, &types, spec.stage);
+            push_metrics_kwarg(py, trace_id, &mut kwargs, &detections, true, spec.stage);
             return build_result_dyn(py, spec.result_class, kwargs);
         }
 
@@ -461,30 +432,51 @@ fn build_pii_metrics<'py>(
 /// `trace_id` is present. Never fails the caller (L2): any error from
 /// `build_pii_metrics` is logged once and metrics are omitted, so the normal
 /// filtering result is still returned.
+///
+/// Gates on `trace_id` before touching `detections` at all, so untraced
+/// requests (the common case) never pay for sorting/collecting types.
 fn push_metrics_kwarg(
     py: Python<'_>,
     trace_id: Option<&str>,
     kwargs: &mut Vec<(&str, Py<PyAny>)>,
-    total_detections: i64,
-    total_masked: i64,
-    detection_types: &[&str],
+    detections: &HashMap<PIIType, Vec<Detection>>,
+    masked: bool,
     stage: &str,
 ) {
     let Some(tid) = trace_id else {
         return;
     };
-    match build_pii_metrics(
-        py,
-        Some(tid),
-        total_detections,
-        total_masked,
-        detection_types,
-        stage,
-    ) {
+    let total_detections = count_detections(detections) as i64;
+    let total_masked = if masked { total_detections } else { 0 };
+    let type_strings = sorted_detection_types(detections);
+    let types: Vec<&str> = type_strings.iter().map(String::as_str).collect();
+    match build_pii_metrics(py, Some(tid), total_detections, total_masked, &types, stage) {
         Ok(Some(md)) => kwargs.push(("metadata", md.into_any().unbind())),
         Ok(None) => {}
         Err(e) => log::warn!("pii_filter: metrics build failed, omitting: {e}"),
     }
+}
+
+/// Shared blocked-path result builder used by both `prompt_post_fetch` and
+/// `handle_nested_stage` — collapses the near-identical
+/// `continue_processing=false` + `violation` + metrics kwargs construction.
+fn build_blocked_result(
+    py: Python<'_>,
+    trace_id: Option<&str>,
+    result_class: &str,
+    violation: Py<PyAny>,
+    detections: &HashMap<PIIType, Vec<Detection>>,
+    stage: &str,
+) -> PyResult<Py<PyAny>> {
+    let mut kwargs: Vec<(&str, Py<PyAny>)> = vec![
+        (
+            "continue_processing",
+            false.into_pyobject(py)?.to_owned().into_any().unbind(),
+        ),
+        ("violation", violation),
+    ];
+    push_metrics_kwarg(py, trace_id, &mut kwargs, detections, false, stage);
+    build_result_dyn(py, result_class, kwargs)
 }
 
 fn clone_python_object<'py>(

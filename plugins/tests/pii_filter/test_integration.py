@@ -114,9 +114,7 @@ async def test_prompt_pre_fetch_leaves_logs_and_metadata_disabled_by_default(cap
 
 @pytest.mark.asyncio
 async def test_prompt_pre_fetch_records_metadata_and_logs_when_enabled(caplog):
-    plugin = PIIFilterPlugin(
-        _make_config(include_detection_details=True, log_detections=True)
-    )
+    plugin = PIIFilterPlugin(_make_config(log_detections=True))
     caplog.set_level(logging.INFO, logger="cpex_pii_filter.pii_filter")
     ext = Extensions(request=RequestExtension(trace_id="t1"))
     payload = PromptPrehookPayload(
