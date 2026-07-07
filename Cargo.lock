@@ -290,7 +290,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "cpex_framework_bridge"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "pyo3",
 ]
@@ -351,9 +351,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-epoch"
-version = "0.9.18"
+version = "0.9.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
+checksum = "2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f"
 dependencies = [
  "crossbeam-utils",
 ]
@@ -1149,7 +1149,7 @@ dependencies = [
 
 [[package]]
 name = "pii_filter"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "cpex_framework_bridge",
  "criterion",

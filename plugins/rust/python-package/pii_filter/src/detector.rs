@@ -163,7 +163,9 @@ impl PIIDetectorRust {
     /// * `redaction_text` (str): Text to use for redaction (default: "\[REDACTED\]")
     /// * `block_on_detection` (bool): Whether to block on detection
     /// * `log_detections` (bool): Emit detection log messages when matches are found
-    /// * `include_detection_details` (bool): Include detection summaries in plugin-hook metadata
+    /// * `include_detection_details` (bool): Reserved for future use; currently has no effect.
+    ///   OTel metrics on `result.metadata["pii_filter"]` are emitted whenever a valid `trace_id`
+    ///   is present in the `extensions` hook parameter, regardless of this flag.
     /// * `max_text_bytes` (int): Maximum text payload size to inspect
     /// * `max_nested_depth` (int): Maximum nested container depth to inspect
     /// * `max_collection_items` (int): Maximum items to inspect per collection
