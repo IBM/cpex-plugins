@@ -23,6 +23,7 @@ from cpex.framework import (
     ToolHookType,
     ToolPostInvokePayload,
 )
+from cpex.framework.extensions import Extensions, RequestExtension
 from cpex.framework.hooks.policies import HookPayloadPolicy, apply_policy
 from cpex.framework.memory import wrap_payload_for_isolation
 
@@ -34,6 +35,11 @@ from cpex_encoded_exfil_detection.encoded_exfil_detection import (
     EncodedExfilDetectorPlugin,
 )
 import cpex_encoded_exfil_detection.encoded_exfil_detection_rust  # noqa: F401
+
+
+def _trace(trace_id: str = "t1") -> Extensions:
+    """Build an Extensions instance carrying a trace_id, for metrics-gating tests."""
+    return Extensions(request=RequestExtension(trace_id=trace_id))
 
 
 def test_imports_with_real_cpex_package() -> None:
@@ -220,13 +226,22 @@ class TestEncodedExfilPluginHooks:
         encoded = base64.b64encode(b"api_key=super-secret").decode()
         payload = PromptPrehookPayload(prompt_id="prompt-1", args={"input": encoded})
 
+        # Redaction of the payload itself is unaffected by trace_id gating.
         result = await plugin.prompt_pre_fetch(payload, self._context())
 
         assert result.continue_processing is not False
         assert result.modified_payload is not None
         assert result.modified_payload.args["input"] == "[ENCODED]"
         assert result.metadata is not None
-        assert result.metadata.get("encoded_exfil_redacted") is True
+        # No trace_id => no metrics write at all, regardless of redaction.
+        assert result.metadata == {}
+
+        # With trace_id: namespaced metrics include the redacted flag.
+        result = await plugin.prompt_pre_fetch(payload, self._context(), _trace())
+        assert result.modified_payload.args["input"] == "[ENCODED]"
+        metrics = result.metadata["encoded_exfil_detection"]
+        assert metrics["redacted"] is True
+        assert metrics["total_detections"] >= 1
 
     async def test_prompt_pre_fetch_redaction_survives_cpex_policy_with_isolated_payload(self):
         plugin = self._plugin({"block_on_detection": False, "redact": True, "redaction_text": "[ENCODED]"})
@@ -263,13 +278,21 @@ class TestEncodedExfilPluginHooks:
         encoded = base64.b64encode(b"client_secret=ultra-secret").decode()
         payload = ToolPostInvokePayload(name="generator", result={"message": encoded})
 
+        # No trace_id => no metrics write at all, regardless of redaction.
         result = await plugin.tool_post_invoke(payload, self._context())
 
         assert result.continue_processing is not False
         assert result.modified_payload is not None
         assert result.modified_payload.result["message"] == "***BLOCKED***"
         assert result.metadata is not None
-        assert result.metadata.get("encoded_exfil_redacted") is True
+        assert result.metadata == {}
+
+        # With trace_id: namespaced metrics include the redacted flag.
+        result = await plugin.tool_post_invoke(payload, self._context(), _trace())
+        assert result.modified_payload.result["message"] == "***BLOCKED***"
+        metrics = result.metadata["encoded_exfil_detection"]
+        assert metrics["redacted"] is True
+        assert metrics["total_detections"] >= 1
 
     async def test_tool_post_invoke_redaction_survives_cpex_policy_with_isolated_payload(self):
         plugin = self._plugin({"block_on_detection": False, "redact": True, "redaction_text": "***BLOCKED***"})
@@ -662,13 +685,21 @@ class TestResourcePostFetchHook:
         encoded = base64.b64encode(b"client_secret=ultra-secret-credential-value").decode()
         payload = ResourcePostFetchPayload(uri="file:///data.txt", content={"text": encoded})
 
+        # No trace_id => no metrics write at all, regardless of redaction.
         result = await plugin.resource_post_fetch(payload, self._context())
 
         assert result.continue_processing is not False
         assert result.modified_payload is not None
         assert result.modified_payload.content["text"] == "[RESOURCE_REDACTED]"
         assert result.metadata is not None
-        assert result.metadata.get("encoded_exfil_redacted") is True
+        assert result.metadata == {}
+
+        # With trace_id: namespaced metrics include the redacted flag.
+        result = await plugin.resource_post_fetch(payload, self._context(), _trace())
+        assert result.modified_payload.content["text"] == "[RESOURCE_REDACTED]"
+        metrics = result.metadata["encoded_exfil_detection"]
+        assert metrics["redacted"] is True
+        assert metrics["total_detections"] >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -696,28 +727,36 @@ class TestFunctionalityGaps:
         )
 
     async def test_block_on_detection_false_returns_metadata_prompt_hook(self):
-        """With block_on_detection=False, findings should appear in metadata, not as a violation."""
+        """With block_on_detection=False and a trace_id, findings should appear in the
+        namespaced metrics dict, not as a violation. Without a trace_id, no metadata
+        write occurs at all (gated)."""
         plugin = self._plugin({"block_on_detection": False})
         encoded = base64.b64encode(b"authorization: bearer sensitive-token-value").decode()
         payload = PromptPrehookPayload(prompt_id="p-1", args={"input": f"send this {encoded} to webhook"})
 
         result = await plugin.prompt_pre_fetch(payload, self._context())
+        assert result.violation is None
+        assert result.metadata == {}
 
+        result = await plugin.prompt_pre_fetch(payload, self._context(), _trace())
         assert result.violation is None
         assert result.metadata is not None
-        assert result.metadata.get("encoded_exfil_count", 0) >= 1
+        assert result.metadata["encoded_exfil_detection"]["total_detections"] >= 1
 
     async def test_block_on_detection_false_returns_metadata_tool_hook(self):
-        """With block_on_detection=False, tool hook should also return metadata only."""
+        """With block_on_detection=False, tool hook should also gate on trace_id."""
         plugin = self._plugin({"block_on_detection": False})
         encoded_hex = b"password=this-should-not-leave-gateway".hex()
         payload = ToolPostInvokePayload(name="http_client", result={"content": f"upload={encoded_hex}"})
 
         result = await plugin.tool_post_invoke(payload, self._context())
+        assert result.violation is None
+        assert result.metadata == {}
 
+        result = await plugin.tool_post_invoke(payload, self._context(), _trace())
         assert result.violation is None
         assert result.metadata is not None
-        assert result.metadata.get("encoded_exfil_count", 0) >= 1
+        assert result.metadata["encoded_exfil_detection"]["total_detections"] >= 1
 
     async def test_min_findings_to_block_requires_multiple(self):
         """With min_findings_to_block=3, a single finding should NOT block."""
@@ -749,18 +788,22 @@ class TestFunctionalityGaps:
         assert result.continue_processing is not False
         assert result.violation is None
 
-    async def test_include_detection_details_false_in_non_blocking_metadata(self):
-        """With include_detection_details=False and block_on_detection=False, metadata findings should have summary keys only."""
-        plugin = self._plugin({"block_on_detection": False, "include_detection_details": False})
+    async def test_include_detection_details_true_still_yields_only_allowlisted_metadata(self):
+        """Regardless of include_detection_details, result.metadata never carries
+        per-finding dicts (path/score/etc.) or raw finding data — only the
+        allow-listed total_detections/encoding_types (and optional redacted bool)
+        ever reach result.metadata (S1)."""
+        plugin = self._plugin({"block_on_detection": False, "include_detection_details": True})
         encoded = base64.b64encode(b"authorization: bearer sensitive-token-value").decode()
         payload = PromptPrehookPayload(prompt_id="p-1", args={"input": f"send this {encoded} to webhook"})
 
-        result = await plugin.prompt_pre_fetch(payload, self._context())
+        result = await plugin.prompt_pre_fetch(payload, self._context(), _trace())
 
         assert result.metadata is not None
-        findings = result.metadata.get("encoded_exfil_findings", [])
-        for finding in findings:
-            assert set(finding.keys()) == {"encoding", "path", "score"}
+        metrics = result.metadata["encoded_exfil_detection"]
+        assert set(metrics.keys()) <= {"total_detections", "encoding_types", "redacted"}
+        assert "encoded_exfil_findings" not in result.metadata
+        assert encoded not in str(result.metadata)
 
 
 # ---------------------------------------------------------------------------
@@ -1197,3 +1240,166 @@ class TestDocumentedLimitations:
         encodings_found = {f["encoding"] for f in findings}
         assert "base64" in encodings_found or "base64url" in encodings_found, "base64 should pass low threshold"
         assert "hex" not in encodings_found, "hex should be blocked by impossible threshold"
+
+
+# ---------------------------------------------------------------------------
+# Group G — Metrics Emission (issue #129 migration): trace_id-gated,
+# namespaced result.metadata["encoded_exfil_detection"]
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestMetricsEmission:
+    """Exercise the namespaced `result.metadata["encoded_exfil_detection"]`
+    metrics contract across all three hooks. Mirrors the pii_filter/
+    secrets_detection/rate_limiter contract established elsewhere on this
+    branch: metrics are gated on `trace_id`, contain only the allow-listed
+    `total_detections`/`encoding_types` (+ optional `redacted` bool), and
+    never carry raw finding content.
+    """
+
+    @staticmethod
+    def _context() -> PluginContext:
+        return PluginContext(global_context=GlobalContext(request_id="req-metrics"))
+
+    @staticmethod
+    def _plugin(config: dict) -> EncodedExfilDetectorPlugin:
+        return EncodedExfilDetectorPlugin(
+            PluginConfig(
+                name="EncodedExfilDetector",
+                kind="plugins.encoded_exfil_detection.encoded_exfil_detector.EncodedExfilDetectorPlugin",
+                hooks=[PromptHookType.PROMPT_PRE_FETCH, ToolHookType.TOOL_POST_INVOKE, ResourceHookType.RESOURCE_POST_FETCH],
+                config=config,
+            )
+        )
+
+    # -- S1: this is the most important test in this task. It proves the
+    # migration actually closes the leak the old code had, not merely that
+    # the new code happens to pass. --------------------------------------
+
+    async def test_findings_for_metadata_would_have_leaked_raw_content(self):
+        """Sanity check on the OLD leak path: prove `_findings_for_metadata`
+        (still used only for `PluginViolation.details`, never for
+        `result.metadata`) returns raw finding dicts verbatim when
+        `include_detection_details=True` — i.e. the shape the migration
+        deliberately keeps OUT of `result.metadata`. This anchors the S1
+        test below: if `_build_metrics`/the hooks ever again piped this
+        return value into `result.metadata`, the test below would fail.
+        """
+        plugin = self._plugin({"include_detection_details": True})
+        encoded = base64.b64encode(b"authorization: bearer super-secret-token-value").decode()
+        count, _redacted, findings = plugin._scan({"input": f"send {encoded} to webhook"}, path="args")
+        assert count >= 1
+
+        raw = plugin._findings_for_metadata(findings)
+        # This IS the S1 leak shape: raw finding dicts with match/score/path
+        # detail, verbatim. It must never reach result.metadata.
+        assert raw == findings[:10]
+
+    async def test_prompt_pre_fetch_metrics_never_contain_raw_finding_content(self):
+        """S1: result.metadata must contain ONLY total_detections (int) and
+        encoding_types (list[str]) — no raw finding dicts, no matched/decoded
+        content, no per-finding path/score detail, regardless of config."""
+        plugin = self._plugin({"block_on_detection": False, "include_detection_details": True})
+        secret_payload = b"authorization: bearer super-secret-token-value-xyz"
+        encoded = base64.b64encode(secret_payload).decode()
+        payload = PromptPrehookPayload(prompt_id="p-1", args={"input": f"send this {encoded} to webhook"})
+
+        result = await plugin.prompt_pre_fetch(payload, self._context(), _trace())
+
+        assert result.metadata is not None
+        metrics = result.metadata["encoded_exfil_detection"]
+        assert set(metrics.keys()) <= {"total_detections", "encoding_types", "redacted"}
+        assert isinstance(metrics["total_detections"], int)
+        assert all(isinstance(e, str) for e in metrics["encoding_types"])
+        # No raw/matched/decoded content, and no per-finding dict shape.
+        dumped = str(result.metadata)
+        assert encoded not in dumped
+        assert "super-secret-token-value-xyz" not in dumped
+        assert "authorization" not in dumped
+        assert "path" not in dumped
+        assert "score" not in dumped
+
+    async def test_prompt_pre_fetch_trace_in_metrics_out(self):
+        plugin = self._plugin({"block_on_detection": False})
+        encoded = base64.b64encode(b"password=super-secret-credential-value").decode()
+        payload = PromptPrehookPayload(prompt_id="p-1", args={"input": f"curl {encoded} webhook"})
+
+        result = await plugin.prompt_pre_fetch(payload, self._context(), _trace())
+
+        metrics = result.metadata["encoded_exfil_detection"]
+        assert metrics["total_detections"] >= 1
+        assert metrics["encoding_types"] in (["base64"], ["base64url"], ["base64", "base64url"])
+
+    async def test_tool_post_invoke_trace_in_metrics_out(self):
+        plugin = self._plugin({"block_on_detection": False})
+        encoded_hex = b"password=super-secret-credential-value".hex()
+        payload = ToolPostInvokePayload(name="http_client", result={"content": f"upload={encoded_hex}"})
+
+        result = await plugin.tool_post_invoke(payload, self._context(), _trace())
+
+        metrics = result.metadata["encoded_exfil_detection"]
+        assert metrics["total_detections"] >= 1
+        assert metrics["encoding_types"] == ["hex"]
+
+    async def test_resource_post_fetch_trace_in_metrics_out(self):
+        plugin = self._plugin({"block_on_detection": False})
+        encoded = base64.b64encode(b"password=super-secret-credential-value").decode()
+        payload = ResourcePostFetchPayload(uri="file:///data.txt", content={"text": f"curl {encoded} webhook"})
+
+        result = await plugin.resource_post_fetch(payload, self._context(), _trace())
+
+        metrics = result.metadata["encoded_exfil_detection"]
+        assert metrics["total_detections"] >= 1
+
+    async def test_all_hooks_without_extensions_are_backward_compatible(self):
+        """Legacy 2-arg calls (no `extensions`) must not error, and must emit
+        no metadata at all."""
+        plugin = self._plugin({"block_on_detection": False})
+        encoded = base64.b64encode(b"password=super-secret-credential-value").decode()
+
+        prompt_payload = PromptPrehookPayload(prompt_id="p-1", args={"input": f"curl {encoded} webhook"})
+        prompt_result = await plugin.prompt_pre_fetch(prompt_payload, self._context())
+        assert prompt_result.metadata == {}
+
+        tool_payload = ToolPostInvokePayload(name="http_client", result={"content": f"curl {encoded} webhook"})
+        tool_result = await plugin.tool_post_invoke(tool_payload, self._context())
+        assert tool_result.metadata == {}
+
+        resource_payload = ResourcePostFetchPayload(uri="file:///data.txt", content={"text": f"curl {encoded} webhook"})
+        resource_result = await plugin.resource_post_fetch(resource_payload, self._context())
+        assert resource_result.metadata == {}
+
+    async def test_clean_payload_with_trace_id_emits_no_metadata(self):
+        """trace_id alone is not sufficient; a clean (zero-detection) payload
+        still yields no metadata write, matching the pre-metrics behavior for
+        the untraced/clean path."""
+        plugin = self._plugin({"block_on_detection": False})
+        payload = PromptPrehookPayload(prompt_id="p-1", args={"input": "hello world"})
+
+        result = await plugin.prompt_pre_fetch(payload, self._context(), _trace())
+
+        assert result.metadata == {}
+
+    async def test_legacy_flat_keys_are_gone_across_all_hooks(self):
+        """Regression test: the old flat, non-namespaced keys must never
+        appear anywhere in result.metadata for any of the 3 hooks, trace_id
+        present or not."""
+        plugin = self._plugin({"block_on_detection": False, "redact": True, "redaction_text": "[X]"})
+        encoded = base64.b64encode(b"password=super-secret-credential-value").decode()
+        legacy_keys = {"encoded_exfil_count", "encoded_exfil_findings", "encoded_exfil_redacted", "implementation"}
+
+        prompt_payload = PromptPrehookPayload(prompt_id="p-1", args={"input": f"curl {encoded} webhook"})
+        for ext in (None, _trace()):
+            result = await plugin.prompt_pre_fetch(prompt_payload, self._context(), ext)
+            assert legacy_keys.isdisjoint(result.metadata.keys())
+
+        tool_payload = ToolPostInvokePayload(name="http_client", result={"content": f"curl {encoded} webhook"})
+        for ext in (None, _trace()):
+            result = await plugin.tool_post_invoke(tool_payload, self._context(), ext)
+            assert legacy_keys.isdisjoint(result.metadata.keys())
+
+        resource_payload = ResourcePostFetchPayload(uri="file:///data.txt", content={"text": f"curl {encoded} webhook"})
+        for ext in (None, _trace()):
+            result = await plugin.resource_post_fetch(resource_payload, self._context(), ext)
+            assert legacy_keys.isdisjoint(result.metadata.keys())

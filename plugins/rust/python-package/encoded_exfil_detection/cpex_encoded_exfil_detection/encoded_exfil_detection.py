@@ -34,6 +34,7 @@ from cpex.framework import (
     ToolPostInvokePayload,
     ToolPostInvokeResult,
 )
+from cpex.framework.extensions import Extensions
 from cpex_encoded_exfil_detection.encoded_exfil_detection_rust import (
     ExfilDetectorEngine,
     py_scan_container as _py_scan_container,
@@ -190,7 +191,34 @@ class EncodedExfilDetectorPlugin(Plugin):
         request_id = context.global_context.request_id if context and context.global_context else "unknown"
         logger.warning("Encoded exfiltration detected [hook=%s, count=%d, encodings=%s, request_id=%s]", hook, count, encoding_types, request_id)
 
-    async def prompt_pre_fetch(self, payload: PromptPrehookPayload, context: PluginContext) -> PromptPrehookResult:
+    @staticmethod
+    def _build_metrics(
+        extensions: Extensions | None,
+        count: int,
+        findings: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """Build the namespaced, allow-listed metrics dict for observability.
+
+        Returns ``None`` when there is nothing to record: no trace context
+        was supplied, or no detections occurred. Otherwise returns a dict
+        containing ONLY ``total_detections`` (int) and ``encoding_types``
+        (list[str]) — never raw finding dicts, matched/decoded content, or
+        per-finding ``path``/``score`` detail (S1).
+        """
+        trace_id = extensions.request.trace_id if extensions and extensions.request else None
+        if not trace_id or not count:
+            return None
+        return {
+            "total_detections": count,
+            "encoding_types": sorted({f.get("encoding", "unknown") for f in findings}),
+        }
+
+    async def prompt_pre_fetch(
+        self,
+        payload: PromptPrehookPayload,
+        context: PluginContext,
+        extensions: Extensions | None = None,
+    ) -> PromptPrehookResult:
         """Scan prompt arguments for encoded exfiltration attempts."""
         count, new_args, findings = self._scan(payload.args or {}, path="args")
         self._log_detection("prompt_pre_fetch", count, findings, context)
@@ -211,16 +239,23 @@ class EncodedExfilDetectorPlugin(Plugin):
                 ),
             )
 
-        metadata = {"encoded_exfil_count": count, "encoded_exfil_findings": self._findings_for_metadata(findings), "implementation": self.implementation} if count else {}
+        metrics = self._build_metrics(extensions, count, findings)
+        metadata = {"encoded_exfil_detection": metrics} if metrics is not None else {}
 
         if self._cfg.redact and new_args != (payload.args or {}):
             modified_payload = PromptPrehookPayload(prompt_id=payload.prompt_id, args=new_args)
-            metadata = {**metadata, "encoded_exfil_redacted": True}
+            if metrics is not None:
+                metadata = {"encoded_exfil_detection": {**metrics, "redacted": True}}
             return PromptPrehookResult(modified_payload=modified_payload, metadata=metadata)
 
         return PromptPrehookResult(metadata=metadata)
 
-    async def tool_post_invoke(self, payload: ToolPostInvokePayload, context: PluginContext) -> ToolPostInvokeResult:
+    async def tool_post_invoke(
+        self,
+        payload: ToolPostInvokePayload,
+        context: PluginContext,
+        extensions: Extensions | None = None,
+    ) -> ToolPostInvokeResult:
         """Scan tool outputs for suspicious encoded exfiltration payloads."""
         count, new_result, findings = self._scan(payload.result, path="result")
         self._log_detection("tool_post_invoke", count, findings, context)
@@ -242,16 +277,23 @@ class EncodedExfilDetectorPlugin(Plugin):
                 ),
             )
 
-        metadata = {"encoded_exfil_count": count, "encoded_exfil_findings": self._findings_for_metadata(findings), "implementation": self.implementation} if count else {}
+        metrics = self._build_metrics(extensions, count, findings)
+        metadata = {"encoded_exfil_detection": metrics} if metrics is not None else {}
 
         if self._cfg.redact and new_result != payload.result:
             modified_payload = ToolPostInvokePayload(name=payload.name, result=new_result)
-            metadata = {**metadata, "encoded_exfil_redacted": True}
+            if metrics is not None:
+                metadata = {"encoded_exfil_detection": {**metrics, "redacted": True}}
             return ToolPostInvokeResult(modified_payload=modified_payload, metadata=metadata)
 
         return ToolPostInvokeResult(metadata=metadata)
 
-    async def resource_post_fetch(self, payload: ResourcePostFetchPayload, context: PluginContext) -> ResourcePostFetchResult:
+    async def resource_post_fetch(
+        self,
+        payload: ResourcePostFetchPayload,
+        context: PluginContext,
+        extensions: Extensions | None = None,
+    ) -> ResourcePostFetchResult:
         """Scan fetched resource content for suspicious encoded exfiltration payloads."""
         count, new_content, findings = self._scan(payload.content, path="content")
         self._log_detection("resource_post_fetch", count, findings, context)
@@ -273,11 +315,13 @@ class EncodedExfilDetectorPlugin(Plugin):
                 ),
             )
 
-        metadata = {"encoded_exfil_count": count, "encoded_exfil_findings": self._findings_for_metadata(findings), "implementation": self.implementation} if count else {}
+        metrics = self._build_metrics(extensions, count, findings)
+        metadata = {"encoded_exfil_detection": metrics} if metrics is not None else {}
 
         if self._cfg.redact and new_content != payload.content:
             modified_payload = ResourcePostFetchPayload(uri=payload.uri, content=new_content)
-            metadata = {**metadata, "encoded_exfil_redacted": True}
+            if metrics is not None:
+                metadata = {"encoded_exfil_detection": {**metrics, "redacted": True}}
             return ResourcePostFetchResult(modified_payload=modified_payload, metadata=metadata)
 
         return ResourcePostFetchResult(metadata=metadata)
