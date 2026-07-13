@@ -17,17 +17,17 @@ class SecretsDetectionPlugin(Plugin):
         super().__init__(config)
         self._core = SecretsDetectionPluginCore(config.config or {})
 
-    async def prompt_pre_fetch(self, payload, context):
-        return self._core.prompt_pre_fetch(payload, context)
+    async def prompt_pre_fetch(self, payload, context, extensions=None):
+        return self._core.prompt_pre_fetch(payload, context, extensions)
 
     async def tool_pre_invoke(self, payload, context):
         return self._core.tool_pre_invoke(payload, context)
 
-    async def tool_post_invoke(self, payload, context):
-        return self._core.tool_post_invoke(payload, context)
+    async def tool_post_invoke(self, payload, context, extensions=None):
+        return self._core.tool_post_invoke(payload, context, extensions)
 
-    async def resource_post_fetch(self, payload, context):
-        return self._core.resource_post_fetch(payload, context)
+    async def resource_post_fetch(self, payload, context, extensions=None):
+        return self._core.resource_post_fetch(payload, context, extensions)
 
 
 __all__ = ["SecretsDetectionPlugin", "py_scan_container"]
