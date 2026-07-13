@@ -26,13 +26,14 @@ The following fields are the **only fields** permitted in the metrics dict. Gate
 | `limited` | `bool` | Whether a rate-limit configuration applies to this dimension/request | `true` |
 | `remaining` | `int` | Remaining calls in the current window (present only when `limited` is `true`) | `4` |
 | `reset_in` | `int` | Seconds until the current window resets (present only when `limited` is `true`) | `1` |
-| `dimensions` | `dict` | Per-dimension `violated`/`allowed` breakdown (present only when the engine evaluated more than one dimension) | `{"violated": [...], "allowed": [...]}` |
+| `dimensions` | `dict` | Per-dimension `violated`/`allowed` breakdown (present whenever `limited` is `true`, i.e. whenever one or more dimensions were evaluated — not only when there are 2+) | `{"allowed": [...]}` or `{"violated": [...]}` |
 
 ### Semantics
 
 - **allowed** / **throttled**: Per-call (not cumulative) `0`/`1` outcome flags. The engine evaluates a single request per call with no running counter, so these describe only the current call's outcome — the gateway is expected to aggregate counts across spans/time.
 - **backend**: Fixed to `"redis"` or `"memory"`, mirroring `engine.uses_async_backend()` (Redis is the only async backend today).
 - **limited**, **remaining**, **reset_in**, **dimensions**: Folded in verbatim (allow-listed passthrough) from the engine's own operational `meta` dict (`engine::build_meta_dict`), via the fixed key list `["limited", "remaining", "reset_in", "dimensions"]`. Each key is included only if the underlying `meta` dict set it — e.g. `remaining`/`reset_in` are absent on the early-return "not limited" branch (no rate limit configured for this dimension).
+- **dimensions**: `build_meta_dict` sets `dimensions` whenever `has_violated || has_allowed` is true (`src/engine.rs:502-533`). `EvalResult::from_dims` (`src/types.rs:105-159`) partitions **every** dimension it was given into either `violated_dimensions` or `allowed_dimensions`, so as soon as at least **one** dimension is evaluated, one of those two lists is non-empty and `dimensions` is set — it is present whenever `limited` is `true` (i.e. for any request with rate-limit configuration at all, including a single-dimension config like `by_user` alone), not only when 2+ dimensions are configured. It is absent only on the early-return "not limited" branch, where `dims.is_empty()` short-circuits to `EvalResult::unlimited(0)` and `build_meta_dict` is never called. When only one dimension is checked, `dimensions` duplicates the top-level `remaining`/`reset_in` values inside a single-entry `allowed` or `violated` list.
 - All three result-building branches (early-return-not-limited, allowed, throttled/not-allowed) emit metrics identically when a trace_id is present — the throttled branch previously emitted no metadata at all under the legacy behavior; it now carries the same metrics as the other branches, since throttling is exactly the event this metric exists to count.
 
 ## Deny-List (S1): Content-Bearing Fields
@@ -57,7 +58,7 @@ The following fields **MUST NOT** appear in the metrics dict, even in part. This
 - `backend`: fixed to one of 2 known values (`"redis"`, `"memory"`).
 - `limited`: boolean.
 - `remaining`, `reset_in`: standard signed integers (no practical upper bound); present only when `limited` is `true`.
-- `dimensions`: nested `violated`/`allowed` lists of per-dimension `{limited, remaining, reset_in}` dicts; sized by the number of configured dimensions for the request (no additional truncation is applied beyond the engine's own dimension set).
+- `dimensions`: nested `violated`/`allowed` lists of per-dimension `{limited, remaining, reset_in}` dicts; present whenever at least one dimension was evaluated (see Semantics above), sized by the number of configured dimensions for the request (no additional truncation is applied beyond the engine's own dimension set).
 
 ## Emission Criteria
 
@@ -85,24 +86,29 @@ Call 2 (same second): payload.name = "search", context.user = "carol", extension
 ### Emitted Metrics
 
 ```python
-# Call 1
+# Call 1 (allowed) — even a single-dimension config (`by_user` alone) populates
+# `dimensions`, since `build_meta_dict` sets it whenever any dimension was
+# evaluated, not only when there are 2+ dimensions. Here it duplicates the
+# top-level remaining/reset_in inside a single-entry "allowed" list.
 result.metadata = {
     "rate_limiter": {
         "limited": True,
         "remaining": 0,
         "reset_in": 1,
+        "dimensions": {"allowed": [{"limited": True, "remaining": 0, "reset_in": 1}]},
         "allowed": 1,
         "throttled": 0,
         "backend": "memory"
     }
 }
 
-# Call 2
+# Call 2 (throttled) — the same single dimension is now in the "violated" list.
 result.metadata = {
     "rate_limiter": {
         "limited": True,
         "remaining": 0,
         "reset_in": 1,
+        "dimensions": {"violated": [{"limited": True, "remaining": 0, "reset_in": 1}]},
         "allowed": 0,
         "throttled": 1,
         "backend": "memory"

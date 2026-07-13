@@ -63,8 +63,15 @@ Metrics are **only emitted** when:
 
 1. A trace_id is present in `extensions.request.trace_id`.
 2. At least one detection occurred during the hook invocation (`count` is truthy).
+3. The call did not take the blocking path (see exception below).
 
-This replaces the legacy un-namespaced, un-gated write (`encoded_exfil_count`, `encoded_exfil_findings`, `implementation`) — which was already dead-on-arrival at the gateway sanitizer and an S1 leak risk since `encoded_exfil_findings` could carry raw matched/decoded content. When either condition fails, the `result.metadata` dict is omitted entirely (or does not contain the `encoded_exfil_detection` key), regardless of whether redaction occurred.
+This replaces the legacy un-namespaced, un-gated write (`encoded_exfil_count`, `encoded_exfil_findings`, `implementation`) — which was already dead-on-arrival at the gateway sanitizer and an S1 leak risk since `encoded_exfil_findings` could carry raw matched/decoded content. When any condition fails, the `result.metadata` dict is omitted entirely (or does not contain the `encoded_exfil_detection` key), regardless of whether redaction occurred.
+
+### Exception: no metrics at all on the blocking path (plugin-specific)
+
+In all three hooks (`prompt_pre_fetch` ~L226-240, `tool_post_invoke` ~L263-278, `resource_post_fetch` ~L301-316), when `count >= min_findings_to_block` **and** `block_on_detection` is enabled, the hook returns immediately with a `PluginViolation` and `continue_processing=False` — `_build_metrics`/`_scan`'s metrics path is never reached, so **no `result.metadata` is written at all on the blocking path, even when a trace_id is present and `count > 0`.** The `count`/finding detail is only visible via `PluginViolation.details` (a separate, non-metrics channel) in that case.
+
+This is a real cross-plugin inconsistency worth calling out explicitly (Task 6's whole point): `secrets_detection` and `url_reputation` both **do** emit namespaced metrics on their respective blocking paths (`total_blocked`/`reputation_categories` are populated specifically to describe a block), whereas `encoded_exfil_detection` emits nothing at all when it blocks. This was not changed as part of the doc pass — it reflects the plugin's actual, already-reviewed landed behavior — but a future consistency pass may want to align it with the other two plugins' blocking-path emission.
 
 ## Example
 
