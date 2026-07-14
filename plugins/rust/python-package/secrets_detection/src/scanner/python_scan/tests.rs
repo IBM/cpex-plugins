@@ -136,6 +136,271 @@ class CopyOnWriteDict(dict):
 }
 
 #[test]
+fn field_filters_apply_to_plain_dicts_in_findings_and_redaction_scans() {
+    Python::initialize();
+    Python::attach(|py| -> PyResult<()> {
+        let payload = PyDict::new(py);
+        let layer1 = PyDict::new(py);
+        let layer2 = PyDict::new(py);
+        layer1.set_item("public", "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")?;
+        layer2.set_item("layer3", "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")?;
+        layer1.set_item("layer2", &layer2)?;
+        payload.set_item("layer1", &layer1)?;
+        payload.set_item("layer10", "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")?;
+
+        let config = config_with_field_filters(py, &["layer1"], &["layer1.layer2.layer3"], true)?;
+
+        let (findings_count, findings) = scan_container_findings(py, payload.as_any(), &config)?;
+        let (redacted_count, redacted, redacted_findings) =
+            scan_container(py, payload.as_any(), &config)?;
+
+        assert_eq!(findings_count, 1);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(redacted_count, findings_count);
+        assert_eq!(redacted_findings.len(), findings.len());
+        let redacted_payload = redacted.cast::<PyDict>()?;
+        let redacted_layer1 = redacted_payload
+            .get_item("layer1")?
+            .expect("layer1 exists")
+            .cast_into::<PyDict>()?;
+        assert_eq!(
+            redacted_layer1
+                .get_item("public")?
+                .expect("public exists")
+                .extract::<String>()?,
+            "AWS_ACCESS_KEY_ID=[REDACTED]"
+        );
+        let redacted_layer2 = redacted_layer1
+            .get_item("layer2")?
+            .expect("layer2 exists")
+            .cast_into::<PyDict>()?;
+        assert_eq!(
+            redacted_layer2
+                .get_item("layer3")?
+                .expect("layer3 exists")
+                .extract::<String>()?,
+            "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+        );
+        assert_eq!(
+            redacted_payload
+                .get_item("layer10")?
+                .expect("layer10 exists")
+                .extract::<String>()?,
+            "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+        );
+
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn field_filters_reach_nested_allowlisted_paths_through_lists_and_tuples() {
+    Python::initialize();
+    Python::attach(|py| -> PyResult<()> {
+        let first_user = PyDict::new(py);
+        let first_credentials = PyDict::new(py);
+        first_credentials.set_item("token", "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")?;
+        first_credentials.set_item("other", "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")?;
+        first_user.set_item("credentials", &first_credentials)?;
+
+        let second_user = PyDict::new(py);
+        let second_credentials = PyDict::new(py);
+        second_credentials.set_item("token", "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")?;
+        second_user.set_item("credentials", &second_credentials)?;
+        let tuple_item = PyTuple::new(py, [second_user.into_any().unbind()])?;
+
+        let users = PyList::new(
+            py,
+            [
+                first_user.into_any().unbind(),
+                tuple_item.into_any().unbind(),
+            ],
+        )?;
+        let payload = PyDict::new(py);
+        payload.set_item("users", &users)?;
+        payload.set_item("outside", "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")?;
+
+        let config = config_with_field_filters(py, &["users.credentials.token"], &[], true)?;
+
+        let (findings_count, findings) = scan_container_findings(py, payload.as_any(), &config)?;
+        let (redacted_count, redacted, redacted_findings) =
+            scan_container(py, payload.as_any(), &config)?;
+
+        assert_eq!(findings_count, 2);
+        assert_eq!(findings.len(), 2);
+        assert_eq!(redacted_count, findings_count);
+        assert_eq!(redacted_findings.len(), findings.len());
+        let redacted_payload = redacted.cast::<PyDict>()?;
+        let redacted_users = redacted_payload
+            .get_item("users")?
+            .expect("users exists")
+            .cast_into::<PyList>()?;
+        let redacted_first_user = redacted_users.get_item(0)?.cast_into::<PyDict>()?;
+        let redacted_first_credentials = redacted_first_user
+            .get_item("credentials")?
+            .expect("credentials exists")
+            .cast_into::<PyDict>()?;
+        assert_eq!(
+            redacted_first_credentials
+                .get_item("token")?
+                .expect("token exists")
+                .extract::<String>()?,
+            "AWS_ACCESS_KEY_ID=[REDACTED]"
+        );
+        assert_eq!(
+            redacted_first_credentials
+                .get_item("other")?
+                .expect("other exists")
+                .extract::<String>()?,
+            "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+        );
+        let redacted_tuple = redacted_users.get_item(1)?.cast_into::<PyTuple>()?;
+        let redacted_second_user = redacted_tuple.get_item(0)?.cast_into::<PyDict>()?;
+        let redacted_second_credentials = redacted_second_user
+            .get_item("credentials")?
+            .expect("credentials exists")
+            .cast_into::<PyDict>()?;
+        assert_eq!(
+            redacted_second_credentials
+                .get_item("token")?
+                .expect("token exists")
+                .extract::<String>()?,
+            "AWS_ACCESS_KEY_ID=[REDACTED]"
+        );
+        assert_eq!(
+            redacted_payload
+                .get_item("outside")?
+                .expect("outside exists")
+                .extract::<String>()?,
+            "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+        );
+
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn field_filters_apply_to_dict_subclasses() {
+    Python::initialize();
+    Python::attach(|py| -> PyResult<()> {
+        let code = CString::new(
+            r#"
+class CopyOnWriteDict(dict):
+    def __init__(self, original):
+        super().__init__()
+        self._original = original
+
+    def __getitem__(self, key):
+        return super().__getitem__(key) if key in self else self._original[key]
+
+    def __iter__(self):
+        return iter(self._original)
+
+    def __len__(self):
+        return len(self._original)
+
+    def items(self):
+        return ((key, self[key]) for key in self)
+"#,
+        )
+        .unwrap();
+        let module = PyModule::from_code(py, code.as_c_str(), c"test_module.py", c"test_module")?;
+        let original = PyDict::new(py);
+        original.set_item("message", "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")?;
+        original.set_item("ignored", "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")?;
+        let payload = module.getattr("CopyOnWriteDict")?.call1((original,))?;
+        let config = config_with_field_filters(py, &["message"], &[], true)?;
+
+        let (count, redacted, findings) = scan_container(py, &payload, &config)?;
+
+        assert_eq!(count, 1);
+        assert_eq!(findings.len(), 1);
+        let redacted_dict = redacted.cast::<PyDict>()?;
+        assert_eq!(
+            redacted_dict
+                .get_item("message")?
+                .expect("message exists")
+                .extract::<String>()?,
+            "AWS_ACCESS_KEY_ID=[REDACTED]"
+        );
+        assert_eq!(
+            redacted_dict
+                .get_item("ignored")?
+                .expect("ignored exists")
+                .extract::<String>()?,
+            "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+        );
+
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn field_filters_apply_to_slot_object_fields() {
+    Python::initialize();
+    Python::attach(|py| -> PyResult<()> {
+        let code = CString::new(
+            r#"
+class Model:
+    __slots__ = ("token", "ignored")
+
+    def __init__(self):
+        self.token = "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+        self.ignored = "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+"#,
+        )
+        .unwrap();
+        let module = PyModule::from_code(py, code.as_c_str(), c"test_module.py", c"test_module")?;
+        let instance = module.getattr("Model")?.call0()?;
+        let config = config_with_field_filters(py, &["token"], &[], true)?;
+
+        let (count, redacted, findings) = scan_container(py, &instance, &config)?;
+
+        assert_eq!(count, 1);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            redacted.getattr("token")?.extract::<String>()?,
+            "AWS_ACCESS_KEY_ID=[REDACTED]"
+        );
+        assert_eq!(
+            redacted.getattr("ignored")?.extract::<String>()?,
+            "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+        );
+
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn field_filters_do_not_suppress_direct_scalar_roots() {
+    Python::initialize();
+    Python::attach(|py| -> PyResult<()> {
+        let text = PyString::new(py, "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE");
+        let config = config_with_field_filters(py, &["never"], &["also_never"], true)?;
+
+        let (findings_count, findings) = scan_container_findings(py, text.as_any(), &config)?;
+        let (redacted_count, redacted, redacted_findings) =
+            scan_container(py, text.as_any(), &config)?;
+
+        assert_eq!(findings_count, 1);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(redacted_count, findings_count);
+        assert_eq!(redacted_findings.len(), findings.len());
+        assert_eq!(
+            redacted.extract::<String>()?,
+            "AWS_ACCESS_KEY_ID=[REDACTED]"
+        );
+
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
 fn findings_scan_counts_object_internal_and_serialized_states_once() {
     Python::initialize();
     Python::attach(|py| -> PyResult<()> {
@@ -765,6 +1030,58 @@ class Model:
 }
 
 #[test]
+fn scan_container_rewrites_back_edges_inside_denied_subtrees() {
+    Python::initialize();
+    Python::attach(|py| -> PyResult<()> {
+        let payload = PyDict::new(py);
+        let denied = PyDict::new(py);
+        payload.set_item("secret", "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")?;
+        payload.set_item("denied", &denied)?;
+        denied.set_item("own_secret", "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")?;
+        denied.set_item("back", &payload)?;
+
+        let config_dict = PyDict::new(py);
+        config_dict.set_item("redact", true)?;
+        config_dict.set_item("redaction_text", "[REDACTED]")?;
+        config_dict.set_item("field_denylist", ["denied"])?;
+        let config = SecretsDetectionConfig::from_py_dict(&config_dict)?;
+
+        let (count, redacted, findings) = scan_container(py, payload.as_any(), &config)?;
+
+        assert_eq!(count, 1);
+        assert_eq!(findings.len(), 1);
+        let redacted_dict = redacted.cast::<PyDict>()?;
+        assert_eq!(
+            redacted_dict
+                .get_item("secret")?
+                .expect("secret exists")
+                .extract::<String>()?,
+            "AWS_ACCESS_KEY_ID=[REDACTED]"
+        );
+        let denied_dict = redacted_dict
+            .get_item("denied")?
+            .expect("denied exists")
+            .cast_into::<PyDict>()?;
+        assert_eq!(
+            denied_dict
+                .get_item("own_secret")?
+                .expect("own_secret exists")
+                .extract::<String>()?,
+            "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+        );
+        assert!(
+            denied_dict
+                .get_item("back")?
+                .expect("back exists")
+                .is(&redacted)
+        );
+
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
 fn scan_container_does_not_apply_scan_state_to_different_serialized_object_type() {
     Python::initialize();
     Python::attach(|py| -> PyResult<()> {
@@ -1262,4 +1579,18 @@ class Model:
         Ok(())
     })
     .unwrap();
+}
+
+fn config_with_field_filters(
+    py: Python<'_>,
+    allowlist: &[&str],
+    denylist: &[&str],
+    redact: bool,
+) -> PyResult<SecretsDetectionConfig> {
+    let config = PyDict::new(py);
+    config.set_item("redact", redact)?;
+    config.set_item("redaction_text", "[REDACTED]")?;
+    config.set_item("field_allowlist", allowlist)?;
+    config.set_item("field_denylist", denylist)?;
+    SecretsDetectionConfig::from_py_dict(&config)
 }

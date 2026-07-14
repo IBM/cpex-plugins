@@ -9,6 +9,7 @@ Rust-backed secrets detection and redaction for ContextForge and MCP Gateway.
 - Optional broad detectors for generic API key assignments, JWT-like strings, long hex strings, and base64-like secrets
 - Blocking, redaction, or metadata-only reporting modes
 - Recursive scanning for nested dicts, lists, tuples, Pydantic-style objects, `__dict__`, and `__slots__`
+- Optional dotted field allowlist and denylist controls for structured payload scanning
 - Sanitized outward metadata that reports finding types and counts, not original secret values
 
 ## Build
@@ -77,6 +78,8 @@ config:
   redaction_text: "***REDACTED***"
   block_on_detection: true
   min_findings_to_block: 1
+  field_allowlist: []
+  field_denylist: []
 ```
 
 | Field | Type | Default | Description |
@@ -86,6 +89,44 @@ config:
 | `redaction_text` | string | `"***REDACTED***"` | Replacement text used when `redact=true` |
 | `block_on_detection` | bool | `true` | Return a violation when enough findings are present |
 | `min_findings_to_block` | integer | `1` | Minimum finding count required before blocking |
+| `field_allowlist` | list[string] | `[]` | Dotted field paths eligible for scanning; empty means all structured fields are eligible |
+| `field_denylist` | list[string] | `[]` | Dotted field paths excluded from scanning; denylist entries take precedence over allowlist entries |
+
+### Field Filtering
+
+`field_allowlist` and `field_denylist` apply to structured scan targets:
+
+- `prompt_pre_fetch`: paths are relative to `payload.args`
+- `tool_pre_invoke`: paths are relative to `payload.args`
+- `tool_post_invoke`: paths are relative to `payload.result`
+
+For example, `accounts.credentials.token` matches `payload.args.accounts.credentials.token` in pre-hooks and `payload.result.accounts.credentials.token` in `tool_post_invoke`.
+
+Rules:
+
+- An empty `field_allowlist` scans all structured fields.
+- A non-empty `field_allowlist` scans only the listed paths and their descendants.
+- A `field_denylist` entry excludes that path and all descendants.
+- When both lists match, `field_denylist` wins.
+- Parent containers are still traversed to reach nested allowlisted paths.
+- Matching is segment-aware: `layer1` does not match `layer10`.
+- Lists and tuples are transparent to field matching; numeric indices are not used.
+- Mapping keys themselves are not scanned.
+- Direct scalar scan targets, including `payload.content.text` in `resource_post_fetch`, retain current behavior and are not filtered by field paths.
+
+Valid field paths use non-empty dot-separated segments. Empty paths, whitespace-only paths, leading or trailing dots, and empty segments such as `layer1..token` are rejected during plugin initialization.
+
+Example:
+
+```yaml
+config:
+  field_allowlist:
+    - "layer1"
+    - "accounts.credentials"
+  field_denylist:
+    - "layer1.layer2.layer3"
+    - "accounts.credentials.test_token"
+```
 
 ## Behavior Notes
 
@@ -119,6 +160,12 @@ result.metadata["secrets_detection"] = {
 Blocking responses use the `SECRETS_DETECTED` violation code.
 
 ## Migration Note
+
+Version `0.3.8` adds optional field filtering:
+
+- `field_allowlist` and `field_denylist` default to empty lists, so existing configurations keep scanning the same fields as before.
+- When configured, field filters affect detection counts, metadata, redaction, `min_findings_to_block`, and blocking decisions.
+- `field_denylist` entries take precedence over `field_allowlist` entries.
 
 Version `0.3.7` is a **breaking change** for any existing consumer reading detection metadata:
 
