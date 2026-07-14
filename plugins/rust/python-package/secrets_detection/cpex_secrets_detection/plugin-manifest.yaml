@@ -24,3 +24,5 @@ default_configs:
   redaction_text: "***REDACTED***"
   block_on_detection: true
   min_findings_to_block: 1
+  field_allowlist: []
+  field_denylist: []

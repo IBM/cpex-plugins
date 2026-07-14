@@ -625,6 +625,32 @@ class ResourcePostFetchResult(PromptPrehookResult):
     }
 
     #[test]
+    fn tool_pre_invoke_threshold_counts_only_eligible_fields() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let config = config(py, true, false, 2)?;
+            config.set_item("field_allowlist", ["allowed"])?;
+            let plugin = SecretsDetectionPluginCore::new(config.as_any())?;
+            let module = module(py)?;
+            let args = PyDict::new(py);
+            args.set_item("allowed", "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")?;
+            args.set_item("ignored", "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")?;
+            let payload = module.getattr("ToolPayload")?.call1((args,))?;
+            let context = PyDict::new(py);
+
+            let result = plugin.tool_pre_invoke(py, &payload, context.as_any(), None)?;
+            let result = result.bind(py);
+
+            assert!(result.getattr("continue_processing")?.extract::<bool>()?);
+            assert!(result.getattr("violation")?.is_none());
+            assert!(result.getattr("modified_payload")?.is_none());
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
     fn tool_pre_invoke_emits_namespaced_metrics_when_trace_id_present() {
         // Regression test for issue #129 finding 4: tool_pre_invoke now
         // accepts `extensions` and reads trace_id from it, same contract as
@@ -856,6 +882,38 @@ class ResourcePostFetchResult(PromptPrehookResult):
         Python::initialize();
         Python::attach(|py| -> PyResult<()> {
             let plugin = SecretsDetectionPluginCore::new(config(py, true, true, 1)?.as_any())?;
+            let module = module(py)?;
+            let payload = module
+                .getattr("ResourcePayload")?
+                .call1(("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE",))?;
+            let context = PyDict::new(py);
+
+            let result = plugin.resource_post_fetch(py, &payload, context.as_any(), None)?;
+            let result = result.bind(py);
+
+            assert!(!result.getattr("continue_processing")?.extract::<bool>()?);
+            assert_eq!(
+                result
+                    .getattr("modified_payload")?
+                    .getattr("content")?
+                    .getattr("text")?
+                    .extract::<String>()?,
+                "AWS_ACCESS_KEY_ID=[REDACTED]"
+            );
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn resource_post_fetch_direct_text_ignores_field_filters() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let config = config(py, true, true, 1)?;
+            config.set_item("field_allowlist", ["different.path"])?;
+            config.set_item("field_denylist", ["content.text"])?;
+            let plugin = SecretsDetectionPluginCore::new(config.as_any())?;
             let module = module(py)?;
             let payload = module
                 .getattr("ResourcePayload")?
