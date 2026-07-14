@@ -50,7 +50,7 @@ class RetryWithBackoffPlugin(Plugin):
                     override["max_retries"] = ceiling
 
         self._core = RetryWithBackoffPluginCore(raw_cfg)
-        log.info("retry_with_backoff: Initialized with Rust core (v0.3.2)")
+        log.info("retry_with_backoff: Initialized with Rust core (v0.3.7)")
 
     async def tool_post_invoke(
         self,
