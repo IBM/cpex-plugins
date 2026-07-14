@@ -432,41 +432,29 @@ fn build_prehook_result(
     build_framework_object_dyn(py, class_name, kwargs)
 }
 
-/// `meta` fields (built by `engine::build_meta_dict`) that are safe to fold
-/// into the namespaced metrics dict: aggregate rate-limit state only.
-/// Deliberately excludes `user_id`/`tenant_id` — `build_meta_dict` only sets
-/// those on the not-allowed path (G7, for `PluginViolation.details`
-/// debugging), and a metrics/telemetry channel is not the place for identity
-/// (S1: no identifiers in metrics, mirrors "no raw content").
-const META_METRIC_KEYS: &[&str] = &["limited", "remaining", "reset_in", "dimensions"];
-
 /// Build the namespaced metrics dict for the `result.metadata` channel.
 /// Returns `None` (no work) when `trace_id` is absent (gate: no trace means
-/// no metrics). Folds the engine's own operational `meta` fields (allowlisted
-/// via `META_METRIC_KEYS`) together with the new per-call counters into ONE
-/// dict — there is exactly one `result.metadata` write per hook call, and it
-/// replaces the old un-namespaced flat write of the whole `meta` dict.
-///
-/// `allowed`/`throttled` are per-call 0/1, not cumulative totals: the engine
-/// evaluates a single request per call with no running counter, so these
-/// describe only the current call's outcome (the gateway aggregates counts
-/// across spans/time).
+/// no metrics). Emits only `allowed`/`throttled`/`backend` — the sole fields
+/// that are (a) scalars, matching the gateway's S4 sanitizer contract
+/// (`mcpgateway/plugins/utils.py`), which only allowlists scalar or
+/// `list[str]` metadata fields, and (b) actually present in that sanitizer's
+/// numeric allowlist. Earlier revisions also folded in `limited`/`remaining`/
+/// `reset_in` (plain ints not in the gateway's numeric allowlist) and
+/// `dimensions` (a nested dict, which the sanitizer drops unconditionally
+/// regardless of allowlisting since it isn't scalar or `list[str]`) — those
+/// were dead weight that could never reach the consumer, so they were
+/// removed rather than kept as misleading no-op fields.
 fn build_rate_limiter_metrics<'py>(
     py: Python<'py>,
     trace_id: Option<&str>,
     allowed: bool,
     backend: &str,
-    meta: &Bound<'py, PyDict>,
+    _meta: &Bound<'py, PyDict>,
 ) -> PyResult<Option<Bound<'py, PyDict>>> {
     if trace_id.is_none() {
         return Ok(None);
     }
     let inner = PyDict::new(py);
-    for key in META_METRIC_KEYS {
-        if let Some(value) = meta.get_item(key)? {
-            inner.set_item(*key, value)?;
-        }
-    }
     inner.set_item("allowed", if allowed { 1 } else { 0 })?;
     inner.set_item("throttled", if allowed { 0 } else { 1 })?;
     inner.set_item("backend", backend)?;
@@ -805,8 +793,11 @@ class Context:
             assert_eq!(metadata.len(), 0);
 
             // With trace_id: namespaced metrics show allowed=1/throttled=0 and
-            // the configured backend, folded together with the engine's own
-            // `limited: false` field.
+            // the configured backend. Only these 3 scalar fields are emitted —
+            // `limited`/`remaining`/`reset_in`/`dimensions` from the engine's
+            // own `meta` dict are deliberately NOT folded in, since the
+            // gateway's S4 sanitizer can never accept them (scalars not in
+            // its numeric allowlist, or a nested dict it always drops).
             let ext = extensions_with_trace(py, "t1")?;
             let result = plugin.tool_pre_invoke(py, &payload, &context, Some(&ext))?;
             let metadata = result.getattr("metadata")?.cast_into::<PyDict>()?;
@@ -816,7 +807,20 @@ class Context:
             assert_eq!(metrics.get_item("allowed")?.extract::<i64>()?, 1);
             assert_eq!(metrics.get_item("throttled")?.extract::<i64>()?, 0);
             assert_eq!(metrics.get_item("backend")?.extract::<String>()?, "memory");
-            assert!(!metrics.get_item("limited")?.extract::<bool>()?);
+            let keys: std::collections::HashSet<String> = metrics
+                .cast::<PyDict>()
+                .expect("metrics value is a dict")
+                .keys()
+                .iter()
+                .map(|k| k.extract::<String>().unwrap())
+                .collect();
+            assert_eq!(
+                keys,
+                ["allowed", "throttled", "backend"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+            );
 
             Ok(())
         })
@@ -845,9 +849,11 @@ class Context:
             let metadata = result.getattr("metadata")?.cast_into::<PyDict>()?;
             assert_eq!(metadata.len(), 0);
 
-            // With trace_id: allowed branch folds `limited`/`remaining`/
-            // `reset_in` alongside the new allowed/throttled/backend fields
-            // into ONE namespaced write.
+            // With trace_id: allowed branch emits ONLY allowed/throttled/backend
+            // in the namespaced write — `limited`/`remaining`/`reset_in` are not
+            // folded in (they can never pass the gateway's S4 sanitizer, which
+            // only allowlists scalar/list[str] fields it also allowlists by
+            // name; these plain ints simply aren't on that allowlist).
             let ext = extensions_with_trace(py, "t1")?;
             let payload2 = module.getattr("ToolPayload")?.call1(("search",))?;
             let context2 = module.getattr("Context")?.call1(("carol",))?;
@@ -860,9 +866,20 @@ class Context:
             assert_eq!(metrics.get_item("allowed")?.extract::<i64>()?, 1);
             assert_eq!(metrics.get_item("throttled")?.extract::<i64>()?, 0);
             assert_eq!(metrics.get_item("backend")?.extract::<String>()?, "memory");
-            assert!(metrics.get_item("limited")?.extract::<bool>()?);
-            assert!(metrics.get_item("remaining").is_ok());
-            assert!(metrics.get_item("reset_in").is_ok());
+            let keys: std::collections::HashSet<String> = metrics
+                .cast::<PyDict>()
+                .expect("metrics value is a dict")
+                .keys()
+                .iter()
+                .map(|k| k.extract::<String>().unwrap())
+                .collect();
+            assert_eq!(
+                keys,
+                ["allowed", "throttled", "backend"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+            );
 
             Ok(())
         })

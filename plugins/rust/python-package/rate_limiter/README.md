@@ -254,14 +254,12 @@ result.metadata["rate_limiter"] = {
     "allowed": 1,          # int (0/1) — this call's outcome
     "throttled": 0,        # int (0/1) — mutually exclusive with allowed
     "backend": "memory",   # str — "memory" or "redis"
-    "limited": True,       # bool — whether a rate-limit config applies to this dimension
-    "remaining": 4,        # int — present only when limited is true
-    "reset_in": 1,         # int (seconds) — present only when limited is true
-    "dimensions": {"allowed": [...]},  # dict — present whenever limited is true
 }
 ```
 
 `allowed`/`throttled` describe only the current call's outcome — the engine evaluates one request per call with no running counter, so the gateway is expected to aggregate across spans/time. All three result branches (no rate limit configured, allowed, throttled) emit metrics identically when a trace_id is present — throttled calls previously emitted no metadata at all; they now carry the same schema as the other branches.
+
+**Note:** the engine's own operational fields (`limited`, `remaining`, `reset_in`, `dimensions`) are deliberately *not* folded into this metrics dict. The gateway's S4 sanitizer only allowlists scalar or `list[str]` metadata fields — `dimensions` is a nested dict and can never pass that sanitizer regardless of allowlisting, and `remaining`/`reset_in` are not on the sanitizer's numeric allowlist. Emitting fields the consumer structurally can't accept would be misleading, so only `allowed`/`throttled`/`backend` are emitted.
 
 **Gating:** Metrics are only emitted when a valid `trace_id` is present in the trace context (`extensions.request.trace_id`). No trace context means no `result.metadata` write at all, regardless of any config flag.
 
@@ -271,7 +269,7 @@ result.metadata["rate_limiter"] = {
 
 Version `0.1.7` is a **breaking change** for any existing consumer reading rate-limit metadata:
 
-- The old flat, unconditional `result.metadata` write (the engine's `meta` dict — `limited`, `remaining`, `reset_in`, `dimensions` — written on every allowed/not-limited call regardless of trace context) is now gated on a valid `trace_id` and wrapped under the `rate_limiter` namespace key, alongside the new `allowed`/`throttled`/`backend` fields.
+- The old flat, unconditional `result.metadata` write (the engine's `meta` dict — `limited`, `remaining`, `reset_in`, `dimensions` — written on every allowed/not-limited call regardless of trace context) is now gated on a valid `trace_id` and replaced by the namespaced `rate_limiter` key containing only `allowed`/`throttled`/`backend` (the engine's own fields are not folded in — see "Returned Metadata" above for why).
 - The throttled branch previously emitted no metadata at all; it now emits the same schema as the other branches when a trace_id is present.
 - `prompt_pre_fetch` and `tool_pre_invoke` now accept a new optional `extensions` parameter carrying OpenTelemetry trace context. Emission to `result.metadata["rate_limiter"]` is gated solely on `extensions.request.trace_id` being present and valid — if no trace context is supplied, no metrics are written at all, regardless of any config flag.
 - Consumers that previously read the flat `result.metadata` dict unconditionally must migrate to reading `result.metadata["rate_limiter"]` and must pass a `trace_id` via `extensions` to receive metrics.

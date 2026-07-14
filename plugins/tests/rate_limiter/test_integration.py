@@ -433,14 +433,18 @@ class TestMetricsEmission:
         assert result.continue_processing is True
         assert result.metadata == {}
 
-        # With trace_id: namespaced metrics present.
+        # With trace_id: namespaced metrics present. Only the 3 scalar
+        # fields (allowed/throttled/backend) are emitted — the engine's own
+        # `limited`/`remaining`/`reset_in`/`dimensions` fields are not folded
+        # in, since they can never pass the gateway's S4 sanitizer (scalars
+        # not on its numeric allowlist, or a nested dict it always drops).
         result = await plugin.tool_pre_invoke(payload, context, _trace())
         assert result.continue_processing is True
         metrics = result.metadata["rate_limiter"]
         assert metrics["allowed"] == 1
         assert metrics["throttled"] == 0
         assert metrics["backend"] == "memory"
-        assert metrics["limited"] is False
+        assert set(metrics.keys()) == {"allowed", "throttled", "backend"}
 
     async def test_allowed_branch_emits_metrics_and_keeps_http_headers(self):
         plugin = RateLimiterPlugin(_make_config(by_user="5/s"))
@@ -454,7 +458,9 @@ class TestMetricsEmission:
         assert result.http_headers is not None
         assert result.metadata == {}
 
-        # With trace_id: metrics folded alongside the engine's own state.
+        # With trace_id: only allowed/throttled/backend are emitted — the
+        # engine's own `limited`/`remaining`/`reset_in`/`dimensions` fields
+        # are deliberately not folded in (see Finding 2 rationale above).
         result = await plugin.tool_pre_invoke(
             payload, _make_context(user="bob"), _trace(),
         )
@@ -464,9 +470,7 @@ class TestMetricsEmission:
         assert metrics["allowed"] == 1
         assert metrics["throttled"] == 0
         assert metrics["backend"] == "memory"
-        assert metrics["limited"] is True
-        assert "remaining" in metrics
-        assert "reset_in" in metrics
+        assert set(metrics.keys()) == {"allowed", "throttled", "backend"}
 
     async def test_throttled_branch_emits_metrics_without_identifiers(self):
         plugin = RateLimiterPlugin(_make_config(by_user="1/s"))
