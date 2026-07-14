@@ -25,10 +25,10 @@ cpex_framework_bridge = { workspace = true }
 log.workspace = true
 # mutants must be a regular (non-dev) dependency because #[mutants::skip] is
 # used in non-test code; moving it to dev-dependencies would break release builds.
-mutants = "0.0.4"
+mutants.workspace = true
 pyo3.workspace = true
 pyo3-log.workspace = true
 pyo3-stub-gen = { workspace = true, optional = true }
-rand.workspace = true
+rand = "0.10.1"
 serde.workspace = true
 serde_json.workspace = true

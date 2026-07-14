@@ -15,6 +15,11 @@ ignore = [
     "RUSTSEC-2025-0100", # unic-ucd-ident via rustpython-parser
 ]
 
+[bans.workspace-dependencies]
+duplicates = "deny"
+include-path-dependencies = true
+unused = "deny"
+
 [licenses]
 # Listed licenses are allowed even if not encountered in the dependency tree.
 unused-allowed-license = "allow"
