@@ -16,6 +16,7 @@ from cpex.framework import (
     ResourcePostFetchPayload,
     ToolPostInvokePayload,
 )
+from cpex.framework.extensions import Extensions, RequestExtension
 
 
 def make_plugin(config_overrides: dict | None = None) -> RetryWithBackoffPlugin:
@@ -178,18 +179,26 @@ class TestToolPostInvoke:
 
 
 class TestRetryPolicyMetadata:
+    """`resource_post_fetch` is out of scope for issue #129 and keeps its
+    pre-existing, un-namespaced `retry_policy` config echo untouched. The
+    `tool_post_invoke` hook, in contrast, drops that echo entirely in favor
+    of the namespaced, trace_id-gated `retry_with_backoff` metrics dict
+    (see `TestMetricsEmission` below) — regression-tested here.
+    """
+
     @pytest.mark.asyncio
-    async def test_failure_retry_path_includes_policy_metadata(self):
+    async def test_tool_post_invoke_no_longer_emits_retry_policy_key(self):
         plugin = make_plugin({"max_retries": 3, "backoff_base_ms": 200, "max_backoff_ms": 5000, "retry_on_status": [500]})
         ctx = make_context()
+
+        # Without trace_id.
         result = await plugin.tool_post_invoke(make_payload("t", {"isError": True}), ctx)
         assert result.retry_delay_ms > 0
-        assert result.metadata["retry_policy"] == {
-            "max_retries": 3,
-            "backoff_base_ms": 200,
-            "max_backoff_ms": 5000,
-            "retry_on_status": [500],
-        }
+        assert "retry_policy" not in result.metadata
+
+        # With trace_id.
+        result = await plugin.tool_post_invoke(make_payload("t", {"isError": True}), ctx, _trace())
+        assert "retry_policy" not in result.metadata
 
     @pytest.mark.asyncio
     async def test_resource_post_fetch_returns_policy_metadata(self):
@@ -198,6 +207,100 @@ class TestRetryPolicyMetadata:
         content = ResourceContent(type="resource", id="r1", uri="file:///data.txt", text="hello")
         payload = ResourcePostFetchPayload(uri="file:///data.txt", content=content)
         result = await plugin.resource_post_fetch(payload, ctx)
+        assert result.metadata["retry_policy"] == {
+            "max_retries": 2,
+            "backoff_base_ms": 150,
+            "max_backoff_ms": 3000,
+            "retry_on_status": [503],
+        }
+
+
+# ---------------------------------------------------------------------------
+# Metrics emission (issue #129): trace_id-gated result.metadata["retry_with_backoff"]
+# ---------------------------------------------------------------------------
+
+
+def _trace(trace_id: str = "t1") -> Extensions:
+    return Extensions(request=RequestExtension(trace_id=trace_id))
+
+
+class TestMetricsEmission:
+    """Exercise the namespaced `result.metadata["retry_with_backoff"]` metrics
+    across all three `tool_post_invoke` result-building branches: success,
+    within-budget retry, and exhausted-budget. Mirrors the
+    pii_filter/secrets_detection/rate_limiter contract: metrics are gated on
+    `trace_id` and emit exactly `retry_count` + `retry_delay_ms` — no
+    cumulative backoff total is tracked or emitted.
+    """
+
+    @pytest.mark.asyncio
+    async def test_success_branch_gates_on_trace_id(self):
+        plugin = make_plugin({"max_retries": 2, "jitter": False})
+        ctx = make_context()
+
+        # Without trace_id: no metadata write at all.
+        result = await plugin.tool_post_invoke(make_payload("t", {"result": "ok"}), ctx)
+        assert result.retry_delay_ms == 0
+        assert result.metadata == {}
+
+        # With trace_id: namespaced metrics present, both counters zero.
+        result = await plugin.tool_post_invoke(make_payload("t", {"result": "ok"}), ctx, _trace())
+        assert result.retry_delay_ms == 0
+        metrics = result.metadata["retry_with_backoff"]
+        assert metrics["retry_count"] == 0
+        assert metrics["retry_delay_ms"] == 0
+
+    @pytest.mark.asyncio
+    async def test_within_budget_branch_emits_count_and_positive_delay(self):
+        plugin = make_plugin({"max_retries": 3, "backoff_base_ms": 200, "jitter": False})
+        ctx = make_context()
+        payload = make_payload("t", {"isError": True})
+
+        # Without trace_id: retry still happens, but no metadata write.
+        result = await plugin.tool_post_invoke(payload, ctx)
+        assert result.retry_delay_ms > 0
+        assert result.metadata == {}
+
+        # With trace_id: retry_count/retry_delay_ms reflect this attempt.
+        result = await plugin.tool_post_invoke(payload, ctx, _trace())
+        assert result.retry_delay_ms == 400  # second consecutive failure -> attempt 1
+        metrics = result.metadata["retry_with_backoff"]
+        assert metrics["retry_count"] == 2
+        assert metrics["retry_delay_ms"] == 400
+
+    @pytest.mark.asyncio
+    async def test_exhausted_branch_emits_final_count_and_zero_delay(self):
+        plugin = make_plugin({"max_retries": 1, "jitter": False})
+        ctx = make_context()
+        payload = make_payload("t", {"isError": True})
+
+        await plugin.tool_post_invoke(payload, ctx, _trace())  # failure 1 (within budget)
+        result = await plugin.tool_post_invoke(payload, ctx, _trace())  # failure 2 -> exhausted
+
+        assert result.retry_delay_ms == 0
+        metrics = result.metadata["retry_with_backoff"]
+        assert metrics["retry_count"] == 2
+        assert metrics["retry_delay_ms"] == 0
+
+    @pytest.mark.asyncio
+    async def test_without_extensions_arg_is_backward_compatible(self):
+        # Legacy 2-arg call (no `extensions`) must not error.
+        plugin = make_plugin({"max_retries": 2, "jitter": False})
+        ctx = make_context()
+        result = await plugin.tool_post_invoke(make_payload("t", {"isError": True}), ctx)
+        assert result.retry_delay_ms > 0
+        assert result.metadata == {}
+
+    @pytest.mark.asyncio
+    async def test_resource_post_fetch_is_unaffected_by_metrics_rollout(self):
+        # Out of scope for issue #129: no `extensions` param, still emits the
+        # legacy un-namespaced `retry_policy` echo, exactly as before.
+        plugin = make_plugin({"max_retries": 2, "backoff_base_ms": 150, "max_backoff_ms": 3000, "retry_on_status": [503]})
+        ctx = make_context()
+        content = ResourceContent(type="resource", id="r1", uri="file:///data.txt", text="hello")
+        payload = ResourcePostFetchPayload(uri="file:///data.txt", content=content)
+        result = await plugin.resource_post_fetch(payload, ctx)
+        assert "retry_with_backoff" not in result.metadata
         assert result.metadata["retry_policy"] == {
             "max_retries": 2,
             "backoff_base_ms": 150,

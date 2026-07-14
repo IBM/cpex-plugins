@@ -56,9 +56,10 @@ class RetryWithBackoffPlugin(Plugin):
         self,
         payload: ToolPostInvokePayload,
         context: PluginContext,
+        extensions=None,
     ) -> ToolPostInvokeResult:
         """Delegate to Rust core for tool post-invoke processing."""
-        return self._core.tool_post_invoke(payload, context)
+        return self._core.tool_post_invoke(payload, context, extensions)
 
     async def resource_post_fetch(
         self,

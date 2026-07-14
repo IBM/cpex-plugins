@@ -421,7 +421,7 @@ checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
 
 [[package]]
 name = "encoded_exfil_detection"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "base64",
  "cpex_framework_bridge",
@@ -1332,9 +1332,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-stub-gen"
-version = "0.22.3"
+version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1242a6080f45edcfaf3be3b9968914dd47a408c5590aea22770b978f7c36ffa7"
+checksum = "a267ea4da9a831f534def7f1d8e14f581d5640d3e5af6527072724f216f4dbbf"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1358,9 +1358,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-stub-gen-derive"
-version = "0.22.4"
+version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "643db6033267fd2f875fc8970d76bef247bbcdfcffe3ea5c6cd40424024f6c89"
+checksum = "6573423a5e8cc43ec7565eccccbc2dd35e1fc9032d9ca404afab875429eb8cf0"
 dependencies = [
  "heck",
  "indexmap",
@@ -1440,7 +1440,7 @@ checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 
 [[package]]
 name = "rate_limiter"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "cpex_framework_bridge",
  "criterion",
@@ -1565,7 +1565,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "retry_with_backoff"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "cpex_framework_bridge",
  "log",
@@ -1748,7 +1748,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "secrets_detection"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "cpex_framework_bridge",
  "criterion",
@@ -2252,7 +2252,7 @@ dependencies = [
 
 [[package]]
 name = "url_reputation"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "criterion",
  "idna",

@@ -97,13 +97,36 @@ config:
 
 ## Returned Metadata
 
-When detections occur, the plugin can emit:
+`prompt_pre_fetch`, `tool_pre_invoke`, `tool_post_invoke`, and `resource_post_fetch` accept an optional `extensions` parameter carrying OpenTelemetry trace context. When a trace context is present (via `extensions.request.trace_id`), the plugin emits operational metrics on `result.metadata["secrets_detection"]` with the following schema:
 
-- `metadata.count`
-- `metadata.secrets_redacted=true` when redaction happened
-- `metadata.secrets_findings=[{"type": "..."}]` when reporting findings without redaction
+```python
+result.metadata["secrets_detection"] = {
+    "total_detections": 2,   # int — total number of findings in this call
+    "total_masked": 2,       # int — number redacted (masking action taken)
+    "total_blocked": 0,      # int — number that caused a block (blocking action taken)
+    "secret_types": ["aws_access_key_id", "slack_token"],  # list[str] — distinct type names, sorted, deduped
+}
+```
+
+`total_masked` and `total_blocked` are mutually exclusive per call: exactly one of them carries the finding count (the other is `0`), depending on whether the redaction branch or the blocking branch executed. If neither redaction nor blocking is configured, both are `0` and only `total_detections`/`secret_types` are non-zero (findings-only reporting mode).
+
+**Gating:** Metrics are only emitted when a valid `trace_id` is present in the trace context (`extensions.request.trace_id`). No trace context means no `result.metadata` write at all, regardless of any config flag — this keeps the untraced path byte-for-byte identical to before metrics existed.
+
+**Security Note (S1):** The plugin **never includes raw secret values** in `result.metadata`, logs, or any other output. Only counts and type-category names (e.g. `"aws_access_key_id"`) are reported.
+
+`tool_pre_invoke` is in scope for this metrics contract on the same terms as the other 3 hooks: it accepts `extensions` and emits `result.metadata["secrets_detection"]` under the identical gating/schema once a valid `trace_id` is present.
 
 Blocking responses use the `SECRETS_DETECTED` violation code.
+
+## Migration Note
+
+Version `0.3.7` is a **breaking change** for any existing consumer reading detection metadata:
+
+- The old flat `result.metadata` keys — `secrets_redacted`, `count` (redaction path) and `secrets_findings`, `count` (findings-only path) — have been removed entirely. There is no compatibility shim; code reading those keys will silently stop receiving data.
+- Detection/redaction/blocking metrics are now emitted on `result.metadata["secrets_detection"]` instead, with keys `total_detections`, `total_masked`, `total_blocked`, and `secret_types` (see [Returned Metadata](#returned-metadata) above for the full schema).
+- All 4 hooks — `prompt_pre_fetch`, `tool_pre_invoke`, `tool_post_invoke`, and `resource_post_fetch` — now accept a new optional `extensions` parameter carrying OpenTelemetry trace context. Emission to `result.metadata["secrets_detection"]` is gated solely on `extensions.request.trace_id` being present and valid — if no trace context is supplied, no metrics are written at all, regardless of any config flag.
+- Consumers that previously read `result.metadata["secrets_redacted"]` / `result.metadata["secrets_findings"]` unconditionally must migrate to reading `result.metadata["secrets_detection"]` and must pass a `trace_id` via `extensions` to receive metrics.
+- `tool_pre_invoke` previously never received `extensions` and could never emit metrics (a regression introduced earlier on this branch, since fixed) — it now follows the exact same contract as the other 3 hooks.
 
 ## Security Notes
 

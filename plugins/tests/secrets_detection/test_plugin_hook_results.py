@@ -1,5 +1,6 @@
 import pytest
 
+from cpex.framework.extensions import Extensions, RequestExtension
 from cpex.framework.hooks.policies import HookPayloadPolicy, apply_policy
 from cpex.framework.memory import wrap_payload_for_isolation
 
@@ -35,7 +36,8 @@ class TestPluginHookResults:
             == "AWS_ACCESS_KEY_ID=[REDACTED]"
         )
         assert result.modified_payload.result["isError"] is False
-        assert result.metadata == {"secrets_redacted": True, "count": 1}
+        # No extensions/trace_id passed => gated, no metadata write at all.
+        assert result.metadata == {}
 
     async def test_tool_post_invoke_redaction_survives_cpex_policy_with_isolated_payload(self, plugin):
         payload = ToolPostInvokePayload(
@@ -211,10 +213,8 @@ class TestPluginHookResults:
 
         assert result.continue_processing is True
         assert result.violation is None
-        assert result.metadata == {
-            "count": 1,
-            "secrets_findings": [{"type": "aws_access_key_id"}],
-        }
+        # No extensions/trace_id passed => gated, no metadata write at all.
+        assert result.metadata == {}
 
     async def test_tool_post_invoke_does_not_double_count_model_dump_list_fields(self):
         class SecretListModel(BaseModel):
@@ -232,10 +232,8 @@ class TestPluginHookResults:
 
         assert result.continue_processing is True
         assert result.violation is None
-        assert result.metadata == {
-            "count": 1,
-            "secrets_findings": [{"type": "aws_access_key_id"}],
-        }
+        # No extensions/trace_id passed => gated, no metadata write at all.
+        assert result.metadata == {}
 
     async def test_tool_post_invoke_does_not_double_count_root_model(self):
         plugin = SecretsDetectionPlugin(
@@ -250,10 +248,8 @@ class TestPluginHookResults:
 
         assert result.continue_processing is True
         assert result.violation is None
-        assert result.metadata == {
-            "count": 1,
-            "secrets_findings": [{"type": "aws_access_key_id"}],
-        }
+        # No extensions/trace_id passed => gated, no metadata write at all.
+        assert result.metadata == {}
 
     async def test_tool_post_invoke_redacts_secret_exposed_only_by_model_dump(self, plugin):
         class SplitSecretModel(BaseModel):
@@ -274,7 +270,8 @@ class TestPluginHookResults:
         assert result.continue_processing is True
         assert result.modified_payload is not None
         assert result.modified_payload.result == "[REDACTED]"
-        assert result.metadata == {"secrets_redacted": True, "count": 1}
+        # No extensions/trace_id passed => gated, no metadata write at all.
+        assert result.metadata == {}
 
     async def test_tool_post_invoke_redacts_secret_exposed_only_by_root_model_dump(
         self, plugin
@@ -323,7 +320,8 @@ class TestPluginHookResults:
         assert result.continue_processing is True
         assert result.modified_payload is not None
         assert result.modified_payload.content.text == "SLACK_TOKEN=[REDACTED]"
-        assert result.metadata == {"secrets_redacted": True, "count": 1}
+        # No extensions/trace_id passed => gated, no metadata write at all.
+        assert result.metadata == {}
 
     async def test_resource_post_fetch_redaction_survives_cpex_policy_with_isolated_payload(self, plugin):
         payload = ResourcePostFetchPayload(
@@ -391,3 +389,143 @@ class TestPluginHookResults:
         assert result.violation is not None
         assert result.violation.code == "SECRETS_DETECTED"
         assert result.modified_payload == payload
+
+    async def test_tool_post_invoke_emits_namespaced_metrics_when_trace_id_present(self, plugin):
+        ext = Extensions(request=RequestExtension(trace_id="t1"))
+        payload = ToolPostInvokePayload(
+            name="writer",
+            result={
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE",
+                    }
+                ],
+                "isError": False,
+            },
+        )
+
+        result = await plugin.tool_post_invoke(payload, make_context(), ext)
+
+        metrics = result.metadata["secrets_detection"]
+        assert metrics["total_detections"] == 1
+        assert metrics["total_masked"] == 1
+        assert metrics["total_blocked"] == 0
+        assert metrics["secret_types"] == ["aws_access_key_id"]
+
+    async def test_tool_post_invoke_without_extensions_is_backward_compatible(self, plugin):
+        payload = ToolPostInvokePayload(
+            name="writer",
+            result={"content": [{"type": "text", "text": "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"}], "isError": False},
+        )
+
+        # Legacy 2-arg call (no `extensions`) must not error.
+        result = await plugin.tool_post_invoke(payload, make_context())
+
+        assert result.continue_processing is True
+        assert result.metadata == {}
+
+    async def test_tool_post_invoke_legacy_flat_keys_are_gone(self, plugin):
+        ext = Extensions(request=RequestExtension(trace_id="t1"))
+        payload = ToolPostInvokePayload(
+            name="writer",
+            result={"content": [{"type": "text", "text": "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"}], "isError": False},
+        )
+
+        result = await plugin.tool_post_invoke(payload, make_context(), ext)
+
+        assert "secrets_redacted" not in result.metadata
+        assert "secrets_findings" not in result.metadata
+        assert "count" not in result.metadata
+
+    async def test_tool_post_invoke_no_sensitive_content_in_metrics(self, plugin):
+        """S1: the raw secret value must never appear in result.metadata."""
+        ext = Extensions(request=RequestExtension(trace_id="t1"))
+        secret = "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
+        payload = ToolPostInvokePayload(
+            name="writer",
+            result={"content": [{"type": "text", "text": secret}], "isError": False},
+        )
+
+        result = await plugin.tool_post_invoke(payload, make_context(), ext)
+
+        assert secret not in str(result.metadata)
+        assert "AKIAFAKE12345EXAMPLE" not in str(result.metadata)
+
+    async def test_resource_post_fetch_emits_namespaced_metrics_when_trace_id_present(self, plugin):
+        ext = Extensions(request=RequestExtension(trace_id="t1"))
+        payload = ResourcePostFetchPayload(
+            uri="file:///tmp/secret.txt",
+            content=ResourceContent(
+                type="resource",
+                id="res-1",
+                uri="file:///tmp/secret.txt",
+                text="SLACK_TOKEN=xoxr-fake-000000000-fake000000000-fakefakefakefake",
+            ),
+        )
+
+        result = await plugin.resource_post_fetch(payload, make_context(), ext)
+
+        metrics = result.metadata["secrets_detection"]
+        assert metrics["total_detections"] == 1
+        assert metrics["total_masked"] == 1
+        assert metrics["total_blocked"] == 0
+        assert metrics["secret_types"] == ["slack_token"]
+        assert "xoxr-fake-000000000-fake000000000-fakefakefakefake" not in str(result.metadata)
+
+    async def test_resource_post_fetch_blocks_and_emits_total_blocked_when_trace_id_present(self):
+        plugin = SecretsDetectionPlugin(
+            make_config(block_on_detection=True, redact=False, min_findings_to_block=1)
+        )
+        ext = Extensions(request=RequestExtension(trace_id="t1"))
+        payload = ResourcePostFetchPayload(
+            uri="file:///tmp/secret.txt",
+            content=ResourceContent(
+                type="resource",
+                id="res-1",
+                uri="file:///tmp/secret.txt",
+                text="AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE",
+            ),
+        )
+
+        result = await plugin.resource_post_fetch(payload, make_context(), ext)
+
+        metrics = result.metadata["secrets_detection"]
+        assert metrics["total_blocked"] == 1
+        assert metrics["total_masked"] == 0
+        assert "AKIAFAKE12345EXAMPLE" not in str(result.metadata)
+
+    async def test_resource_post_fetch_without_extensions_is_backward_compatible(self, plugin):
+        payload = ResourcePostFetchPayload(
+            uri="file:///tmp/secret.txt",
+            content=ResourceContent(
+                type="resource",
+                id="res-1",
+                uri="file:///tmp/secret.txt",
+                text="SLACK_TOKEN=xoxr-fake-000000000-fake000000000-fakefakefakefake",
+            ),
+        )
+
+        # Legacy 2-arg call (no `extensions`) must not error.
+        result = await plugin.resource_post_fetch(payload, make_context())
+
+        assert result.continue_processing is True
+        assert result.metadata == {}
+
+    async def test_resource_post_fetch_legacy_flat_keys_are_gone(self, plugin):
+        ext = Extensions(request=RequestExtension(trace_id="t1"))
+        payload = ResourcePostFetchPayload(
+            uri="file:///tmp/secret.txt",
+            content=ResourceContent(
+                type="resource",
+                id="res-1",
+                uri="file:///tmp/secret.txt",
+                text="SLACK_TOKEN=xoxr-fake-000000000-fake000000000-fakefakefakefake",
+            ),
+        )
+
+        result = await plugin.resource_post_fetch(payload, make_context(), ext)
+
+        assert "secrets_redacted" not in result.metadata
+        assert "secrets_findings" not in result.metadata
+        assert "count" not in result.metadata

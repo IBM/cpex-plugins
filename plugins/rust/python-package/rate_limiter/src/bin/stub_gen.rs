@@ -27,7 +27,7 @@ fn curate_extension_stub() {
     );
     if !content.contains("class RateLimiterPluginCore:") {
         content.push_str(
-            "\n\n@typing.final\nclass RateLimiterPluginCore:\n    def __new__(cls, config: dict) -> RateLimiterPluginCore: ...\n    def prompt_pre_fetch(self, payload: typing.Any, context: typing.Any) -> typing.Any: ...\n    def tool_pre_invoke(self, payload: typing.Any, context: typing.Any) -> typing.Any: ...\n",
+            "\n\n@typing.final\nclass RateLimiterPluginCore:\n    def __new__(cls, config: dict) -> RateLimiterPluginCore: ...\n    def prompt_pre_fetch(self, payload: typing.Any, context: typing.Any, extensions: typing.Any = None) -> typing.Any: ...\n    def tool_pre_invoke(self, payload: typing.Any, context: typing.Any, extensions: typing.Any = None) -> typing.Any: ...\n",
         );
     }
     if !content.contains("def compat_default_config()") {

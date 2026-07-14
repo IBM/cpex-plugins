@@ -6,7 +6,7 @@
 
 use std::sync::{Arc, OnceLock};
 
-use cpex_framework_bridge::{build_framework_object, default_result};
+use cpex_framework_bridge::{build_framework_object, build_framework_object_dyn, default_result};
 use log::warn;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyModule, PyTuple};
@@ -72,12 +72,16 @@ impl RateLimiterPluginCore {
         self.engine.shutdown();
     }
 
+    #[pyo3(signature = (payload, context, extensions=None))]
     pub fn prompt_pre_fetch<'py>(
         &self,
         py: Python<'py>,
         payload: &Bound<'_, PyAny>,
         context: &Bound<'_, PyAny>,
+        extensions: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let trace_id = read_trace_id(extensions);
+        let backend = self.backend_label();
         let prompt = payload
             .getattr("prompt_id")?
             .extract::<String>()?
@@ -102,6 +106,8 @@ impl RateLimiterPluginCore {
                     allowed,
                     headers.bind(py),
                     meta.bind(py),
+                    trace_id.as_deref(),
+                    backend,
                 )?
                 .into_bound(py)),
                 Err(_err) => {
@@ -116,6 +122,7 @@ impl RateLimiterPluginCore {
 
         let engine = Arc::clone(&self.engine);
         let context_prefix_owned = context_prefix.map(|s| s.to_string());
+        let trace_id_owned = trace_id.clone();
         future_into_py(py, async move {
             match evaluate_async_request(
                 &engine,
@@ -133,6 +140,8 @@ impl RateLimiterPluginCore {
                         allowed,
                         headers.bind(py),
                         meta.bind(py),
+                        trace_id_owned.as_deref(),
+                        backend,
                     )
                 }),
                 Err(_err) => Python::attach(|py| {
@@ -143,12 +152,16 @@ impl RateLimiterPluginCore {
         })
     }
 
+    #[pyo3(signature = (payload, context, extensions=None))]
     pub fn tool_pre_invoke<'py>(
         &self,
         py: Python<'py>,
         payload: &Bound<'_, PyAny>,
         context: &Bound<'_, PyAny>,
+        extensions: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let trace_id = read_trace_id(extensions);
+        let backend = self.backend_label();
         let tool = payload
             .getattr("name")?
             .extract::<String>()?
@@ -171,6 +184,8 @@ impl RateLimiterPluginCore {
                     allowed,
                     headers.bind(py),
                     meta.bind(py),
+                    trace_id.as_deref(),
+                    backend,
                 )?
                 .into_bound(py)),
                 Err(_err) => {
@@ -185,6 +200,7 @@ impl RateLimiterPluginCore {
 
         let engine = Arc::clone(&self.engine);
         let context_prefix_owned = context_prefix.map(|s| s.to_string());
+        let trace_id_owned = trace_id.clone();
         future_into_py(py, async move {
             match evaluate_async_request(
                 &engine,
@@ -202,6 +218,8 @@ impl RateLimiterPluginCore {
                         allowed,
                         headers.bind(py),
                         meta.bind(py),
+                        trace_id_owned.as_deref(),
+                        backend,
                     )
                 }),
                 Err(_err) => Python::attach(|py| {
@@ -210,6 +228,16 @@ impl RateLimiterPluginCore {
                 }),
             }
         })
+    }
+}
+
+impl RateLimiterPluginCore {
+    /// `"redis"` or `"memory"` — mirrors `engine.uses_async_backend()`
+    /// (Redis is the only async backend today). Used only to label the
+    /// `backend` field in the namespaced metrics dict; never on the
+    /// no-trace-id path since callers gate before formatting it in.
+    fn backend_label(&self) -> &'static str {
+        if self.use_async { "redis" } else { "memory" }
     }
 }
 
@@ -366,42 +394,115 @@ fn build_prehook_result(
     allowed: bool,
     headers: &Bound<'_, PyDict>,
     meta: &Bound<'_, PyDict>,
+    trace_id: Option<&str>,
+    backend: &str,
 ) -> PyResult<Py<PyAny>> {
     if meta
         .get_item("limited")?
         .and_then(|value| value.extract::<bool>().ok())
         == Some(false)
     {
-        return build_framework_object(
-            py,
-            class_name,
-            [("metadata", meta.clone().into_any().unbind())],
-        );
+        // No rate limit configured for this dimension: always allowed.
+        let mut kwargs: Vec<(&str, Py<PyAny>)> = Vec::new();
+        push_rate_limiter_metrics_kwarg(py, trace_id, &mut kwargs, true, backend, meta);
+        if kwargs.is_empty() {
+            return default_result(py, class_name);
+        }
+        return build_framework_object_dyn(py, class_name, kwargs);
     }
 
     if !allowed {
-        return build_framework_object(
-            py,
-            class_name,
-            [
-                (
-                    "continue_processing",
-                    false.into_pyobject(py)?.to_owned().into_any().unbind(),
-                ),
-                ("violation", build_violation(py, meta, headers)?),
-            ],
-        );
+        let mut kwargs: Vec<(&str, Py<PyAny>)> = vec![
+            (
+                "continue_processing",
+                false.into_pyobject(py)?.to_owned().into_any().unbind(),
+            ),
+            ("violation", build_violation(py, meta, headers)?),
+        ];
+        // Throttled: this is exactly the event the metric exists to count,
+        // so it must be emitted here too, not only on the allowed path.
+        push_rate_limiter_metrics_kwarg(py, trace_id, &mut kwargs, false, backend, meta);
+        return build_framework_object_dyn(py, class_name, kwargs);
     }
 
     headers.del_item("Retry-After").ok();
-    build_framework_object(
-        py,
-        class_name,
-        [
-            ("metadata", meta.clone().into_any().unbind()),
-            ("http_headers", headers.clone().into_any().unbind()),
-        ],
-    )
+    let mut kwargs: Vec<(&str, Py<PyAny>)> =
+        vec![("http_headers", headers.clone().into_any().unbind())];
+    push_rate_limiter_metrics_kwarg(py, trace_id, &mut kwargs, true, backend, meta);
+    build_framework_object_dyn(py, class_name, kwargs)
+}
+
+/// Build the namespaced metrics dict for the `result.metadata` channel.
+/// Returns `None` (no work) when `trace_id` is absent (gate: no trace means
+/// no metrics). Emits only `allowed`/`throttled`/`backend` — the sole fields
+/// that are (a) scalars, matching the gateway's S4 sanitizer contract
+/// (`mcpgateway/plugins/utils.py`), which only allowlists scalar or
+/// `list[str]` metadata fields, and (b) actually present in that sanitizer's
+/// numeric allowlist. Earlier revisions also folded in `limited`/`remaining`/
+/// `reset_in` (plain ints not in the gateway's numeric allowlist) and
+/// `dimensions` (a nested dict, which the sanitizer drops unconditionally
+/// regardless of allowlisting since it isn't scalar or `list[str]`) — those
+/// were dead weight that could never reach the consumer, so they were
+/// removed rather than kept as misleading no-op fields.
+fn build_rate_limiter_metrics<'py>(
+    py: Python<'py>,
+    trace_id: Option<&str>,
+    allowed: bool,
+    backend: &str,
+    _meta: &Bound<'py, PyDict>,
+) -> PyResult<Option<Bound<'py, PyDict>>> {
+    if trace_id.is_none() {
+        return Ok(None);
+    }
+    let inner = PyDict::new(py);
+    inner.set_item("allowed", if allowed { 1 } else { 0 })?;
+    inner.set_item("throttled", if allowed { 0 } else { 1 })?;
+    inner.set_item("backend", backend)?;
+    let outer = PyDict::new(py);
+    outer.set_item("rate_limiter", inner)?;
+    Ok(Some(outer))
+}
+
+/// Best-effort attach of the namespaced metrics dict onto `kwargs` when
+/// `trace_id` is present. Never fails the caller: any error building the
+/// metrics dict is logged once and metrics are omitted, so the normal
+/// rate-limit result is still returned.
+///
+/// Gates on `trace_id` before touching `meta` at all, so untraced requests
+/// (the common case) never pay for the allowlist copy.
+fn push_rate_limiter_metrics_kwarg(
+    py: Python<'_>,
+    trace_id: Option<&str>,
+    kwargs: &mut Vec<(&str, Py<PyAny>)>,
+    allowed: bool,
+    backend: &str,
+    meta: &Bound<'_, PyDict>,
+) {
+    let Some(tid) = trace_id else {
+        return;
+    };
+    match build_rate_limiter_metrics(py, Some(tid), allowed, backend, meta) {
+        Ok(Some(md)) => kwargs.push(("metadata", md.into_any().unbind())),
+        Ok(None) => {}
+        Err(e) => log::warn!("rate_limiter: metrics build failed, omitting: {e}"),
+    }
+}
+
+/// Best-effort read of `extensions.request.trace_id`. Returns `None` on any
+/// missing attribute, `None` value, wrong type, or PyO3 error — never raises.
+/// Mirrors `pii_filter::plugin::read_trace_id` / `secrets_detection::plugin::read_trace_id`.
+fn read_trace_id(extensions: Option<&Bound<'_, PyAny>>) -> Option<String> {
+    let ext = extensions?;
+    let request = ext.getattr("request").ok()?;
+    if request.is_none() {
+        return None;
+    }
+    let trace = request.getattr("trace_id").ok()?;
+    if trace.is_none() {
+        return None;
+    }
+    let s: String = trace.extract().ok()?;
+    if s.is_empty() { None } else { Some(s) }
 }
 
 /// Build a prehook/tool result that carries a BACKEND_UNAVAILABLE violation.
@@ -542,8 +643,318 @@ fn log_exception(py: Python<'_>, message: &str) -> PyResult<()> {
 mod tests {
     use super::await_async_tuple;
     use super::ensure_crypto_provider;
+    use super::{RateLimiterPluginCore, read_trace_id};
     use pyo3::prelude::*;
-    use pyo3::types::{PyAnyMethods, PyDictMethods, PyModule};
+    use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods, PyModule};
+
+    /// Installs a minimal fake `cpex.framework` module so tests can exercise
+    /// the real `#[pymethods]` entry points end to end without depending on
+    /// the real `cpex` package being importable in the test environment.
+    /// Mirrors the equivalent helper in `pii_filter`/`secrets_detection`.
+    fn install_framework_module(py: Python<'_>) -> PyResult<()> {
+        let framework = PyModule::from_code(
+            py,
+            pyo3::ffi::c_str!(
+                r#"
+class PluginViolation:
+    def __init__(self, reason="", description="", code="", details=None, http_status_code=None, http_headers=None):
+        self.reason = reason
+        self.description = description
+        self.code = code
+        self.details = details
+        self.http_status_code = http_status_code
+        self.http_headers = http_headers
+
+class PromptPrehookResult:
+    def __init__(self, continue_processing=True, violation=None, modified_payload=None, metadata=None, http_headers=None):
+        self.continue_processing = continue_processing
+        self.violation = violation
+        self.modified_payload = modified_payload
+        self.metadata = metadata or {}
+        self.http_headers = http_headers
+
+class ToolPreInvokeResult(PromptPrehookResult):
+    pass
+"#
+            ),
+            pyo3::ffi::c_str!("framework.py"),
+            pyo3::ffi::c_str!("cpex.framework"),
+        )?;
+        let cpex = PyModule::from_code(
+            py,
+            pyo3::ffi::c_str!(""),
+            pyo3::ffi::c_str!("cpex.py"),
+            pyo3::ffi::c_str!("cpex"),
+        )?;
+        cpex.setattr("framework", &framework)?;
+        let modules = PyModule::import(py, "sys")?
+            .getattr("modules")?
+            .cast_into::<PyDict>()?;
+        modules.set_item("cpex", cpex)?;
+        modules.set_item("cpex.framework", framework)?;
+        Ok(())
+    }
+
+    /// Builds fake `ToolPreInvokePayload`/`PromptPrehookPayload`-shaped
+    /// objects and a `PluginContext`-shaped object carrying `global_context`,
+    /// enough to satisfy `extract_request_context`.
+    fn payload_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
+        PyModule::from_code(
+            py,
+            pyo3::ffi::c_str!(
+                r#"
+class ToolPayload:
+    def __init__(self, name):
+        self.name = name
+
+class PromptPayload:
+    def __init__(self, prompt_id):
+        self.prompt_id = prompt_id
+
+class GlobalContext:
+    def __init__(self, user):
+        self.user = user
+        self.tenant_id = None
+
+class Context:
+    def __init__(self, user):
+        self.global_context = GlobalContext(user)
+"#
+            ),
+            pyo3::ffi::c_str!("rl_test_payloads.py"),
+            pyo3::ffi::c_str!("rl_test_payloads"),
+        )
+    }
+
+    fn extensions_with_trace<'py>(py: Python<'py>, trace_id: &str) -> PyResult<Bound<'py, PyAny>> {
+        let ext_module = PyModule::from_code(
+            py,
+            pyo3::ffi::c_str!(
+                "class Req:\n    def __init__(self, t):\n        self.trace_id = t\n\
+                 class Ext:\n    def __init__(self, t):\n        self.request = Req(t)\n"
+            ),
+            pyo3::ffi::c_str!("rl_ext.py"),
+            pyo3::ffi::c_str!("rl_ext"),
+        )?;
+        ext_module.getattr("Ext")?.call1((trace_id,))
+    }
+
+    #[test]
+    fn read_trace_id_returns_value_when_present_and_none_otherwise() {
+        Python::initialize();
+        Python::attach(|py| {
+            let with_id = extensions_with_trace(py, "abc123").unwrap();
+            let without = extensions_with_trace(py, "").unwrap();
+            assert_eq!(read_trace_id(Some(&with_id)), Some("abc123".to_string()));
+            assert_eq!(read_trace_id(Some(&without)), None);
+            assert_eq!(read_trace_id(None), None);
+        });
+    }
+
+    #[test]
+    fn plugin_core_backend_label_reflects_config_backend() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let memory_cfg = PyDict::new(py);
+            memory_cfg.set_item("backend", "memory")?;
+            let memory_plugin = RateLimiterPluginCore::new(&memory_cfg)?;
+            assert_eq!(memory_plugin.backend_label(), "memory");
+
+            // redis::Client::open() only validates the URL shape; it does not
+            // connect, so this constructs without a live Redis server.
+            let redis_cfg = PyDict::new(py);
+            redis_cfg.set_item("backend", "redis")?;
+            redis_cfg.set_item("redis_url", "redis://127.0.0.1:1/0")?;
+            let redis_plugin = RateLimiterPluginCore::new(&redis_cfg)?;
+            assert_eq!(redis_plugin.backend_label(), "redis");
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn tool_pre_invoke_no_limits_configured_gates_metrics_on_trace_id() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            install_framework_module(py)?;
+            let module = payload_module(py)?;
+
+            let config = PyDict::new(py);
+            config.set_item("backend", "memory")?;
+            let plugin = RateLimiterPluginCore::new(&config)?;
+
+            let payload = module.getattr("ToolPayload")?.call1(("search",))?;
+            let context = module.getattr("Context")?.call1(("alice",))?;
+
+            // No trace_id: the early-return-not-limited branch must not write
+            // any metadata at all, even though the call is (trivially) allowed.
+            let result = plugin.tool_pre_invoke(py, &payload, &context, None)?;
+            let metadata = result.getattr("metadata")?.cast_into::<PyDict>()?;
+            assert_eq!(metadata.len(), 0);
+
+            // With trace_id: namespaced metrics show allowed=1/throttled=0 and
+            // the configured backend. Only these 3 scalar fields are emitted —
+            // `limited`/`remaining`/`reset_in`/`dimensions` from the engine's
+            // own `meta` dict are deliberately NOT folded in, since the
+            // gateway's S4 sanitizer can never accept them (scalars not in
+            // its numeric allowlist, or a nested dict it always drops).
+            let ext = extensions_with_trace(py, "t1")?;
+            let result = plugin.tool_pre_invoke(py, &payload, &context, Some(&ext))?;
+            let metadata = result.getattr("metadata")?.cast_into::<PyDict>()?;
+            let metrics = metadata
+                .get_item("rate_limiter")?
+                .expect("namespaced metrics present");
+            assert_eq!(metrics.get_item("allowed")?.extract::<i64>()?, 1);
+            assert_eq!(metrics.get_item("throttled")?.extract::<i64>()?, 0);
+            assert_eq!(metrics.get_item("backend")?.extract::<String>()?, "memory");
+            let keys: std::collections::HashSet<String> = metrics
+                .cast::<PyDict>()
+                .expect("metrics value is a dict")
+                .keys()
+                .iter()
+                .map(|k| k.extract::<String>().unwrap())
+                .collect();
+            assert_eq!(
+                keys,
+                ["allowed", "throttled", "backend"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+            );
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn tool_pre_invoke_allowed_emits_metrics_and_headers_with_trace_id_present() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            install_framework_module(py)?;
+            let module = payload_module(py)?;
+
+            let config = PyDict::new(py);
+            config.set_item("by_user", "5/s")?;
+            config.set_item("backend", "memory")?;
+            let plugin = RateLimiterPluginCore::new(&config)?;
+
+            let payload = module.getattr("ToolPayload")?.call1(("search",))?;
+            let context = module.getattr("Context")?.call1(("bob",))?;
+
+            // No trace_id: http_headers still returned (unrelated to metrics
+            // gating), but metadata is empty.
+            let result = plugin.tool_pre_invoke(py, &payload, &context, None)?;
+            assert!(!result.getattr("http_headers")?.is_none());
+            let metadata = result.getattr("metadata")?.cast_into::<PyDict>()?;
+            assert_eq!(metadata.len(), 0);
+
+            // With trace_id: allowed branch emits ONLY allowed/throttled/backend
+            // in the namespaced write — `limited`/`remaining`/`reset_in` are not
+            // folded in (they can never pass the gateway's S4 sanitizer, which
+            // only allowlists scalar/list[str] fields it also allowlists by
+            // name; these plain ints simply aren't on that allowlist).
+            let ext = extensions_with_trace(py, "t1")?;
+            let payload2 = module.getattr("ToolPayload")?.call1(("search",))?;
+            let context2 = module.getattr("Context")?.call1(("carol",))?;
+            let result = plugin.tool_pre_invoke(py, &payload2, &context2, Some(&ext))?;
+            assert!(!result.getattr("http_headers")?.is_none());
+            let metadata = result.getattr("metadata")?.cast_into::<PyDict>()?;
+            let metrics = metadata
+                .get_item("rate_limiter")?
+                .expect("namespaced metrics present");
+            assert_eq!(metrics.get_item("allowed")?.extract::<i64>()?, 1);
+            assert_eq!(metrics.get_item("throttled")?.extract::<i64>()?, 0);
+            assert_eq!(metrics.get_item("backend")?.extract::<String>()?, "memory");
+            let keys: std::collections::HashSet<String> = metrics
+                .cast::<PyDict>()
+                .expect("metrics value is a dict")
+                .keys()
+                .iter()
+                .map(|k| k.extract::<String>().unwrap())
+                .collect();
+            assert_eq!(
+                keys,
+                ["allowed", "throttled", "backend"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+            );
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn tool_pre_invoke_throttled_emits_metrics_without_identifiers_when_trace_id_present() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            install_framework_module(py)?;
+            let module = payload_module(py)?;
+
+            let config = PyDict::new(py);
+            config.set_item("by_user", "1/s")?;
+            config.set_item("backend", "memory")?;
+            let plugin = RateLimiterPluginCore::new(&config)?;
+
+            let ext = extensions_with_trace(py, "t1")?;
+            let payload = module.getattr("ToolPayload")?.call1(("search",))?;
+            let context = module.getattr("Context")?.call1(("dave",))?;
+
+            // First call: allowed (exhausts the 1/s limit).
+            let first = plugin.tool_pre_invoke(py, &payload, &context, Some(&ext))?;
+            assert!(first.getattr("continue_processing")?.extract::<bool>()?);
+
+            // Second call: throttled. This branch previously returned only a
+            // `violation` with no metadata at all — now it must also emit
+            // namespaced metrics (allowed=0/throttled=1), and must NOT leak
+            // `user_id`/`tenant_id` (present in `violation.details`, i.e. the
+            // `meta` dict) into the metrics dict (S1: no identifiers in
+            // metrics).
+            let second = plugin.tool_pre_invoke(py, &payload, &context, Some(&ext))?;
+            assert!(!second.getattr("continue_processing")?.extract::<bool>()?);
+            let violation = second.getattr("violation")?;
+            assert!(!violation.is_none());
+            assert_eq!(
+                violation.getattr("code")?.extract::<String>()?,
+                "RATE_LIMIT"
+            );
+            // Sanity: the violation's own `details` (echoing `meta`) does
+            // carry user_id — proving the exclusion below is deliberate, not
+            // accidental (build_meta_dict never set it).
+            let details = violation.getattr("details")?.cast_into::<PyDict>()?;
+            assert!(details.get_item("user_id")?.is_some());
+
+            let metadata = second.getattr("metadata")?.cast_into::<PyDict>()?;
+            let metrics = metadata
+                .get_item("rate_limiter")?
+                .expect("namespaced metrics present");
+            assert_eq!(metrics.get_item("allowed")?.extract::<i64>()?, 0);
+            assert_eq!(metrics.get_item("throttled")?.extract::<i64>()?, 1);
+            assert_eq!(metrics.get_item("backend")?.extract::<String>()?, "memory");
+            assert!(metrics.get_item("user_id").is_err());
+            assert!(metrics.get_item("tenant_id").is_err());
+
+            // Without trace_id: throttled branch must still block, but must
+            // not attach any metadata.
+            let context_no_trace = module.getattr("Context")?.call1(("erin",))?;
+            let _ = plugin.tool_pre_invoke(py, &payload, &context_no_trace, None)?;
+            let blocked_no_trace = plugin.tool_pre_invoke(py, &payload, &context_no_trace, None)?;
+            assert!(
+                !blocked_no_trace
+                    .getattr("continue_processing")?
+                    .extract::<bool>()?
+            );
+            let metadata = blocked_no_trace
+                .getattr("metadata")?
+                .cast_into::<PyDict>()?;
+            assert_eq!(metadata.len(), 0);
+
+            Ok(())
+        })
+        .unwrap();
+    }
 
     #[test]
     fn ensure_crypto_provider_installs_a_default() {

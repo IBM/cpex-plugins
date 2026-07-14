@@ -3,3 +3,13 @@
 test_tool = "nextest"
 additional_cargo_test_args = ["--profile=mutants"]
 cap_lints = false
+
+# `stub_gen` binaries (one per plugin, under `src/bin/stub_gen.rs`) are
+# gated behind the `stub-gen` feature (see each plugin's Cargo.toml
+# `required-features = ["stub-gen"]`), which the CI mutation-testing job
+# never enables. That means these binaries — and their own unit tests —
+# are never compiled during a mutation run, so every mutant generated in
+# them is structurally untestable via this pipeline regardless of code
+# quality. Exclude them so cargo-mutants doesn't report unkillable mutants
+# here.
+exclude_globs = ["**/src/bin/stub_gen.rs"]
