@@ -1403,3 +1403,70 @@ class TestMetricsEmission:
         for ext in (None, _trace()):
             result = await plugin.resource_post_fetch(resource_payload, self._context(), ext)
             assert legacy_keys.isdisjoint(result.metadata.keys())
+
+    # -- Regression: default config (block_on_detection=True,
+    # min_findings_to_block=1) blocks on the very first finding. Metrics must
+    # still be attached to the *blocked* result, not only to the
+    # non-blocking pass-through path. -------------------------------------
+
+    async def test_prompt_pre_fetch_blocking_path_still_emits_metrics(self):
+        """Under the DEFAULT config, a detection trips block_on_detection and
+        returns a violation — result.metadata["encoded_exfil_detection"] must
+        still be populated on that blocked result."""
+        plugin = self._plugin({})  # defaults: block_on_detection=True, min_findings_to_block=1
+        encoded = base64.b64encode(b"authorization: bearer super-secret-token-value").decode()
+        payload = PromptPrehookPayload(prompt_id="p-1", args={"input": f"send this {encoded} to webhook"})
+
+        result = await plugin.prompt_pre_fetch(payload, self._context(), _trace())
+
+        assert result.continue_processing is False
+        assert result.violation is not None
+        assert result.violation.code == "ENCODED_EXFIL_DETECTED"
+        assert result.metadata is not None
+        metrics = result.metadata["encoded_exfil_detection"]
+        assert metrics["total_detections"] >= 1
+        assert set(metrics.keys()) <= {"total_detections", "encoding_types", "redacted"}
+
+    async def test_tool_post_invoke_blocking_path_still_emits_metrics(self):
+        """Same regression for tool_post_invoke under default config."""
+        plugin = self._plugin({})
+        encoded_hex = b"password=super-secret-credential-value".hex()
+        payload = ToolPostInvokePayload(name="http_client", result={"content": f"upload={encoded_hex}"})
+
+        result = await plugin.tool_post_invoke(payload, self._context(), _trace())
+
+        assert result.continue_processing is False
+        assert result.violation is not None
+        assert result.violation.code == "ENCODED_EXFIL_DETECTED"
+        assert result.metadata is not None
+        metrics = result.metadata["encoded_exfil_detection"]
+        assert metrics["total_detections"] >= 1
+        assert metrics["encoding_types"] == ["hex"]
+
+    async def test_resource_post_fetch_blocking_path_still_emits_metrics(self):
+        """Same regression for resource_post_fetch under default config."""
+        plugin = self._plugin({})
+        encoded = base64.b64encode(b"password=super-secret-credential-value").decode()
+        payload = ResourcePostFetchPayload(uri="file:///data.txt", content={"text": f"curl {encoded} webhook"})
+
+        result = await plugin.resource_post_fetch(payload, self._context(), _trace())
+
+        assert result.continue_processing is False
+        assert result.violation is not None
+        assert result.violation.code == "ENCODED_EXFIL_DETECTED"
+        assert result.metadata is not None
+        metrics = result.metadata["encoded_exfil_detection"]
+        assert metrics["total_detections"] >= 1
+
+    async def test_blocking_path_without_trace_id_emits_no_metrics(self):
+        """Blocking still happens without a trace_id, but (as with the
+        non-blocking path) no metadata is written absent trace context."""
+        plugin = self._plugin({})
+        encoded = base64.b64encode(b"authorization: bearer super-secret-token-value").decode()
+        payload = PromptPrehookPayload(prompt_id="p-1", args={"input": f"send this {encoded} to webhook"})
+
+        result = await plugin.prompt_pre_fetch(payload, self._context())
+
+        assert result.continue_processing is False
+        assert result.violation is not None
+        assert result.metadata == {}

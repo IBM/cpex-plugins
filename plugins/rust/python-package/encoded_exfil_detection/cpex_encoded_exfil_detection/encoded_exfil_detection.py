@@ -223,6 +223,9 @@ class EncodedExfilDetectorPlugin(Plugin):
         count, new_args, findings = self._scan(payload.args or {}, path="args")
         self._log_detection("prompt_pre_fetch", count, findings, context)
 
+        metrics = self._build_metrics(extensions, count, findings)
+        metadata = {"encoded_exfil_detection": metrics} if metrics is not None else {}
+
         if count >= self._cfg.min_findings_to_block and self._cfg.block_on_detection:
             return PromptPrehookResult(
                 continue_processing=False,
@@ -237,10 +240,8 @@ class EncodedExfilDetectorPlugin(Plugin):
                         "request_id": context.global_context.request_id if context and context.global_context else None,
                     },
                 ),
+                metadata=metadata,
             )
-
-        metrics = self._build_metrics(extensions, count, findings)
-        metadata = {"encoded_exfil_detection": metrics} if metrics is not None else {}
 
         if self._cfg.redact and new_args != (payload.args or {}):
             modified_payload = PromptPrehookPayload(prompt_id=payload.prompt_id, args=new_args)
@@ -260,6 +261,9 @@ class EncodedExfilDetectorPlugin(Plugin):
         count, new_result, findings = self._scan(payload.result, path="result")
         self._log_detection("tool_post_invoke", count, findings, context)
 
+        metrics = self._build_metrics(extensions, count, findings)
+        metadata = {"encoded_exfil_detection": metrics} if metrics is not None else {}
+
         if count >= self._cfg.min_findings_to_block and self._cfg.block_on_detection:
             return ToolPostInvokeResult(
                 continue_processing=False,
@@ -275,10 +279,8 @@ class EncodedExfilDetectorPlugin(Plugin):
                         "request_id": context.global_context.request_id if context and context.global_context else None,
                     },
                 ),
+                metadata=metadata,
             )
-
-        metrics = self._build_metrics(extensions, count, findings)
-        metadata = {"encoded_exfil_detection": metrics} if metrics is not None else {}
 
         if self._cfg.redact and new_result != payload.result:
             modified_payload = ToolPostInvokePayload(name=payload.name, result=new_result)
@@ -298,6 +300,9 @@ class EncodedExfilDetectorPlugin(Plugin):
         count, new_content, findings = self._scan(payload.content, path="content")
         self._log_detection("resource_post_fetch", count, findings, context)
 
+        metrics = self._build_metrics(extensions, count, findings)
+        metadata = {"encoded_exfil_detection": metrics} if metrics is not None else {}
+
         if count >= self._cfg.min_findings_to_block and self._cfg.block_on_detection:
             return ResourcePostFetchResult(
                 continue_processing=False,
@@ -313,10 +318,8 @@ class EncodedExfilDetectorPlugin(Plugin):
                         "request_id": context.global_context.request_id if context and context.global_context else None,
                     },
                 ),
+                metadata=metadata,
             )
-
-        metrics = self._build_metrics(extensions, count, findings)
-        metadata = {"encoded_exfil_detection": metrics} if metrics is not None else {}
 
         if self._cfg.redact and new_content != payload.content:
             modified_payload = ResourcePostFetchPayload(uri=payload.uri, content=new_content)
