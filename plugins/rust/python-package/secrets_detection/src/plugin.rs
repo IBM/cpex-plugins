@@ -739,6 +739,75 @@ class ResourcePostFetchResult(PromptPrehookResult):
     }
 
     #[test]
+    fn tool_post_invoke_reports_findings_with_metadata_when_not_blocked_or_redacted() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            // block_on_detection=false, redact=false: neither the blocking
+            // path nor the redact-and-emit path can trigger, so a detection
+            // with a trace_id present must fall through to the `count > 0`
+            // branch in `scan_payload_attr` and still emit namespaced
+            // metrics (regression guard for the `count > 0` condition).
+            let plugin = SecretsDetectionPluginCore::new(config(py, false, false, 1)?.as_any())?;
+            let module = module(py)?;
+            let result_payload = module
+                .getattr("ResultPayload")?
+                .call1(("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE",))?;
+            let context = PyDict::new(py);
+            let ext = extensions_with_trace(py, "t1")?;
+
+            let result =
+                plugin.tool_post_invoke(py, &result_payload, context.as_any(), Some(&ext))?;
+            let result = result.bind(py);
+
+            assert!(result.getattr("continue_processing")?.extract::<bool>()?);
+            assert!(result.getattr("violation")?.is_none());
+            assert!(result.getattr("modified_payload")?.is_none());
+
+            let metadata = result.getattr("metadata")?.cast_into::<PyDict>()?;
+            let metrics = metadata
+                .get_item("secrets_detection")?
+                .expect("namespaced metrics present");
+            assert_eq!(metrics.get_item("total_detections")?.extract::<i64>()?, 1);
+            assert_eq!(metrics.get_item("total_masked")?.extract::<i64>()?, 0);
+            assert_eq!(metrics.get_item("total_blocked")?.extract::<i64>()?, 0);
+            assert_eq!(
+                metrics.get_item("secret_types")?.extract::<Vec<String>>()?,
+                vec!["aws_access_key_id".to_string()]
+            );
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn tool_post_invoke_clean_result_with_trace_id_emits_no_metadata() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            // A clean payload (count == 0) with a trace_id present must
+            // still emit zero metadata: only a genuine detection should
+            // populate `result.metadata` (regression guard for the
+            // `count > 0` condition degrading to an always-true mutant).
+            let plugin = SecretsDetectionPluginCore::new(config(py, false, false, 1)?.as_any())?;
+            let module = module(py)?;
+            let result_payload = module.getattr("ResultPayload")?.call1(("plain text",))?;
+            let context = PyDict::new(py);
+            let ext = extensions_with_trace(py, "t1")?;
+
+            let result =
+                plugin.tool_post_invoke(py, &result_payload, context.as_any(), Some(&ext))?;
+            let result = result.bind(py);
+
+            assert!(result.getattr("continue_processing")?.extract::<bool>()?);
+            let metadata = result.getattr("metadata")?.cast_into::<PyDict>()?;
+            assert_eq!(metadata.len(), 0);
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
     fn resource_post_fetch_blocks_with_redacted_modified_payload() {
         Python::initialize();
         Python::attach(|py| -> PyResult<()> {
@@ -816,6 +885,73 @@ class ResourcePostFetchResult(PromptPrehookResult):
             assert!(result.getattr("modified_payload")?.is_none());
             // No trace_id => no metadata write at all (gate), even though
             // findings were detected.
+            let metadata = result.getattr("metadata")?.cast_into::<PyDict>()?;
+            assert_eq!(metadata.len(), 0);
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn resource_post_fetch_reports_findings_with_metadata_when_not_blocked_or_redacted() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            // block_on_detection=false, redact=false: neither the blocking
+            // path nor the redact-and-emit path can trigger, so a detection
+            // with a trace_id present must fall through to the `count > 0`
+            // branch in `resource_post_fetch` and still emit namespaced
+            // metrics (regression guard for the `count > 0` condition).
+            let plugin = SecretsDetectionPluginCore::new(config(py, false, false, 1)?.as_any())?;
+            let module = module(py)?;
+            let payload = module
+                .getattr("ResourcePayload")?
+                .call1(("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE",))?;
+            let context = PyDict::new(py);
+            let ext = extensions_with_trace(py, "t1")?;
+
+            let result = plugin.resource_post_fetch(py, &payload, context.as_any(), Some(&ext))?;
+            let result = result.bind(py);
+
+            assert!(result.getattr("continue_processing")?.extract::<bool>()?);
+            assert!(result.getattr("violation")?.is_none());
+            assert!(result.getattr("modified_payload")?.is_none());
+
+            let metadata = result.getattr("metadata")?.cast_into::<PyDict>()?;
+            let metrics = metadata
+                .get_item("secrets_detection")?
+                .expect("namespaced metrics present");
+            assert_eq!(metrics.get_item("total_detections")?.extract::<i64>()?, 1);
+            assert_eq!(metrics.get_item("total_masked")?.extract::<i64>()?, 0);
+            assert_eq!(metrics.get_item("total_blocked")?.extract::<i64>()?, 0);
+            assert_eq!(
+                metrics.get_item("secret_types")?.extract::<Vec<String>>()?,
+                vec!["aws_access_key_id".to_string()]
+            );
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn resource_post_fetch_clean_payload_with_trace_id_emits_no_metadata() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            // A clean payload (count == 0) with a trace_id present must
+            // still emit zero metadata: only a genuine detection should
+            // populate `result.metadata` (regression guard for the
+            // `count > 0` condition degrading to an always-true mutant).
+            let plugin = SecretsDetectionPluginCore::new(config(py, false, false, 1)?.as_any())?;
+            let module = module(py)?;
+            let payload = module.getattr("ResourcePayload")?.call1(("plain text",))?;
+            let context = PyDict::new(py);
+            let ext = extensions_with_trace(py, "t1")?;
+
+            let result = plugin.resource_post_fetch(py, &payload, context.as_any(), Some(&ext))?;
+            let result = result.bind(py);
+
+            assert!(result.getattr("continue_processing")?.extract::<bool>()?);
             let metadata = result.getattr("metadata")?.cast_into::<PyDict>()?;
             assert_eq!(metadata.len(), 0);
 

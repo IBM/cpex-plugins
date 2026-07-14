@@ -78,7 +78,7 @@ When either condition fails, the `result.metadata` dict is omitted entirely (or 
 
 ```
 payload.result = {
-    "content": [{"type": "text", "text": "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"}],
+    "content": [{"type": "text", "text": "AWS_ACCESS_KEY_ID=AKIA-FAKE12345-EXAMPLE"}],
     "isError": False
 }
 extensions.request.trace_id = "t1"
@@ -106,7 +106,7 @@ result.metadata = {
 **NOT emitted:**
 - `"secrets_redacted": True` / `"count": 1` (removed legacy flat keys)
 - `"secrets_findings": [{"type": "aws_access_key_id"}]` (removed legacy flat key; per-finding detail is not part of the metrics contract)
-- `"AKIAFAKE12345EXAMPLE"` (matched secret value)
+- `"AKIA-FAKE12345-EXAMPLE"` (matched secret value)
 
 ## References
 
