@@ -24,11 +24,10 @@ use crate::issues::find_issues;
 ///
 /// # Arguments
 ///
-/// * `key`     – Field name associated with this value (used in issue messages and field
-///   filtering).
+/// * `key`     – Field name associated with this value (used for field filtering only).
 /// * `value`   – The Python value to inspect.
 /// * `cfg`     – Sanitizer configuration.
-/// * `issues`  – Mutable accumulator for issue strings (e.g. `"sql: DELETE without WHERE"`).
+/// * `issues`  – Mutable accumulator for bare issue strings (e.g. `"DELETE without WHERE clause"`).
 /// * `stripped`– Mutable accumulator of `(key, stripped_value)` pairs where comments were
 ///   removed.  Used by the caller to build a modified payload.
 pub fn scan_value(
@@ -47,8 +46,8 @@ pub fn scan_value(
 
         if should_scan {
             let found = find_issues(&text, cfg);
-            for issue in &found {
-                issues.push(format!("{}: {}", key, issue));
+            for issue in found {
+                issues.push(issue);
             }
             if cfg.strip_comments {
                 let clean = strip_sql_comments(&text);
@@ -78,8 +77,8 @@ pub fn scan_value(
                     .is_none_or(|f| f.iter().any(|s| s == key));
                 if should_scan {
                     let found = find_issues(&text, cfg);
-                    for issue in &found {
-                        issues.push(format!("{}[]: {}", key, issue));
+                    for issue in found {
+                        issues.push(issue);
                     }
                 }
             }
@@ -97,7 +96,7 @@ pub type StrippedFields = Vec<(String, String)>;
 /// # Returns
 ///
 /// `(issues, stripped)` where:
-/// * `issues`  – flat list of `"<key>: <description>"` strings.
+/// * `issues`  – flat list of bare issue description strings.
 /// * `stripped`– flat list of `(key, stripped_sql)` pairs ready to overlay onto args.
 pub fn scan_args(
     args: &Bound<'_, PyAny>,

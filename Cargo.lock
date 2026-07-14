@@ -1903,6 +1903,7 @@ dependencies = [
  "cpex_framework_bridge",
  "criterion",
  "log",
+ "mutants",
  "once_cell",
  "pyo3",
  "pyo3-log",

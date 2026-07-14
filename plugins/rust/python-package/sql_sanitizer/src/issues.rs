@@ -92,10 +92,17 @@ pub fn find_issues(sql: &str, cfg: &SqlSanitizerConfig) -> Vec<String> {
 /// * `%.`     — `%s` / `%d` printf-style formatting
 /// * `{…}`    — f-string / `.format()` style
 fn has_interpolation(sql: &str) -> bool {
-    if sql.contains('+') || sql.contains("%.") {
-        return true;
-    }
-    // Look for a `{` that precedes a matching `}`
+    sql.contains('+') || sql.contains("%.") || has_brace_template(sql)
+}
+
+/// Return `true` when `sql` contains a `{…}` template placeholder.
+///
+/// Checks that `{` appears before the first `}`.  This is an equivalent
+/// mutation boundary: because `{` ≠ `}`, `find('{')` and `find('}')` can
+/// never return the same index, so `l < r` and `l <= r` are indistinguishable
+/// for all valid inputs.
+#[mutants::skip] // equivalent mutation: `{` ≠ `}` so l == r is impossible
+fn has_brace_template(sql: &str) -> bool {
     if let (Some(l), Some(r)) = (sql.find('{'), sql.find('}'))
         && l < r
     {
@@ -229,5 +236,34 @@ mod tests {
         let sql = "SELECT * FROM users WHERE name = '{}'";
         let issues = find_issues(sql, &cfg);
         assert_eq!(issues, Vec::<String>::new());
+    }
+
+    // -----------------------------------------------------------------------
+    // Parameterization — extra coverage to catch missed mutants
+    // -----------------------------------------------------------------------
+
+    /// `require_parameterization=true` + SQL with NO interpolation markers →
+    /// empty issues.  Catches the mutant that replaces `has_interpolation`
+    /// entirely with `true`.
+    #[test]
+    fn no_issue_for_safe_sql_when_parameterization_required() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        // No `+`, `%.`, or `{…}` — must produce zero issues
+        let issues = find_issues("SELECT id FROM users WHERE name = 'alice'", &cfg);
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    /// `require_parameterization=true` + SQL containing only `+` (no `%.` or
+    /// `{…}`) → flagged.  Catches the `||` → `&&` mutant in `has_interpolation`.
+    #[test]
+    fn detects_plus_concatenation_as_interpolation() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("SELECT * FROM t WHERE x = val + 1", &cfg);
+        assert_eq!(
+            issues,
+            vec!["Possible non-parameterized interpolation detected"]
+        );
     }
 }

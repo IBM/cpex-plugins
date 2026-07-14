@@ -367,4 +367,191 @@ class PluginViolation:
             );
         });
     }
+
+    /// SQL with a `--` comment → the comment is stripped → `modified_payload` is
+    /// returned with the cleaned SQL.  Catches:
+    ///   - `plugin.rs:136` (`!stripped.is_empty()` → `stripped.is_empty()`)
+    ///   - `scanner.rs:55` (`clean != text` → `clean == text`)
+    #[test]
+    fn comment_stripping_returns_modified_payload() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let empty = PyDict::new(py);
+            let core = super::SqlSanitizerPluginCore::new(empty.as_any()).unwrap();
+            let args = PyDict::new(py);
+            // Safe SQL but with a trailing comment — should be stripped
+            args.set_item("sql", "SELECT 1 -- drop hint").unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let bound = result.bind(py);
+            let cp: bool = bound
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(cp, "safe SQL with comment should still be allowed");
+            let mp = bound.getattr("modified_payload").unwrap();
+            assert!(
+                !mp.is_none(),
+                "modified_payload must be set when comments are stripped"
+            );
+        });
+    }
+
+    /// `block_on_violation=false` + dangerous SQL → pass-through with
+    /// `metadata.sql_issues` populated.  Catches
+    /// `plugin.rs:154` (`!issues.is_empty()` → `issues.is_empty()`).
+    #[test]
+    fn monitoring_mode_populates_sql_issues_metadata() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let cfg_dict = PyDict::new(py);
+            cfg_dict.set_item("block_on_violation", false).unwrap();
+            let core = super::SqlSanitizerPluginCore::new(cfg_dict.as_any()).unwrap();
+            let args = PyDict::new(py);
+            args.set_item("sql", "DELETE FROM sessions").unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let bound = result.bind(py);
+            let cp: bool = bound
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(cp, "monitoring mode must not block");
+            let metadata = bound.getattr("metadata").unwrap();
+            let has_key: bool = metadata
+                .call_method1("__contains__", ("sql_issues",))
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(
+                has_key,
+                "metadata.sql_issues must be set in monitoring mode"
+            );
+        });
+    }
+
+    /// `block_on_violation=false` + safe SQL → `metadata.sql_issues` must NOT
+    /// be present.  Together with `monitoring_mode_populates_sql_issues_metadata`
+    /// this brackets the `!issues.is_empty()` guard.
+    #[test]
+    fn monitoring_mode_safe_sql_has_no_issues_metadata() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let cfg_dict = PyDict::new(py);
+            cfg_dict.set_item("block_on_violation", false).unwrap();
+            let core = super::SqlSanitizerPluginCore::new(cfg_dict.as_any()).unwrap();
+            let args = PyDict::new(py);
+            args.set_item("sql", "SELECT 1").unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let bound = result.bind(py);
+            let metadata = bound.getattr("metadata").unwrap();
+            // metadata should be an empty dict — no sql_issues key
+            let has_key: bool = metadata
+                .call_method1("__contains__", ("sql_issues",))
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(!has_key, "safe SQL must not produce sql_issues metadata");
+        });
+    }
+
+    /// `fields=["sql"]` + dangerous SQL in a *different* field → must be
+    /// allowed.  Catches:
+    ///   - `scanner.rs:46`  (`s == key` → `s != key`)
+    ///   - `config.rs:86`   (`!val.is_none()` → `val.is_none()` for fields)
+    #[test]
+    fn field_filter_allows_violation_in_non_matching_field() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let cfg_dict = PyDict::new(py);
+            cfg_dict.set_item("fields", vec!["sql"]).unwrap();
+            let core = super::SqlSanitizerPluginCore::new(cfg_dict.as_any()).unwrap();
+            let args = PyDict::new(py);
+            // Dangerous SQL is in `query`, not in `sql` — must be ignored
+            args.set_item("query", "DELETE FROM users").unwrap();
+            args.set_item("sql", "SELECT 1").unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let cp: bool = result
+                .bind(py)
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(cp, "violation in non-matching field must be ignored");
+        });
+    }
+
+    /// Custom `blocked_statements` pattern → SQL matching the pattern is
+    /// blocked.  Catches `config.rs:94` (`!val.is_none()` → `val.is_none()`
+    /// for blocked_statements).
+    #[test]
+    fn custom_blocked_pattern_blocks_matching_sql() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let cfg_dict = PyDict::new(py);
+            // Replace default patterns with a custom one that blocks SELECT
+            cfg_dict
+                .set_item("blocked_statements", vec!["\\bSELECT\\b"])
+                .unwrap();
+            let core = super::SqlSanitizerPluginCore::new(cfg_dict.as_any()).unwrap();
+            let args = PyDict::new(py);
+            args.set_item("sql", "SELECT * FROM users").unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let cp: bool = result
+                .bind(py)
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(!cp, "SQL matching a custom blocked pattern must be blocked");
+        });
+    }
+
+    /// `fields=["sql"]` + dangerous SQL in a list value under a *different*
+    /// field → must be allowed.  Catches `scanner.rs:78`
+    /// (`s == key` → `s != key` for list string items).
+    #[test]
+    fn field_filter_list_items_respect_field_filter() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let cfg_dict = PyDict::new(py);
+            cfg_dict.set_item("fields", vec!["sql"]).unwrap();
+            let core = super::SqlSanitizerPluginCore::new(cfg_dict.as_any()).unwrap();
+            let args = PyDict::new(py);
+            // List of strings under key `queries` (not in `fields`) — must be ignored
+            let queries =
+                pyo3::types::PyList::new(py, ["DELETE FROM users", "DROP TABLE t"]).unwrap();
+            args.set_item("queries", &queries).unwrap();
+            args.set_item("sql", "SELECT 1").unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let cp: bool = result
+                .bind(py)
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(
+                cp,
+                "violations in list items under non-matching field must be ignored"
+            );
+        });
+    }
 }

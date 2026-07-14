@@ -21,6 +21,7 @@ pub mod issues;
 pub mod plugin;
 pub mod scanner;
 
+#[mutants::skip] // logging initialisation: side-effect only, not observable in unit tests
 fn init_logging() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
