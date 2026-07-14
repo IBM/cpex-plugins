@@ -47,20 +47,23 @@ impl SecretsDetectionPluginCore {
         )
     }
 
-    // Out of scope for issue #129 (metrics rollout): no `extensions` param here.
+    #[pyo3(signature = (payload, context, extensions=None))]
     pub fn tool_pre_invoke(
         &self,
         py: Python<'_>,
         payload: &Bound<'_, PyAny>,
-        _context: &Bound<'_, PyAny>,
+        context: &Bound<'_, PyAny>,
+        extensions: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
+        let _ = &context;
+        let trace_id = read_trace_id(extensions);
         self.scan_payload_attr(
             py,
             payload,
             "args",
             "ToolPreInvokeResult",
             "Potential secrets detected in tool arguments",
-            None,
+            trace_id.as_deref(),
         )
     }
 
@@ -565,7 +568,7 @@ class ResourcePostFetchResult(PromptPrehookResult):
             let payload = module.getattr("ToolPayload")?.call1((args,))?;
             let context = PyDict::new(py);
 
-            let result = plugin.tool_pre_invoke(py, &payload, context.as_any())?;
+            let result = plugin.tool_pre_invoke(py, &payload, context.as_any(), None)?;
             let result = result.bind(py);
 
             assert!(!result.getattr("continue_processing")?.extract::<bool>()?);
@@ -604,16 +607,57 @@ class ResourcePostFetchResult(PromptPrehookResult):
             let payload = module.getattr("ToolPayload")?.call1((args,))?;
             let context = PyDict::new(py);
 
-            let result = plugin.tool_pre_invoke(py, &payload, context.as_any())?;
+            let result = plugin.tool_pre_invoke(py, &payload, context.as_any(), None)?;
             let result = result.bind(py);
 
             assert!(result.getattr("continue_processing")?.extract::<bool>()?);
             assert!(result.getattr("violation")?.is_none());
-            // tool_pre_invoke is out of scope for issue #129: it never receives
-            // `extensions`, so it can never have a trace_id, so metadata is
-            // always empty now that the legacy flat write is gone.
+            // No trace_id supplied here => no metadata write at all (gate),
+            // even though findings were detected. See the dedicated
+            // `tool_pre_invoke_emits_namespaced_metrics_when_trace_id_present`
+            // test below for the in-scope, trace_id-present case.
             let metadata = result.getattr("metadata")?.cast_into::<PyDict>()?;
             assert_eq!(metadata.len(), 0);
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn tool_pre_invoke_emits_namespaced_metrics_when_trace_id_present() {
+        // Regression test for issue #129 finding 4: tool_pre_invoke now
+        // accepts `extensions` and reads trace_id from it, same contract as
+        // the other 3 hooks — it must emit result.metadata["secrets_detection"]
+        // when a valid trace_id is present and findings exist.
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let plugin = SecretsDetectionPluginCore::new(config(py, false, true, 1)?.as_any())?;
+            let module = module(py)?;
+            let args = PyDict::new(py);
+            args.set_item("message", "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE")?;
+            let payload = module.getattr("ToolPayload")?.call1((args,))?;
+            let context = PyDict::new(py);
+            let ext = extensions_with_trace(py, "t1")?;
+
+            let result = plugin.tool_pre_invoke(py, &payload, context.as_any(), Some(&ext))?;
+            let result = result.bind(py);
+
+            let metadata = result.getattr("metadata")?.cast_into::<PyDict>()?;
+            let metrics = metadata
+                .get_item("secrets_detection")?
+                .expect("namespaced metrics present");
+            assert_eq!(metrics.get_item("total_detections")?.extract::<i64>()?, 1);
+            assert_eq!(metrics.get_item("total_masked")?.extract::<i64>()?, 1);
+            assert_eq!(metrics.get_item("total_blocked")?.extract::<i64>()?, 0);
+            assert_eq!(
+                metrics.get_item("secret_types")?.extract::<Vec<String>>()?,
+                vec!["aws_access_key_id".to_string()]
+            );
+
+            // S1: no raw secret value anywhere in the metadata dump.
+            let dumped = metadata.str()?.to_string();
+            assert!(!dumped.contains("AKIAFAKE12345EXAMPLE"));
 
             Ok(())
         })
@@ -631,7 +675,7 @@ class ResourcePostFetchResult(PromptPrehookResult):
             let payload = module.getattr("ToolPayload")?.call1((args,))?;
             let context = PyDict::new(py);
 
-            let result = plugin.tool_pre_invoke(py, &payload, context.as_any())?;
+            let result = plugin.tool_pre_invoke(py, &payload, context.as_any(), None)?;
             let result = result.bind(py);
 
             assert!(result.getattr("continue_processing")?.extract::<bool>()?);

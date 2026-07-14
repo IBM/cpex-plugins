@@ -97,7 +97,7 @@ config:
 
 ## Returned Metadata
 
-`prompt_pre_fetch`, `tool_post_invoke`, and `resource_post_fetch` accept an optional `extensions` parameter carrying OpenTelemetry trace context. When a trace context is present (via `extensions.request.trace_id`), the plugin emits operational metrics on `result.metadata["secrets_detection"]` with the following schema:
+`prompt_pre_fetch`, `tool_pre_invoke`, `tool_post_invoke`, and `resource_post_fetch` accept an optional `extensions` parameter carrying OpenTelemetry trace context. When a trace context is present (via `extensions.request.trace_id`), the plugin emits operational metrics on `result.metadata["secrets_detection"]` with the following schema:
 
 ```python
 result.metadata["secrets_detection"] = {
@@ -114,7 +114,7 @@ result.metadata["secrets_detection"] = {
 
 **Security Note (S1):** The plugin **never includes raw secret values** in `result.metadata`, logs, or any other output. Only counts and type-category names (e.g. `"aws_access_key_id"`) are reported.
 
-`tool_pre_invoke` is out of scope for this metrics contract and never receives `extensions` or emits `result.metadata["secrets_detection"]`.
+`tool_pre_invoke` is in scope for this metrics contract on the same terms as the other 3 hooks: it accepts `extensions` and emits `result.metadata["secrets_detection"]` under the identical gating/schema once a valid `trace_id` is present.
 
 Blocking responses use the `SECRETS_DETECTED` violation code.
 
@@ -124,9 +124,9 @@ Version `0.3.7` is a **breaking change** for any existing consumer reading detec
 
 - The old flat `result.metadata` keys — `secrets_redacted`, `count` (redaction path) and `secrets_findings`, `count` (findings-only path) — have been removed entirely. There is no compatibility shim; code reading those keys will silently stop receiving data.
 - Detection/redaction/blocking metrics are now emitted on `result.metadata["secrets_detection"]` instead, with keys `total_detections`, `total_masked`, `total_blocked`, and `secret_types` (see [Returned Metadata](#returned-metadata) above for the full schema).
-- `prompt_pre_fetch`, `tool_post_invoke`, and `resource_post_fetch` now accept a new optional `extensions` parameter carrying OpenTelemetry trace context. Emission to `result.metadata["secrets_detection"]` is gated solely on `extensions.request.trace_id` being present and valid — if no trace context is supplied, no metrics are written at all, regardless of any config flag.
+- All 4 hooks — `prompt_pre_fetch`, `tool_pre_invoke`, `tool_post_invoke`, and `resource_post_fetch` — now accept a new optional `extensions` parameter carrying OpenTelemetry trace context. Emission to `result.metadata["secrets_detection"]` is gated solely on `extensions.request.trace_id` being present and valid — if no trace context is supplied, no metrics are written at all, regardless of any config flag.
 - Consumers that previously read `result.metadata["secrets_redacted"]` / `result.metadata["secrets_findings"]` unconditionally must migrate to reading `result.metadata["secrets_detection"]` and must pass a `trace_id` via `extensions` to receive metrics.
-- `tool_pre_invoke` is unaffected by the `extensions` addition (out of scope for this change) but also loses the old flat keys, since the two hooks shared the same underlying metadata-writing code path.
+- `tool_pre_invoke` previously never received `extensions` and could never emit metrics (a regression introduced earlier on this branch, since fixed) — it now follows the exact same contract as the other 3 hooks.
 
 ## Security Notes
 

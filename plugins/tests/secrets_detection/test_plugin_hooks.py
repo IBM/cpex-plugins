@@ -92,9 +92,9 @@ class TestPluginHooks:
             == "AWS_ACCESS_KEY_ID=[REDACTED]"
         )
         assert payload.args["message"] == "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
-        # tool_pre_invoke is out of scope for issue #129: it never receives
-        # `extensions`, so it can never have a trace_id, so metadata is
-        # always empty now that the legacy flat write is gone.
+        # No extensions/trace_id passed here => gated, no metadata write at
+        # all. See test_tool_pre_invoke_metadata_omits_match_previews below
+        # for the in-scope, trace_id-present case.
         assert result.metadata == {}
 
     async def test_tool_pre_invoke_redaction_survives_cpex_policy_with_isolated_payload(self, plugin):
@@ -243,6 +243,26 @@ class TestPluginHooks:
         result = await plugin.prompt_pre_fetch(payload, make_context())
 
         assert result.metadata == {}
+
+    async def test_tool_pre_invoke_metadata_omits_match_previews(self):
+        """Regression test for issue #129 finding 4: tool_pre_invoke now
+        accepts `extensions` and emits result.metadata["secrets_detection"]
+        under the same contract as the other 3 hooks."""
+        plugin = SecretsDetectionPlugin(make_config(redact=False))
+        ext = Extensions(request=RequestExtension(trace_id="t1"))
+        payload = ToolPreInvokePayload(
+            name="echo",
+            args={"message": "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"},
+        )
+
+        result = await plugin.tool_pre_invoke(payload, make_context(), ext)
+
+        assert result.metadata is not None
+        metrics = result.metadata["secrets_detection"]
+        assert metrics["total_detections"] == 1
+        assert metrics["secret_types"] == ["aws_access_key_id"]
+        # S1: no raw secret value anywhere in the metrics dict.
+        assert "AKIAFAKE12345EXAMPLE" not in str(metrics)
 
     async def test_prompt_pre_fetch_legacy_flat_keys_are_gone(self):
         plugin = SecretsDetectionPlugin(make_config(redact=False))
