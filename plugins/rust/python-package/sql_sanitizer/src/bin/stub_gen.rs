@@ -10,7 +10,6 @@ use std::path::Path;
 use sql_sanitizer_rust::stub_info;
 
 const EXTENSION_STUB_PATH: &str = "cpex_sql_sanitizer/sql_sanitizer_rust/__init__.pyi";
-const GENERATED_ALL_MARKER: &str = "__all__";
 const PLUGIN_CORE_CLASS_MARKER: &str = "class SqlSanitizerPluginCore:";
 const PLUGIN_CORE_CLASS_DEF: &str = "\n\n@typing.final\nclass SqlSanitizerPluginCore:\n    def __new__(cls, config: typing.Any) -> SqlSanitizerPluginCore: ...\n    def prompt_pre_fetch(self, payload: typing.Any, context: typing.Any, extensions: typing.Any = None) -> typing.Any: ...\n    def tool_pre_invoke(self, payload: typing.Any, context: typing.Any, extensions: typing.Any = None) -> typing.Any: ...\n";
 

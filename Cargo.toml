@@ -23,6 +23,7 @@ cpex_framework_bridge = { path = "crates/framework_bridge" }
 criterion = { version = "0.8.2", features = ["html_reports"] }
 log = "0.4.29"
 mutants = "0.0.4"
+once_cell = "1.21.4"
 pyo3 = { version = "0.29.0", features = ["abi3-py311"] }
 pyo3-log = "0.13.4"
 pyo3-stub-gen = "0.23.0"
