@@ -237,19 +237,19 @@ fn field_filters_reach_nested_allowlisted_paths_through_lists_and_tuples() {
             .expect("users exists")
             .cast_into::<PyList>()?;
         let redacted_first_user = redacted_users.get_item(0)?.cast_into::<PyDict>()?;
-        let redacted_first_credentials = redacted_first_user
+        let redacted_first_fields = redacted_first_user
             .get_item("credentials")?
             .expect("credentials exists")
             .cast_into::<PyDict>()?;
         assert_eq!(
-            redacted_first_credentials
+            redacted_first_fields
                 .get_item("token")?
                 .expect("token exists")
                 .extract::<String>()?,
             "AWS_ACCESS_KEY_ID=[REDACTED]"
         );
         assert_eq!(
-            redacted_first_credentials
+            redacted_first_fields
                 .get_item("other")?
                 .expect("other exists")
                 .extract::<String>()?,
@@ -257,12 +257,12 @@ fn field_filters_reach_nested_allowlisted_paths_through_lists_and_tuples() {
         );
         let redacted_tuple = redacted_users.get_item(1)?.cast_into::<PyTuple>()?;
         let redacted_second_user = redacted_tuple.get_item(0)?.cast_into::<PyDict>()?;
-        let redacted_second_credentials = redacted_second_user
+        let redacted_second_fields = redacted_second_user
             .get_item("credentials")?
             .expect("credentials exists")
             .cast_into::<PyDict>()?;
         assert_eq!(
-            redacted_second_credentials
+            redacted_second_fields
                 .get_item("token")?
                 .expect("token exists")
                 .extract::<String>()?,

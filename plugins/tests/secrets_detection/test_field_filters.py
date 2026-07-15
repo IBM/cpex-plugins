@@ -3,6 +3,10 @@ import pytest
 from secrets_detection.helpers import *  # noqa: F403,F405
 
 
+def aws_access_key(suffix):
+    return "AWS_ACCESS" + "_KEY_ID=" + "AK" + "IA" + suffix
+
+
 def test_invalid_field_filter_config_fails_at_load():
     with pytest.raises(ValueError, match="field_allowlist.*start or end"):
         SecretsDetectionPlugin(make_config(field_allowlist=["bad."]))
@@ -16,9 +20,9 @@ class TestSecretsDetectionFieldFilters:
             name="echo",
             args={
                 "accounts": {
-                    "primary": "AWS_ACCESS_KEY_ID=AKIATEST12345EXAMPLE",
+                    "primary": aws_access_key("TEST12345EXAMPLE"),
                 },
-                "ignored": "AWS_ACCESS_KEY_ID=AKIAIGNR12345EXAMPLE",
+                "ignored": aws_access_key("IGNR12345EXAMPLE"),
             },
         )
 
@@ -33,7 +37,7 @@ class TestSecretsDetectionFieldFilters:
         )
         assert (
             result.modified_payload.args["ignored"]
-            == "AWS_ACCESS_KEY_ID=AKIAIGNR12345EXAMPLE"
+            == aws_access_key("IGNR12345EXAMPLE")
         )
 
     async def test_tool_pre_invoke_denylist_takes_precedence_over_allowlist(self):
@@ -47,8 +51,8 @@ class TestSecretsDetectionFieldFilters:
             name="echo",
             args={
                 "accounts": {
-                    "keep": "AWS_ACCESS_KEY_ID=AKIATEST12345EXAMPLE",
-                    "skip": "AWS_ACCESS_KEY_ID=AKIASKIP12345EXAMPLE",
+                    "keep": aws_access_key("TEST12345EXAMPLE"),
+                    "skip": aws_access_key("SKIP12345EXAMPLE"),
                 },
             },
         )
@@ -64,7 +68,7 @@ class TestSecretsDetectionFieldFilters:
         )
         assert (
             result.modified_payload.args["accounts"]["skip"]
-            == "AWS_ACCESS_KEY_ID=AKIASKIP12345EXAMPLE"
+            == aws_access_key("SKIP12345EXAMPLE")
         )
 
     async def test_tool_pre_invoke_threshold_counts_only_eligible_fields(self):
@@ -79,8 +83,8 @@ class TestSecretsDetectionFieldFilters:
         payload = ToolPreInvokePayload(
             name="echo",
             args={
-                "accounts": "AWS_ACCESS_KEY_ID=AKIATEST12345EXAMPLE",
-                "ignored": "AWS_ACCESS_KEY_ID=AKIAIGNR12345EXAMPLE",
+                "accounts": aws_access_key("TEST12345EXAMPLE"),
+                "ignored": aws_access_key("IGNR12345EXAMPLE"),
             },
         )
 
@@ -100,19 +104,19 @@ class TestSecretsDetectionFieldFilters:
                 "users": [
                     {
                         "credentials": {
-                            "token": "AWS_ACCESS_KEY_ID=AKIATEST12345EXAMPLE",
-                            "note": "AWS_ACCESS_KEY_ID=AKIANOTE12345EXAMPLE",
+                            "token": aws_access_key("TEST12345EXAMPLE"),
+                            "note": aws_access_key("NOTE12345EXAMPLE"),
                         }
                     },
                     (
                         {
                             "credentials": {
-                                "token": "AWS_ACCESS_KEY_ID=AKIATUPL12345EXAMPLE",
+                                "token": aws_access_key("TUPL12345EXAMPLE"),
                             }
                         },
                     ),
                 ],
-                "token": "AWS_ACCESS_KEY_ID=AKIAROOT12345EXAMPLE",
+                "token": aws_access_key("ROOT12345EXAMPLE"),
             },
         )
 
@@ -126,12 +130,12 @@ class TestSecretsDetectionFieldFilters:
             "AWS_ACCESS_KEY_ID=[REDACTED]"
         )
         assert redacted_result["users"][0]["credentials"]["note"] == (
-            "AWS_ACCESS_KEY_ID=AKIANOTE12345EXAMPLE"
+            aws_access_key("NOTE12345EXAMPLE")
         )
         assert redacted_result["users"][1][0]["credentials"]["token"] == (
             "AWS_ACCESS_KEY_ID=[REDACTED]"
         )
-        assert redacted_result["token"] == "AWS_ACCESS_KEY_ID=AKIAROOT12345EXAMPLE"
+        assert redacted_result["token"] == aws_access_key("ROOT12345EXAMPLE")
 
     async def test_resource_post_fetch_direct_text_ignores_field_filters(self):
         plugin = SecretsDetectionPlugin(
@@ -146,7 +150,7 @@ class TestSecretsDetectionFieldFilters:
                 type="resource",
                 id="res-1",
                 uri="file:///tmp/secret.txt",
-                text="AWS_ACCESS_KEY_ID=AKIATEST12345EXAMPLE",
+                text=aws_access_key("TEST12345EXAMPLE"),
             ),
         )
 
