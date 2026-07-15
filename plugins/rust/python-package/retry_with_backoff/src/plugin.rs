@@ -157,8 +157,7 @@ impl RetryWithBackoffPluginCore {
 }
 
 /// Read `obj[key]` through the Python mapping protocol (`PyObject_GetItem`,
-/// i.e. `__getitem__`), returning `None` for a missing key or any
-/// non-subscriptable/error case. Never raises.
+/// i.e. `__getitem__`).
 ///
 /// Unlike [`pyo3::types::PyDict::get_item`], which reads the C-level dict
 /// storage directly, this respects `dict` subclasses that keep their data in a
@@ -166,15 +165,34 @@ impl RetryWithBackoffPluginCore {
 /// results in exactly such a subclass (the framework's `CopyOnWriteDict`, whose
 /// C-level storage is empty), so `PyDict::get_item` silently misses every key —
 /// a failing tool result then looks like a success and no retry is signalled.
-fn mapping_get<'py>(obj: &Bound<'py, PyAny>, key: &str) -> Option<Bound<'py, PyAny>> {
-    obj.get_item(key).ok()
+///
+/// Returns `Ok(None)` for a genuinely absent key (`KeyError`, matching
+/// `dict.get` semantics) or a non-subscriptable `obj` (`TypeError`). Any other
+/// exception — e.g. a custom `__getitem__`/property that raises on access — is
+/// propagated rather than swallowed, so a broken mapping surfaces as an error
+/// instead of silently masquerading as "not a failure" (no retry).
+fn mapping_get<'py>(obj: &Bound<'py, PyAny>, key: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
+    match obj.get_item(key) {
+        Ok(v) => Ok(Some(v)),
+        Err(e) => {
+            let py = obj.py();
+            if e.is_instance_of::<pyo3::exceptions::PyKeyError>(py)
+                || e.is_instance_of::<pyo3::exceptions::PyTypeError>(py)
+            {
+                Ok(None)
+            } else {
+                Err(e)
+            }
+        }
+    }
 }
 
-/// True when `obj[key]` exists and extracts to `true`. Never raises.
-fn mapping_get_bool(obj: &Bound<'_, PyAny>, key: &str) -> bool {
-    mapping_get(obj, key)
+/// True when `obj[key]` exists and extracts to `true`. Propagates any error
+/// from [`mapping_get`] other than a missing key / non-subscriptable `obj`.
+fn mapping_get_bool(obj: &Bound<'_, PyAny>, key: &str) -> PyResult<bool> {
+    Ok(mapping_get(obj, key)?
         .and_then(|v| v.extract::<bool>().ok())
-        .unwrap_or(false)
+        .unwrap_or(false))
 }
 
 impl RetryWithBackoffPluginCore {
@@ -190,10 +208,10 @@ impl RetryWithBackoffPluginCore {
         // `PyDict::get_item` would observe an empty dict and miss `isError`.
 
         // Top-level isError flag
-        if mapping_get_bool(result, "isError") {
+        if mapping_get_bool(result, "isError")? {
             // status_code (when present) lives under structuredContent
-            if let Some(structured) = mapping_get(result, "structuredContent")
-                && let Some(status) = mapping_get(&structured, "status_code")
+            if let Some(structured) = mapping_get(result, "structuredContent")?
+                && let Some(status) = mapping_get(&structured, "status_code")?
                 && let Ok(status_code) = status.extract::<i32>()
             {
                 return Ok(config.retry_on_status.contains(&status_code));
@@ -203,13 +221,13 @@ impl RetryWithBackoffPluginCore {
 
         // Check structuredContent; track presence to gate text content check.
         // Treat `"structuredContent": None` as absent (matches original Python semantics).
-        let structured = mapping_get(result, "structuredContent").filter(|v| !v.is_none());
+        let structured = mapping_get(result, "structuredContent")?.filter(|v| !v.is_none());
         let has_structured_content = structured.is_some();
         if let Some(ref structured_dict) = structured {
-            if mapping_get_bool(structured_dict, "isError") {
+            if mapping_get_bool(structured_dict, "isError")? {
                 return Ok(true);
             }
-            if let Some(status) = mapping_get(structured_dict, "status_code")
+            if let Some(status) = mapping_get(structured_dict, "status_code")?
                 && let Ok(status_code) = status.extract::<i32>()
                 && config.retry_on_status.contains(&status_code)
             {
@@ -220,12 +238,12 @@ impl RetryWithBackoffPluginCore {
         // Check text content only when enabled and structuredContent is absent
         if config.check_text_content
             && !has_structured_content
-            && let Some(content) = mapping_get(result, "content")
+            && let Some(content) = mapping_get(result, "content")?
             && let Ok(content_list) = content.cast::<PyList>()
         {
             for item in content_list.iter() {
                 // Only process items explicitly marked as type "text"
-                let is_text = mapping_get(&item, "type")
+                let is_text = mapping_get(&item, "type")?
                     .and_then(|v| v.extract::<String>().ok())
                     .as_deref()
                     == Some("text");
@@ -233,7 +251,7 @@ impl RetryWithBackoffPluginCore {
                     continue;
                 }
                 // Try to parse text as JSON
-                if let Some(text) = mapping_get(&item, "text")
+                if let Some(text) = mapping_get(&item, "text")?
                     && let Ok(text_str) = text.extract::<String>()
                     && let Ok(parsed) = serde_json::from_str::<Value>(&text_str)
                     && let Some(obj) = parsed.as_object()
@@ -964,6 +982,51 @@ class ResourcePostFetchResult:
             assert!(
                 is_fail,
                 "isError:true stored in a dict-subclass overlay must trigger failure"
+            );
+        });
+    }
+
+    #[test]
+    fn test_is_failure_propagates_unexpected_getitem_error() {
+        // Regression: `mapping_get` must only swallow KeyError/TypeError (missing
+        // key / non-subscriptable). A `__getitem__` that raises anything else
+        // (a bug, a broken proxy) must surface as an error from `is_failure`
+        // rather than being silently treated as "not a failure" — the latter
+        // would open another silent no-retry path identical in spirit to the
+        // CopyOnWriteDict regression this file fixes.
+        Python::initialize();
+        Python::attach(|py| {
+            setup_cpex_framework(py);
+            let config = RetryConfig {
+                max_retries: 2,
+                backoff_base_ms: 100,
+                max_backoff_ms: 10_000,
+                retry_on_status: vec![500],
+                jitter: false,
+                check_text_content: false,
+                tool_overrides: HashMap::new(),
+            };
+            let core = RetryWithBackoffPluginCore {
+                config: config.clone(),
+                state_manager: Arc::new(Mutex::new(HashMap::new())),
+            };
+            let module = PyModule::from_code(
+                py,
+                c_str!(
+                    "class BrokenDict(dict):\n    def __getitem__(self, k):\n        raise RuntimeError('boom')\n"
+                ),
+                c_str!("broken.py"),
+                c_str!("broken"),
+            )
+            .unwrap();
+            let broken = module.getattr("BrokenDict").unwrap().call0().unwrap();
+
+            let err = core
+                .is_failure(py, &broken, &config)
+                .expect_err("a non-KeyError/TypeError __getitem__ failure must propagate");
+            assert!(
+                err.is_instance_of::<pyo3::exceptions::PyRuntimeError>(py),
+                "expected the original RuntimeError to propagate, got: {err}"
             );
         });
     }
