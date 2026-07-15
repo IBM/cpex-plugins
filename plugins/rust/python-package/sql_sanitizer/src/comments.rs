@@ -40,7 +40,10 @@ pub fn strip_sql_comments(sql: &str) -> String {
                     // Line comment: discard everything up to (not including) the newline.
                     // The newline itself stays in the iterator and is emitted normally.
                     chars.next(); // consume second '-'
-                    while chars.peek().is_some() && chars.peek() != Some(&'\n') {
+                    while let Some(&next) = chars.peek() {
+                        if next == '\n' {
+                            break;
+                        }
                         chars.next();
                     }
                 }
