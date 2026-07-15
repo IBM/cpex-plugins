@@ -23,9 +23,16 @@ pub fn scan_container<'py>(
 ) -> PyResult<(usize, Bound<'py, PyAny>, Bound<'py, PyList>)> {
     let mut seen = HashSet::new();
     let mut memo = HashMap::new();
+    let mut path = Vec::new();
     let str_type = py.import("builtins")?.getattr("str")?;
-    let (count, redacted, findings) =
-        scan_container_inner(py, container, config, &str_type, &mut seen, &mut memo)?;
+    let mut scan = RedactionScanState {
+        config,
+        str_type: &str_type,
+        seen: &mut seen,
+        memo: &mut memo,
+        path: &mut path,
+    };
+    let (count, redacted, findings) = scan_container_inner(py, container, &mut scan, true)?;
     if count == 0 {
         return Ok((0, container.clone(), findings));
     }
@@ -38,22 +45,49 @@ pub fn scan_container_findings<'py>(
     config: &SecretsDetectionConfig,
 ) -> PyResult<(usize, Bound<'py, PyList>)> {
     let mut seen = HashSet::new();
+    let mut path = Vec::new();
     let str_type = py.import("builtins")?.getattr("str")?;
-    scan_findings_inner(py, container, config, &str_type, &mut seen)
+    let mut scan = FindingsScanState {
+        config,
+        str_type: &str_type,
+        seen: &mut seen,
+        path: &mut path,
+    };
+    scan_findings_inner(py, container, &mut scan, true)
+}
+
+struct FindingsScanState<'a, 'py> {
+    config: &'a SecretsDetectionConfig,
+    str_type: &'a Bound<'py, PyAny>,
+    seen: &'a mut HashSet<usize>,
+    path: &'a mut Vec<String>,
+}
+
+struct RedactionScanState<'a, 'py> {
+    config: &'a SecretsDetectionConfig,
+    str_type: &'a Bound<'py, PyAny>,
+    seen: &'a mut HashSet<usize>,
+    memo: &'a mut HashMap<usize, Py<PyAny>>,
+    path: &'a mut Vec<String>,
 }
 
 fn scan_findings_inner<'py>(
     py: Python<'py>,
     container: &Bound<'py, PyAny>,
-    config: &SecretsDetectionConfig,
-    str_type: &Bound<'py, PyAny>,
-    seen: &mut HashSet<usize>,
+    scan: &mut FindingsScanState<'_, 'py>,
+    direct_scalar_root: bool,
 ) -> PyResult<(usize, Bound<'py, PyList>)> {
     let findings = PyList::empty(py);
 
-    if container.is_instance(str_type)? {
+    if container.is_instance(scan.str_type)? {
+        if !scan
+            .config
+            .should_scan_field_path(scan.path, direct_scalar_root)
+        {
+            return Ok((0, findings));
+        }
         let text = container.extract::<String>()?;
-        let (matches, _) = detect_and_redact(&text, config);
+        let (matches, _) = detect_and_redact(&text, scan.config);
         for finding in &matches {
             let finding_dict = PyDict::new(py);
             finding_dict.set_item("type", &finding.pii_type)?;
@@ -62,22 +96,27 @@ fn scan_findings_inner<'py>(
         return Ok((matches.len(), findings));
     }
 
+    if !scan.config.should_traverse_field_path(scan.path) {
+        return Ok((0, findings));
+    }
+
     let object_id = container.as_ptr() as usize;
-    if !seen.insert(object_id) {
+    if !scan.seen.insert(object_id) {
         return Ok((0, findings));
     }
 
     if container.is_exact_instance_of::<PyDict>() {
         let dict = container.cast::<PyDict>()?;
         let mut total = 0usize;
-        for (_, value) in dict.iter() {
-            let count = append_findings(
-                &findings,
-                scan_findings_inner(py, &value, config, str_type, seen)?,
-            )?;
+        for (key, value) in dict.iter() {
+            let pushed = push_field_segment_if_string_key(&key, scan.str_type, scan.path)?;
+            let count = append_findings(&findings, scan_findings_inner(py, &value, scan, false)?)?;
+            if pushed {
+                scan.path.pop();
+            }
             total += count;
         }
-        seen.remove(&object_id);
+        scan.seen.remove(&object_id);
         return Ok((total, findings));
     }
 
@@ -86,40 +125,36 @@ fn scan_findings_inner<'py>(
         for item in container.call_method0("items")?.try_iter()? {
             let item = item?;
             let pair = item.cast::<PyTuple>()?;
+            let key = pair.get_item(0)?;
             let value = pair.get_item(1)?;
-            let count = append_findings(
-                &findings,
-                scan_findings_inner(py, &value, config, str_type, seen)?,
-            )?;
+            let pushed = push_field_segment_if_string_key(&key, scan.str_type, scan.path)?;
+            let count = append_findings(&findings, scan_findings_inner(py, &value, scan, false)?)?;
+            if pushed {
+                scan.path.pop();
+            }
             total += count;
         }
-        seen.remove(&object_id);
+        scan.seen.remove(&object_id);
         return Ok((total, findings));
     }
 
     if let Ok(list) = container.cast::<PyList>() {
         let mut total = 0usize;
         for item in list.iter() {
-            let count = append_findings(
-                &findings,
-                scan_findings_inner(py, &item, config, str_type, seen)?,
-            )?;
+            let count = append_findings(&findings, scan_findings_inner(py, &item, scan, false)?)?;
             total += count;
         }
-        seen.remove(&object_id);
+        scan.seen.remove(&object_id);
         return Ok((total, findings));
     }
 
     if let Ok(tuple) = container.cast::<PyTuple>() {
         let mut total = 0usize;
         for item in tuple.iter() {
-            let count = append_findings(
-                &findings,
-                scan_findings_inner(py, &item, config, str_type, seen)?,
-            )?;
+            let count = append_findings(&findings, scan_findings_inner(py, &item, scan, false)?)?;
             total += count;
         }
-        seen.remove(&object_id);
+        scan.seen.remove(&object_id);
         return Ok((total, findings));
     }
 
@@ -134,7 +169,7 @@ fn scan_findings_inner<'py>(
     if let Some(state) = object_state.rebuild_state {
         let count = append_findings(
             &findings,
-            scan_findings_inner(py, state.as_any(), config, str_type, seen)?,
+            scan_findings_inner(py, state.as_any(), scan, false)?,
         )?;
         total += count;
     }
@@ -142,7 +177,7 @@ fn scan_findings_inner<'py>(
     if let Some(scan_state) = object_state.scan_state {
         let count = append_findings(
             &findings,
-            scan_findings_inner(py, scan_state.as_any(), config, str_type, seen)?,
+            scan_findings_inner(py, scan_state.as_any(), scan, false)?,
         )?;
         total += count;
     }
@@ -158,12 +193,12 @@ fn scan_findings_inner<'py>(
     {
         let count = append_findings(
             &findings,
-            scan_findings_inner(py, &target.state, config, str_type, seen)?,
+            scan_findings_inner(py, &target.state, scan, false)?,
         )?;
         total += count;
     }
 
-    seen.remove(&object_id);
+    scan.seen.remove(&object_id);
     Ok((total, findings))
 }
 
@@ -178,19 +213,35 @@ fn append_findings<'py>(
     Ok(count)
 }
 
+fn push_field_segment_if_string_key(
+    key: &Bound<'_, PyAny>,
+    str_type: &Bound<'_, PyAny>,
+    path: &mut Vec<String>,
+) -> PyResult<bool> {
+    if key.is_instance(str_type)? {
+        path.push(key.extract::<String>()?);
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 fn scan_container_inner<'py>(
     py: Python<'py>,
     container: &Bound<'py, PyAny>,
-    config: &SecretsDetectionConfig,
-    str_type: &Bound<'py, PyAny>,
-    seen: &mut HashSet<usize>,
-    memo: &mut HashMap<usize, Py<PyAny>>,
+    scan: &mut RedactionScanState<'_, 'py>,
+    direct_scalar_root: bool,
 ) -> PyResult<(usize, Bound<'py, PyAny>, Bound<'py, PyList>)> {
     let findings = PyList::empty(py);
 
-    if container.is_instance(str_type)? {
+    if container.is_instance(scan.str_type)? {
+        if !scan
+            .config
+            .should_scan_field_path(scan.path, direct_scalar_root)
+        {
+            return Ok((0, container.clone(), findings));
+        }
         let text = container.extract::<String>()?;
-        let (matches, redacted) = detect_and_redact(&text, config);
+        let (matches, redacted) = detect_and_redact(&text, scan.config);
         for finding in &matches {
             let finding_dict = PyDict::new(py);
             finding_dict.set_item("type", &finding.pii_type)?;
@@ -203,9 +254,11 @@ fn scan_container_inner<'py>(
         ));
     }
 
+    // Rebuild traversal must still walk excluded containers so back-references
+    // inside unchanged subtrees point at the rebuilt graph, not the original.
     let object_id = container.as_ptr() as usize;
-    if !seen.insert(object_id) {
-        if let Some(existing) = memo.get(&object_id) {
+    if !scan.seen.insert(object_id) {
+        if let Some(existing) = scan.memo.get(&object_id) {
             return Ok((0, existing.bind(py).clone(), findings));
         }
         return Ok((0, container.clone(), findings));
@@ -214,67 +267,79 @@ fn scan_container_inner<'py>(
     if container.is_exact_instance_of::<PyDict>() {
         let dict = container.cast::<PyDict>()?;
         let new_dict = PyDict::new(py);
-        memo.insert(object_id, new_dict.clone().into_any().unbind());
+        scan.memo
+            .insert(object_id, new_dict.clone().into_any().unbind());
         let mut total = 0usize;
         for (key, value) in dict.iter() {
+            let pushed = push_field_segment_if_string_key(&key, scan.str_type, scan.path)?;
             let (count, redacted_value, child_findings) =
-                scan_container_inner(py, &value, config, str_type, seen, memo)?;
+                scan_container_inner(py, &value, scan, false)?;
+            if pushed {
+                scan.path.pop();
+            }
             total += count;
             for finding in child_findings.iter() {
                 findings.append(finding)?;
             }
             new_dict.set_item(key, redacted_value)?;
         }
-        seen.remove(&object_id);
+        scan.seen.remove(&object_id);
         return Ok((total, new_dict.into_any(), findings));
     }
 
     if container.is_instance_of::<PyDict>() {
         let new_dict = PyDict::new(py);
-        memo.insert(object_id, new_dict.clone().into_any().unbind());
+        scan.memo
+            .insert(object_id, new_dict.clone().into_any().unbind());
         let mut total = 0usize;
         for item in container.call_method0("items")?.try_iter()? {
             let item = item?;
             let pair = item.cast::<PyTuple>()?;
             let key = pair.get_item(0)?;
             let value = pair.get_item(1)?;
+            let pushed = push_field_segment_if_string_key(&key, scan.str_type, scan.path)?;
             let (count, redacted_value, child_findings) =
-                scan_container_inner(py, &value, config, str_type, seen, memo)?;
+                scan_container_inner(py, &value, scan, false)?;
+            if pushed {
+                scan.path.pop();
+            }
             total += count;
             for finding in child_findings.iter() {
                 findings.append(finding)?;
             }
             new_dict.set_item(key, redacted_value)?;
         }
-        seen.remove(&object_id);
+        scan.seen.remove(&object_id);
         return Ok((total, new_dict.into_any(), findings));
     }
 
     if let Ok(list) = container.cast::<PyList>() {
         let new_list = PyList::empty(py);
-        memo.insert(object_id, new_list.clone().into_any().unbind());
+        scan.memo
+            .insert(object_id, new_list.clone().into_any().unbind());
         let mut total = 0usize;
         for item in list.iter() {
             let (count, redacted_item, child_findings) =
-                scan_container_inner(py, &item, config, str_type, seen, memo)?;
+                scan_container_inner(py, &item, scan, false)?;
             total += count;
             for finding in child_findings.iter() {
                 findings.append(finding)?;
             }
             new_list.append(redacted_item)?;
         }
-        seen.remove(&object_id);
+        scan.seen.remove(&object_id);
         return Ok((total, new_list.into_any(), findings));
     }
 
     if let Ok(tuple) = container.cast::<PyTuple>() {
         let tuple_placeholder = PyList::empty(py);
-        memo.insert(object_id, tuple_placeholder.clone().into_any().unbind());
+        scan.memo
+            .insert(object_id, tuple_placeholder.clone().into_any().unbind());
         let mut items = Vec::with_capacity(tuple.len());
         let mut total = 0usize;
         for item in tuple.iter() {
             let (count, redacted_item, child_findings) =
-                scan_container_inner(py, &item, config, str_type, seen, memo)?;
+                scan_container_inner(py, &item, scan, false)?;
             total += count;
             for finding in child_findings.iter() {
                 findings.append(finding)?;
@@ -290,8 +355,8 @@ fn scan_container_inner<'py>(
             &new_tuple.clone().into_any(),
             &mut rewrite_seen,
         )?;
-        seen.remove(&object_id);
-        memo.remove(&object_id);
+        scan.seen.remove(&object_id);
+        scan.memo.remove(&object_id);
         return Ok((total, new_tuple.into_any(), findings));
     }
 
@@ -301,16 +366,16 @@ fn scan_container_inner<'py>(
         || object_state.scan_state.is_some()
     {
         let (total, result, object_findings) =
-            scan_object_state(py, container, object_state, config, str_type, seen, memo)?;
+            scan_object_state(py, container, object_state, scan)?;
         for finding in object_findings.iter() {
             findings.append(finding)?;
         }
-        seen.remove(&object_id);
-        memo.remove(&object_id);
+        scan.seen.remove(&object_id);
+        scan.memo.remove(&object_id);
         return Ok((total, result, findings));
     }
 
-    seen.remove(&object_id);
+    scan.seen.remove(&object_id);
     Ok((0, container.clone(), findings))
 }
 struct SerializedScanTarget<'py> {
@@ -327,10 +392,7 @@ fn scan_object_state<'py>(
     py: Python<'py>,
     container: &Bound<'py, PyAny>,
     object_state: InspectedObjectState<'py>,
-    config: &SecretsDetectionConfig,
-    str_type: &Bound<'py, PyAny>,
-    seen: &mut HashSet<usize>,
-    memo: &mut HashMap<usize, Py<PyAny>>,
+    scan: &mut RedactionScanState<'_, 'py>,
 ) -> PyResult<(usize, Bound<'py, PyAny>, Bound<'py, PyList>)> {
     let findings = PyList::empty(py);
     let mut total = 0usize;
@@ -345,10 +407,11 @@ fn scan_object_state<'py>(
 
     if let Some(state) = object_state.rebuild_state {
         let target = prepare_rebuild_target(py, container)?;
-        memo.insert(container.as_ptr() as usize, target.clone().unbind());
+        scan.memo
+            .insert(container.as_ptr() as usize, target.clone().unbind());
         let state_any = state.into_any();
         let (count, redacted_state, child_findings) =
-            scan_container_inner(py, &state_any, config, str_type, seen, memo)?;
+            scan_container_inner(py, &state_any, scan, false)?;
         total += count;
         for finding in child_findings.iter() {
             findings.append(finding)?;
@@ -367,13 +430,14 @@ fn scan_object_state<'py>(
             if let Some(state) = rebuild_state_for_extra.as_ref() {
                 apply_object_state(py, &target, &state.clone().into_any())?;
             }
-            memo.insert(container.as_ptr() as usize, target.clone().unbind());
+            scan.memo
+                .insert(container.as_ptr() as usize, target.clone().unbind());
             rebuilt = Some(target.into_any());
         }
 
         let scan_state_any = scan_state.clone().into_any();
         let (count, redacted_state, child_findings) =
-            scan_container_inner(py, &scan_state_any, config, str_type, seen, memo)?;
+            scan_container_inner(py, &scan_state_any, scan, false)?;
         total += count;
         for finding in child_findings.iter() {
             findings.append(finding)?;
@@ -387,7 +451,7 @@ fn scan_object_state<'py>(
                 state: redacted_state.cast::<PyDict>()?.clone(),
                 placeholder,
             });
-            memo.remove(&(container.as_ptr() as usize));
+            scan.memo.remove(&(container.as_ptr() as usize));
         }
     }
 
@@ -401,7 +465,7 @@ fn scan_object_state<'py>(
         )?
     {
         let (count, redacted_state, child_findings) =
-            scan_serialized_state_target(py, target, config, str_type, seen, memo)?;
+            scan_serialized_state_target(py, target, scan)?;
         total += count;
         for finding in child_findings.iter() {
             findings.append(finding)?;
@@ -437,35 +501,24 @@ fn scan_object_state<'py>(
 fn scan_serialized_state_target<'py>(
     py: Python<'py>,
     target: SerializedScanTarget<'py>,
-    config: &SecretsDetectionConfig,
-    str_type: &Bound<'py, PyAny>,
-    seen: &mut HashSet<usize>,
-    memo: &mut HashMap<usize, Py<PyAny>>,
+    scan: &mut RedactionScanState<'_, 'py>,
 ) -> PyResult<(usize, Bound<'py, PyAny>, Bound<'py, PyList>)> {
     if let Some(object_state) = target.object_state {
         let object_id = target.state.as_ptr() as usize;
-        if !seen.insert(object_id) {
+        if !scan.seen.insert(object_id) {
             let findings = PyList::empty(py);
-            if let Some(existing) = memo.get(&object_id) {
+            if let Some(existing) = scan.memo.get(&object_id) {
                 return Ok((0, existing.bind(py).clone(), findings));
             }
             return Ok((0, target.state, findings));
         }
-        let result = scan_object_state(
-            py,
-            &target.state,
-            object_state,
-            config,
-            str_type,
-            seen,
-            memo,
-        )?;
-        seen.remove(&object_id);
-        memo.remove(&object_id);
+        let result = scan_object_state(py, &target.state, object_state, scan)?;
+        scan.seen.remove(&object_id);
+        scan.memo.remove(&object_id);
         return Ok(result);
     }
 
-    scan_container_inner(py, &target.state, config, str_type, seen, memo)
+    scan_container_inner(py, &target.state, scan, false)
 }
 
 #[cfg(test)]
