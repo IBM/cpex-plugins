@@ -174,6 +174,10 @@ impl RetryStateManager {
 #[pymodule]
 fn retry_with_backoff_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     pyo3_log::init();
+    // Single source of truth for the Rust core version: read from Cargo.toml at
+    // compile time so the wrapper's init log can't drift from the crate version
+    // again (it previously hard-coded a version string that went stale).
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_class::<RetryStateManager>()?;
     m.add_class::<plugin::RetryWithBackoffPluginCore>()?;
     Ok(())
