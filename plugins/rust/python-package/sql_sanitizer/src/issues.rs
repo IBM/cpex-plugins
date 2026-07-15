@@ -13,6 +13,10 @@ use regex::Regex;
 use crate::comments::strip_sql_comments;
 use crate::config::SqlSanitizerConfig;
 
+/// Matches common Python printf-style format specifiers (`%s`, `%d`, `%f`, `%i`, `%r`).
+static PRINTF_FMT_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"%[sdfi]").expect("Invalid printf format regex"));
+
 static DELETE_FROM_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)\bDELETE\b\s+\bFROM\b").expect("Invalid DELETE FROM regex"));
 
@@ -88,11 +92,11 @@ pub fn find_issues(sql: &str, cfg: &SqlSanitizerConfig) -> Vec<String> {
 /// Heuristic check for naive SQL string interpolation.
 ///
 /// Detects common patterns:
-/// * `+`      — string concatenation
-/// * `%.`     — `%s` / `%d` printf-style formatting
-/// * `{…}`    — f-string / `.format()` style
+/// * `+`         — string concatenation
+/// * `%s` / `%d` / `%f` / `%i` — Python printf-style format specifiers
+/// * `{…}`       — f-string / `.format()` style
 fn has_interpolation(sql: &str) -> bool {
-    sql.contains('+') || sql.contains("%.") || has_brace_template(sql)
+    sql.contains('+') || PRINTF_FMT_RE.is_match(sql) || has_brace_template(sql)
 }
 
 /// Return `true` when `sql` contains a `{…}` template placeholder.
@@ -254,13 +258,27 @@ mod tests {
         assert_eq!(issues, Vec::<String>::new());
     }
 
-    /// `require_parameterization=true` + SQL containing only `+` (no `%.` or
+    /// `require_parameterization=true` + SQL containing only `+` (no `%s` or
     /// `{…}`) → flagged.  Catches the `||` → `&&` mutant in `has_interpolation`.
     #[test]
     fn detects_plus_concatenation_as_interpolation() {
         let mut cfg = default_cfg();
         cfg.require_parameterization = true;
         let issues = find_issues("SELECT * FROM t WHERE x = val + 1", &cfg);
+        assert_eq!(
+            issues,
+            vec!["Possible non-parameterized interpolation detected"]
+        );
+    }
+
+    /// `require_parameterization=true` + SQL with a `%s` placeholder (no `+`
+    /// or `{…}`) → flagged.  Catches the second `||` → `&&` mutant in
+    /// `has_interpolation` and verifies the printf-format detection.
+    #[test]
+    fn detects_printf_format_as_interpolation() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("SELECT * FROM users WHERE name = '%s'", &cfg);
         assert_eq!(
             issues,
             vec!["Possible non-parameterized interpolation detected"]

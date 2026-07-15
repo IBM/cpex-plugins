@@ -44,7 +44,7 @@ The plugin is automatically discovered by the gateway via the
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `fields` | `list[str] \| null` | `null` | Field names to scan; `null` scans all strings |
-| `blocked_statements` | `list[str]` | `[]` | Additional regex patterns to block |
+| `blocked_statements` | `list[str]` | `["\\bDROP\\b", "\\bTRUNCATE\\b", "\\bALTER\\b", "\\bGRANT\\b", "\\bREVOKE\\b"]` | **Replaces** the default blocked-pattern set; `[]` disables this category |
 | `block_delete_without_where` | `bool` | `true` | Block `DELETE FROM` without `WHERE` |
 | `block_update_without_where` | `bool` | `true` | Block `UPDATE` without `WHERE` |
 | `strip_comments` | `bool` | `true` | Strip SQL comments before analysis |

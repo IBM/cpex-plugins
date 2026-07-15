@@ -139,6 +139,11 @@ impl SqlSanitizerPluginCore {
 
             let metadata = PyDict::new(py);
             metadata.set_item("sql_sanitized", true)?;
+            // In monitoring mode, preserve any detected issues alongside the
+            // stripped payload so audit consumers see the full picture.
+            if !issues.is_empty() {
+                metadata.set_item("sql_issues", &issues)?;
+            }
 
             return build_framework_object_dyn(
                 py,
@@ -396,6 +401,46 @@ class PluginViolation:
             assert!(
                 !mp.is_none(),
                 "modified_payload must be set when comments are stripped"
+            );
+        });
+    }
+
+    /// Monitoring mode (`block_on_violation=false`) + SQL that both has issues
+    /// AND contains a strippable comment → result must carry *both*
+    /// `modified_payload` and `metadata.sql_issues`.
+    ///
+    /// Regression test for the bug where the modified-payload path returned
+    /// early without populating `sql_issues`, silently losing audit information.
+    #[test]
+    fn monitoring_mode_with_comment_includes_sql_issues_in_metadata() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let cfg_dict = PyDict::new(py);
+            cfg_dict.set_item("block_on_violation", false).unwrap();
+            let core = super::SqlSanitizerPluginCore::new(cfg_dict.as_any()).unwrap();
+            let args = PyDict::new(py);
+            // Dangerous SQL with a comment: both stripping AND an issue occur
+            args.set_item("sql", "DELETE FROM sessions -- cleanup")
+                .unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let bound = result.bind(py);
+            let mp = bound.getattr("modified_payload").unwrap();
+            assert!(
+                !mp.is_none(),
+                "modified_payload must be set (comment stripped)"
+            );
+            let metadata = bound.getattr("metadata").unwrap();
+            let has_issues: bool = metadata
+                .call_method1("__contains__", ("sql_issues",))
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(
+                has_issues,
+                "sql_issues must be present in metadata even when comment stripping also occurred"
             );
         });
     }

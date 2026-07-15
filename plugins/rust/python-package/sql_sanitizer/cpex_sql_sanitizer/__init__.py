@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# Copyright 2026
+# SPDX-License-Identifier: Apache-2.0
 """SQL sanitizer plugin package."""
 
 from __future__ import annotations

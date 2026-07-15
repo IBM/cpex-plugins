@@ -15,7 +15,9 @@ class SQLSanitizerPlugin(Plugin):
     Configuration keys (all optional, defaults match the original Python plugin):
 
     - ``fields``                    – list[str] | null — field names to scan (null = all strings)
-    - ``blocked_statements``        – list[str]  — additional regex patterns to block
+    - ``blocked_statements``        – list[str]  — replaces the default blocked-statement
+      patterns (DROP / TRUNCATE / ALTER / GRANT / REVOKE); an empty list disables
+      this category entirely
     - ``block_delete_without_where``– bool (default true)
     - ``block_update_without_where``– bool (default true)
     - ``strip_comments``            – bool (default true)
