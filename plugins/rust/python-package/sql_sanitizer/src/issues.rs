@@ -364,6 +364,16 @@ mod tests {
 
     /// WHERE appearing only inside a quoted value must not satisfy the WHERE
     /// guard — the statement still has no structural WHERE clause.
+    /// Catches: `issues.rs#L46` `peek() == Some(&'\'')`→`!=` in `mask_string_literals`.
+    /// With that mutant the closing `'` is not emitted and quote mode never exits,
+    /// so everything after the literal (including WHERE) is masked away.
+    #[test]
+    fn where_clause_after_literal_is_recognized() {
+        // Correct masking closes the literal; WHERE is visible → no issue.
+        let issues = find_issues("UPDATE t SET x = 'value' WHERE id = 1", &default_cfg());
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
     #[test]
     fn where_in_string_literal_is_not_treated_as_clause() {
         let issues = find_issues("UPDATE users SET note = 'has WHERE text'", &default_cfg());

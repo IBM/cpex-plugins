@@ -67,6 +67,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn does_not_strip_single_hyphen() {
+        // A lone '-' must not trigger line-comment stripping; only '--' does.
+        // Catches: comments.rs#L39 match guard `peek() == Some(&'-')` → true
+        let input = "SELECT x - 1 FROM t";
+        assert_eq!(strip_sql_comments(input), input);
+    }
+
+    #[test]
+    fn does_not_strip_lone_slash() {
+        // A lone '/' must not trigger block-comment stripping; only '/*' does.
+        // Catches: comments.rs#L47 match guard `peek() == Some(&'*')` → true
+        let input = "SELECT 10 / 2 FROM t";
+        assert_eq!(strip_sql_comments(input), input);
+    }
+
+    #[test]
+    fn slash_inside_block_comment_does_not_end_it() {
+        // A '/' inside a block comment must NOT terminate it; only '*/' does.
+        // Catches: comments.rs#L52 `prev == '*' && c == '/'` → `||`
+        assert_eq!(
+            strip_sql_comments("SELECT /* he/she */ 1 FROM t"),
+            "SELECT  1 FROM t"
+        );
+    }
+
+    #[test]
     fn strips_line_comments() {
         // Strips from `--` to end of line; the trailing space and newline are preserved.
         assert_eq!(
