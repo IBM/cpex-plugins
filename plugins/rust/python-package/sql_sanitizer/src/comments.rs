@@ -7,8 +7,9 @@
 // a single-quoted string literal, so that comment markers embedded in literals
 // (e.g. `'it -- stays'` or `'/* also stays */'`) are not removed.
 
-/// Remove SQL line comments (`-- …`) and block comments (`/* … */`),
-/// preserving the original text inside single-quoted string literals.
+/// Remove SQL line comments (`-- …`, MySQL `# …`) and block comments
+/// (`/* … */`), preserving the original text inside single-quoted string
+/// literals.
 ///
 /// Comment markers that appear inside a quoted literal are left intact so that
 /// the SQL value is not corrupted.  Single-quote escaping follows the SQL
@@ -40,6 +41,22 @@ pub fn strip_sql_comments(sql: &str) -> String {
                     // Line comment: discard everything up to (not including) the newline.
                     // The newline itself stays in the iterator and is emitted normally.
                     chars.next(); // consume second '-'
+                    while let Some(&next) = chars.peek() {
+                        if next == '\n' {
+                            break;
+                        }
+                        chars.next();
+                    }
+                }
+                '#' => {
+                    // MySQL `#` line comment: discard to end of line.  This closes a
+                    // bypass where a `WHERE` clause is hidden behind a `#` comment,
+                    // e.g. `DELETE FROM t # WHERE id=1`.
+                    //
+                    // Trade-off: SQL Server temp-table identifiers (`#temp`) are also
+                    // treated as comments here.  For a security guard that fails
+                    // closed this is acceptable — the worst case is a false positive
+                    // that blocks an otherwise-safe statement, never a missed DELETE.
                     while let Some(&next) = chars.peek() {
                         if next == '\n' {
                             break;
@@ -111,6 +128,22 @@ mod tests {
             strip_sql_comments("SELECT /* secret */ 1 FROM t"),
             "SELECT  1 FROM t"
         );
+    }
+
+    #[test]
+    fn strips_hash_line_comments() {
+        // MySQL `#` comment is stripped to end of line; the newline is preserved.
+        assert_eq!(
+            strip_sql_comments("DELETE FROM t # WHERE id=1\nSELECT 1"),
+            "DELETE FROM t \nSELECT 1"
+        );
+    }
+
+    #[test]
+    fn preserves_hash_inside_string_literal() {
+        // `#` inside a quoted string is part of the value, not a comment.
+        let input = "SELECT '# not a comment' FROM t";
+        assert_eq!(strip_sql_comments(input), input);
     }
 
     #[test]

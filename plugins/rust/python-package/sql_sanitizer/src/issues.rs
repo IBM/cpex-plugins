@@ -17,8 +17,15 @@ use crate::config::SqlSanitizerConfig;
 static PRINTF_FMT_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"%[sdfi]").expect("Invalid printf format regex"));
 
-static DELETE_FROM_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)\bDELETE\b\s+\bFROM\b").expect("Invalid DELETE FROM regex"));
+static DELETE_FROM_RE: Lazy<Regex> = Lazy::new(|| {
+    // A statement whose leading keyword is DELETE is destructive regardless of
+    // the table syntax that follows.  Anchoring at the statement start covers:
+    //   * single-table:  `DELETE FROM users`
+    //   * multi-table:    `DELETE u FROM users AS u`  (MySQL/`JOIN` deletes)
+    //   * quoted tables:  `DELETE FROM "users"`
+    // Statements are already split on `;` and trimmed before this runs.
+    Regex::new(r"(?i)^\s*DELETE\b").expect("Invalid DELETE regex")
+});
 
 static UPDATE_RE: Lazy<Regex> = Lazy::new(|| {
     // Match UPDATE followed by a plain, double-quoted (ANSI), backtick-quoted (MySQL),
@@ -244,6 +251,29 @@ mod tests {
     fn no_issue_for_update_with_where() {
         let issues = find_issues("UPDATE salary SET amount = 0 WHERE id = 5", &default_cfg());
         assert_eq!(issues, Vec::<String>::new());
+    }
+
+    #[test]
+    fn detects_multi_table_delete_without_where() {
+        // MySQL multi-table DELETE: the table alias sits between DELETE and FROM,
+        // so a `DELETE ... FROM` adjacency check misses it.  This still deletes
+        // every row and must be blocked.
+        let issues = find_issues("DELETE u FROM users AS u", &default_cfg());
+        assert_eq!(issues, vec!["DELETE without WHERE clause"]);
+    }
+
+    #[test]
+    fn no_issue_for_multi_table_delete_with_where() {
+        let issues = find_issues("DELETE u FROM users AS u WHERE u.id = 1", &default_cfg());
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    #[test]
+    fn detects_delete_with_where_hidden_in_hash_comment() {
+        // MySQL `#` comment hides the apparent WHERE, so the real statement is a
+        // WHERE-less DELETE that removes every row.
+        let issues = find_issues("DELETE FROM users # WHERE id=1", &default_cfg());
+        assert_eq!(issues, vec!["DELETE without WHERE clause"]);
     }
 
     // -----------------------------------------------------------------------
