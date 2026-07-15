@@ -42,16 +42,14 @@ REQUIRED_WORKSPACE_DEPENDENCIES = {
     "cpex_framework_bridge",
     "criterion",
     "log",
-    "pyo3-async-runtimes",
+    "mutants",
     "pyo3",
     "pyo3-log",
     "pyo3-stub-gen",
-    "rand",
     "regex",
     "serde",
     "serde_json",
     "thiserror",
-    "tokio",
 }
 REQUIRED_PLUGIN_WORKSPACE_DEPENDENCIES = {
     "encoded_exfil_detection": {
@@ -84,12 +82,11 @@ REQUIRED_PLUGIN_WORKSPACE_DEPENDENCIES = {
         "dependencies": (
             "cpex_framework_bridge",
             "log",
+            "mutants",
             "pyo3",
-            "pyo3-async-runtimes",
             "pyo3-stub-gen",
             "pyo3-log",
             "thiserror",
-            "tokio",
         ),
         "dev-dependencies": ("criterion",),
     },
@@ -97,10 +94,10 @@ REQUIRED_PLUGIN_WORKSPACE_DEPENDENCIES = {
         "dependencies": (
             "cpex_framework_bridge",
             "log",
+            "mutants",
             "pyo3",
             "pyo3-log",
             "pyo3-stub-gen",
-            "rand",
             "serde",
             "serde_json",
         ),
