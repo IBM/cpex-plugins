@@ -20,8 +20,13 @@ static PRINTF_FMT_RE: Lazy<Regex> =
 static DELETE_FROM_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)\bDELETE\b\s+\bFROM\b").expect("Invalid DELETE FROM regex"));
 
-static UPDATE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)\bUPDATE\b\s+\w+").expect("Invalid UPDATE regex"));
+static UPDATE_RE: Lazy<Regex> = Lazy::new(|| {
+    // Match UPDATE followed by a plain, double-quoted (ANSI), backtick-quoted (MySQL),
+    // or bracket-quoted (SQL Server) table name so that `UPDATE "users" SET …` is
+    // not allowed to bypass the WHERE-clause guard.
+    Regex::new(r#"(?i)\bUPDATE\b\s+(?:\w+|"[^"]*"|`[^`]*`|\[[^\]]*\])"#)
+        .expect("Invalid UPDATE regex")
+});
 
 static WHERE_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)\bWHERE\b").expect("Invalid WHERE regex"));

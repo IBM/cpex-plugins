@@ -678,4 +678,94 @@ def make_cow_payload(sql):
             );
         });
     }
+
+    /// `UPDATE "users" SET admin=1` — quoted table name must still match the
+    /// UPDATE regex so the WHERE-clause guard fires.
+    /// Regression for: UPDATE_RE using `\w+` which skips double-quoted identifiers.
+    #[test]
+    fn quoted_table_name_update_is_blocked() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let empty = PyDict::new(py);
+            let core = super::SqlSanitizerPluginCore::new(empty.as_any()).unwrap();
+            let args = PyDict::new(py);
+            args.set_item("sql", r#"UPDATE "users" SET admin=1"#)
+                .unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let cp: bool = result
+                .bind(py)
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(!cp, r#"UPDATE "users" without WHERE must be blocked"#);
+        });
+    }
+
+    /// Stripping a comment from a nested field (e.g. `wrapper.sql`) must NOT
+    /// overwrite an unrelated top-level field with the same key name.
+    /// Regression for: `stripped` recording the nested key name and applying it
+    /// as a top-level overlay in `rebuild_args_with_stripped`.
+    #[test]
+    fn nested_comment_stripping_does_not_overwrite_top_level_key() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let cfg_dict = PyDict::new(py);
+            cfg_dict.set_item("block_on_violation", false).unwrap();
+            let core = super::SqlSanitizerPluginCore::new(cfg_dict.as_any()).unwrap();
+
+            // Top-level `sql` is safe. Nested `wrapper.sql` has a comment.
+            // The nested comment must NOT cause `sql` to be overwritten.
+            let wrapper = PyDict::new(py);
+            wrapper
+                .set_item("sql", "SELECT 1 -- nested comment")
+                .unwrap();
+            let args = PyDict::new(py);
+            args.set_item("sql", "SELECT 2").unwrap(); // safe top-level value
+            args.set_item("wrapper", &wrapper).unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let bound = result.bind(py);
+            // No modified_payload: the nested comment should NOT produce a stripped entry
+            let mp = bound.getattr("modified_payload").unwrap();
+            assert!(
+                mp.is_none(),
+                "nested comment stripping must not produce a modified_payload"
+            );
+        });
+    }
+
+    /// `{"batch": [["DROP TABLE users"]]}` — a list-of-lists payload must be
+    /// recursed into so the inner string is scanned and the violation blocked.
+    /// Regression for: `scanner.rs` only recursing one level into lists.
+    #[test]
+    fn nested_list_items_are_scanned() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let empty = PyDict::new(py);
+            let core = super::SqlSanitizerPluginCore::new(empty.as_any()).unwrap();
+
+            // [[dangerous SQL]] — two levels of list nesting
+            let inner = pyo3::types::PyList::new(py, ["DROP TABLE users"]).unwrap();
+            let outer = pyo3::types::PyList::new(py, [&inner]).unwrap();
+            let args = PyDict::new(py);
+            args.set_item("batch", &outer).unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let cp: bool = result
+                .bind(py)
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(!cp, "DROP TABLE inside nested list must be blocked");
+        });
+    }
 }

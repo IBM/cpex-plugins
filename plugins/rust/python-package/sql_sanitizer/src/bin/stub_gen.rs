@@ -41,29 +41,27 @@ fn curate_top_level_stub() {
     println!("Generated stub at {}", stub_path.display());
 }
 
-fn main() {
-    let stub_info = stub_info();
-    let options = pyo3_stub_gen::GenerateOptions::default();
-    let generated = stub_info
-        .generate(&options)
-        .expect("Failed to generate stubs");
-    let generated_str = generated.to_string();
-
+fn curate_extension_stub() {
     // Ensure the output directory exists
     if let Some(parent) = Path::new(EXTENSION_STUB_PATH).parent() {
         fs::create_dir_all(parent).expect("Failed to create stub directory");
     }
-
-    // Write the extension module stub
-    let content = if generated_str.contains(PLUGIN_CORE_CLASS_MARKER) {
-        generated_str
+    let content =
+        fs::read_to_string(EXTENSION_STUB_PATH).expect("Failed to read generated stub file");
+    let content = if content.contains(PLUGIN_CORE_CLASS_MARKER) {
+        content
     } else {
-        format!("{}{}", generated_str, PLUGIN_CORE_CLASS_DEF)
+        format!("{}{}", content, PLUGIN_CORE_CLASS_DEF)
     };
-
     let normalized = normalize_stub_content(&content);
     fs::write(EXTENSION_STUB_PATH, &normalized).expect("Failed to write stub file");
     println!("Generated stub at {}", EXTENSION_STUB_PATH);
+}
 
+fn main() {
+    let stub_info = stub_info().expect("Failed to get stub info");
+    stub_info.generate().expect("Failed to generate stub files");
+    curate_extension_stub();
     curate_top_level_stub();
+    println!("\u{2713} Generated stub files successfully");
 }

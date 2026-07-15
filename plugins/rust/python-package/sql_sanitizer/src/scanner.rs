@@ -8,10 +8,11 @@
 //    (or unconditionally when `fields` is `None`).
 //  - Dicts are walked depth-first; each nested key is used as the scan key.
 //  - Lists of dicts recurse into the dict items; lists of strings inherit the
-//    parent key name.
-//  - The `stripped` accumulator collects (key, stripped_sql) pairs where
-//    SQL comments were removed.  These are applied as a shallow overlay on
-//    `payload.args` before returning a modified-payload result.
+//    parent key name; lists inside lists are recursed into with the same key.
+//  - Comment stripping only produces a patched payload for **top-level** string
+//    values.  `rebuild_args_with_stripped` applies a shallow top-level overlay,
+//    so recording a stripped value for a nested key would corrupt unrelated
+//    top-level fields.  Nested strings are still **scanned** for issues.
 
 use pyo3::prelude::*;
 use pyo3::types::PyList;
@@ -29,13 +30,18 @@ use crate::issues::find_issues;
 /// * `cfg`     – Sanitizer configuration.
 /// * `issues`  – Mutable accumulator for bare issue strings (e.g. `"DELETE without WHERE clause"`).
 /// * `stripped`– Mutable accumulator of `(key, stripped_value)` pairs where comments were
-///   removed.  Used by the caller to build a modified payload.
+///   removed.  Only populated for **top-level** string values (see `at_top_level`).
+///   Used by the caller to build a modified payload.
+/// * `at_top_level` – `true` only when called for a direct child of the top-level
+///   `payload.args` dict.  Prevents nested strings from being recorded in `stripped`,
+///   which would overwrite an unrelated top-level key with the same name.
 pub fn scan_value(
     key: &str,
     value: &Bound<'_, PyAny>,
     cfg: &SqlSanitizerConfig,
     issues: &mut Vec<String>,
     stripped: &mut StrippedFields,
+    at_top_level: bool,
 ) -> PyResult<()> {
     if let Ok(text) = value.extract::<String>() {
         // Leaf string — only analyse when the field name passes the filter
@@ -49,7 +55,11 @@ pub fn scan_value(
             for issue in found {
                 issues.push(issue);
             }
-            if cfg.strip_comments {
+            // Only record a stripped replacement for top-level values.
+            // Nested keys share names with unrelated top-level keys; applying
+            // a shallow overlay with just the key name would overwrite the
+            // wrong field (or inject a spurious new key).
+            if cfg.strip_comments && at_top_level {
                 let clean = strip_sql_comments(&text);
                 if clean != text {
                     stripped.push((key.to_string(), clean));
@@ -67,8 +77,12 @@ pub fn scan_value(
                 for entry in dict_items.try_iter()? {
                     let entry = entry?;
                     let k_str: String = entry.get_item(0)?.extract()?;
-                    scan_value(&k_str, &entry.get_item(1)?, cfg, issues, stripped)?;
+                    scan_value(&k_str, &entry.get_item(1)?, cfg, issues, stripped, false)?;
                 }
+            } else if item.cast::<PyList>().is_ok() {
+                // Nested list (e.g. `[["DROP TABLE users"]]`): recurse with the
+                // same parent key so strings at any depth are scanned for issues.
+                scan_value(key, &item, cfg, issues, stripped, false)?;
             } else if let Ok(text) = item.extract::<String>() {
                 // Plain string items inherit the parent key name.
                 // NOTE: list items are scanned for issues but are intentionally
@@ -97,7 +111,7 @@ pub fn scan_value(
         for item in dict_items.try_iter()? {
             let item = item?;
             let k_str: String = item.get_item(0)?.extract()?;
-            scan_value(&k_str, &item.get_item(1)?, cfg, issues, stripped)?;
+            scan_value(&k_str, &item.get_item(1)?, cfg, issues, stripped, false)?;
         }
     }
     // Other Python types (int, float, None, bytes …) are silently ignored.
@@ -132,7 +146,14 @@ pub fn scan_args(
         for item in dict_items.try_iter()? {
             let item = item?;
             let k_str: String = item.get_item(0)?.extract()?;
-            scan_value(&k_str, &item.get_item(1)?, cfg, &mut issues, &mut stripped)?;
+            scan_value(
+                &k_str,
+                &item.get_item(1)?,
+                cfg,
+                &mut issues,
+                &mut stripped,
+                true, // direct child of args dict → top-level
+            )?;
         }
     }
     // Non-mapping args (should not happen in practice) are skipped silently.
