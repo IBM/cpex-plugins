@@ -60,6 +60,8 @@ fn scan_value(value: &Value, config: &SecretsDetectionConfig) -> (usize, Value, 
 mod tests {
     use super::*;
 
+    const SECRET_FIXTURE: &str = "FAKESecretAccessKeyForTestingEXAMPLE0000"; // pragma: allowlist secret
+
     #[test]
     fn detects_aws_secret_access_key() {
         let config = SecretsDetectionConfig::default();
@@ -75,22 +77,93 @@ mod tests {
     }
 
     #[test]
-    fn detects_quoted_aws_secret_access_keys() {
+    fn detects_aws_secret_access_key_assignment_formats() {
         let config = SecretsDetectionConfig {
             redact: true,
             redaction_text: "[REDACTED]".to_string(),
             ..Default::default()
         };
 
-        for text in [
-            "aws_secret_access_key = \"FAKESecretAccessKeyForTestingEXAMPLE0000\"", // pragma: allowlist secret
-            "aws_secret_access_key = 'FAKESecretAccessKeyForTestingEXAMPLE0000'", // pragma: allowlist secret
-        ] {
-            let (findings, redacted) = detect_and_redact(text, &config);
+        let cases = [
+            (
+                "equals-unquoted",
+                format!("AWS_SECRET_ACCESS_KEY={SECRET_FIXTURE}"), // pragma: allowlist secret
+            ),
+            (
+                "equals-double-quoted",
+                format!("aws_secret_access_key = \"{SECRET_FIXTURE}\""), // pragma: allowlist secret
+            ),
+            (
+                "equals-single-quoted",
+                format!("aws_secret_access_key = '{SECRET_FIXTURE}'"), // pragma: allowlist secret
+            ),
+            (
+                "yaml-unquoted",
+                format!("aws_secret_access_key: {SECRET_FIXTURE}"), // pragma: allowlist secret
+            ),
+            (
+                "yaml-double-quoted",
+                format!("aws_secret_access_key: \"{SECRET_FIXTURE}\""), // pragma: allowlist secret
+            ),
+            (
+                "yaml-single-quoted",
+                format!("aws_secret_access_key: '{SECRET_FIXTURE}'"), // pragma: allowlist secret
+            ),
+            (
+                "json-spaced",
+                format!(r#""aws_secret_access_key": "{SECRET_FIXTURE}""#), // pragma: allowlist secret
+            ),
+            (
+                "json-compact",
+                format!(r#""aws_secret_access_key":"{SECRET_FIXTURE}""#), // pragma: allowlist secret
+            ),
+            (
+                "mixed-case",
+                format!("AwsSecretAccessKey: \"{SECRET_FIXTURE}\""), // pragma: allowlist secret
+            ),
+        ];
 
-            assert_eq!(findings.len(), 1, "{text}: {findings:?}");
-            assert_eq!(findings[0].pii_type, "aws_secret_access_key");
-            assert_eq!(redacted, config.redaction_text);
+        for (name, text) in cases {
+            let (findings, redacted) = detect_and_redact(&text, &config);
+
+            assert_eq!(findings.len(), 1, "{name}: {findings:?}");
+            assert_eq!(findings[0].pii_type, "aws_secret_access_key", "{name}");
+            assert!(!redacted.contains(SECRET_FIXTURE), "{name}: {redacted}");
+            assert!(
+                redacted.contains(&config.redaction_text),
+                "{name}: {redacted}"
+            );
+        }
+    }
+
+    #[test]
+    fn ignores_non_assignment_aws_secret_access_key_text() {
+        let config = SecretsDetectionConfig::default();
+        let short_value = "A".repeat(39);
+        let cases = [
+            (
+                "missing-separator",
+                format!("aws_secret_access_key \"{SECRET_FIXTURE}\""), // pragma: allowlist secret
+            ),
+            (
+                "unsupported-separator",
+                format!("aws_secret_access_key -> \"{SECRET_FIXTURE}\""), // pragma: allowlist secret
+            ),
+            (
+                "different-aws-field",
+                format!("aws_session_token: \"{SECRET_FIXTURE}\""), // pragma: allowlist secret
+            ),
+            (
+                "short-value",
+                format!("aws_secret_access_key: \"{short_value}\""), // pragma: allowlist secret
+            ),
+        ];
+
+        for (name, text) in cases {
+            let (findings, redacted) = detect_and_redact(&text, &config);
+
+            assert!(findings.is_empty(), "{name}: {findings:?}");
+            assert_eq!(redacted, text, "{name}");
         }
     }
 

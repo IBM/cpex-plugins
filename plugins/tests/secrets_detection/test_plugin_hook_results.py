@@ -6,6 +6,29 @@ from cpex.framework.memory import wrap_payload_for_isolation
 
 from secrets_detection.helpers import *  # noqa: F403,F405
 
+AWS_SECRET_ASSIGNMENTS = [
+    pytest.param(
+        'aws_secret_access_key = "FAKESecretAccessKeyForTestingEXAMPLE0000"',  # pragma: allowlist secret
+        id="equals-double-quoted",
+    ),
+    pytest.param(
+        "aws_secret_access_key = 'FAKESecretAccessKeyForTestingEXAMPLE0000'",  # pragma: allowlist secret
+        id="equals-single-quoted",
+    ),
+    pytest.param(
+        'aws_secret_access_key: "FAKESecretAccessKeyForTestingEXAMPLE0000"',  # pragma: allowlist secret
+        id="yaml-double-quoted",
+    ),
+    pytest.param(
+        "aws_secret_access_key: FAKESecretAccessKeyForTestingEXAMPLE0000",  # pragma: allowlist secret
+        id="yaml-unquoted",
+    ),
+    pytest.param(
+        '"aws_secret_access_key": "FAKESecretAccessKeyForTestingEXAMPLE0000"',  # pragma: allowlist secret
+        id="json-double-quoted",
+    ),
+]
+
 
 @pytest.mark.asyncio
 class TestPluginHookResults:
@@ -39,17 +62,17 @@ class TestPluginHookResults:
         # No extensions/trace_id passed => gated, no metadata write at all.
         assert result.metadata == {}
 
-    async def test_tool_post_invoke_redacts_quoted_aws_secret_access_key(self, plugin):
+    @pytest.mark.parametrize("assignment", AWS_SECRET_ASSIGNMENTS)
+    async def test_tool_post_invoke_redacts_aws_secret_assignment(
+        self, plugin, assignment
+    ):
         payload = ToolPostInvokePayload(
             name="get_file_contents",
             result={
                 "content": [
                     {
                         "type": "text",
-                        "text": (
-                            'aws_secret_access_key = '  # pragma: allowlist secret
-                            '"FAKESecretAccessKeyForTestingEXAMPLE0000"'
-                        ),
+                        "text": assignment,
                     }
                 ],
                 "isError": False,
@@ -61,9 +84,13 @@ class TestPluginHookResults:
         assert result.continue_processing is True
         assert result.violation is None
         assert result.modified_payload is not None
-        assert result.modified_payload.result["content"][0]["text"] == "[REDACTED]"
+        redacted = result.modified_payload.result["content"][0]["text"]
+        assert "[REDACTED]" in redacted
+        assert redacted != assignment
+        assert payload.result["content"][0]["text"] == assignment
 
-    async def test_tool_post_invoke_blocks_quoted_aws_secret_access_key(self):
+    @pytest.mark.parametrize("assignment", AWS_SECRET_ASSIGNMENTS)
+    async def test_tool_post_invoke_blocks_aws_secret_assignment(self, assignment):
         plugin = SecretsDetectionPlugin(
             make_config(block_on_detection=True, redact=False)
         )
@@ -73,10 +100,7 @@ class TestPluginHookResults:
                 "content": [
                     {
                         "type": "text",
-                        "text": (
-                            'aws_secret_access_key = '  # pragma: allowlist secret
-                            '"FAKESecretAccessKeyForTestingEXAMPLE0000"'
-                        ),
+                        "text": assignment,
                     }
                 ],
                 "isError": False,
@@ -88,6 +112,7 @@ class TestPluginHookResults:
         assert result.continue_processing is False
         assert result.violation is not None
         assert result.violation.code == "SECRETS_DETECTED"
+        assert result.modified_payload == payload
 
     async def test_tool_post_invoke_redaction_survives_cpex_policy_with_isolated_payload(self, plugin):
         payload = ToolPostInvokePayload(

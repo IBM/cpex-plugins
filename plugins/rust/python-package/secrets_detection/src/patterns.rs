@@ -13,8 +13,10 @@ pub static PATTERNS: LazyLock<HashMap<&'static str, Regex>> = LazyLock::new(|| {
     );
     patterns.insert(
         "aws_secret_access_key",
-        Regex::new(r#"(?i)aws.{0,20}(?:secret|access).{0,20}=\s*["']?([A-Za-z0-9/+=]{40})["']?"#)
-            .expect("valid aws_secret_access_key regex"),
+        Regex::new(
+            r#"(?i)aws.{0,20}(?:secret|access).{0,20}[:=]\s*["']?([A-Za-z0-9/+=]{40})["']?"#,
+        )
+        .expect("valid aws_secret_access_key regex"),
     );
     patterns.insert(
         "google_api_key",
