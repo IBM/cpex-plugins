@@ -90,6 +90,7 @@ config:
 ## Behavior Notes
 
 - Redaction preserves payload shape where possible instead of flattening everything to plain dicts.
+- `aws_secret_access_key` recognizes `=` and `:` assignments with optional single or double quotes around the value.
 - `base64_24` uses capture-group redaction so leading non-base64 boundary characters are preserved.
 - Broad detectors remain opt-in to reduce noisy matches on ordinary identifiers.
 - Binary resource bodies are not scanned; `resource_post_fetch` only scans text content exposed as `payload.content.text`.
