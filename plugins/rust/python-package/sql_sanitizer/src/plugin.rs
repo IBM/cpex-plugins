@@ -180,16 +180,25 @@ fn default_result(py: Python<'_>, class_name: &str) -> PyResult<Py<PyAny>> {
 }
 
 /// Shallow-copy `args` dict and overlay the comment-stripped values.
+///
+/// Uses the Python-level mapping protocol (`items()`) so that dict subclasses
+/// such as `CopyOnWriteDict` that keep their visible entries outside the
+/// C-level hash table are copied faithfully.
 fn rebuild_args_with_stripped(
     py: Python<'_>,
     args: &Bound<'_, PyAny>,
     stripped: &[(String, String)],
 ) -> PyResult<Py<PyAny>> {
-    // Start from a shallow copy of the existing args dict so unaffected keys are preserved.
+    // Start from a shallow copy of the existing args so unaffected keys are preserved.
     let new_dict = PyDict::new(py);
-    if let Ok(dict) = args.cast::<PyDict>() {
-        for (k, v) in dict.iter() {
-            new_dict.set_item(&k, &v)?;
+    if let Ok(dict_items) = args.call_method0("items") {
+        // Use Python-level items() so dict subclasses (e.g. CopyOnWriteDict)
+        // whose visible entries live outside the C hash table are copied correctly.
+        if let Ok(iter) = dict_items.try_iter() {
+            for item in iter {
+                let item = item?;
+                new_dict.set_item(item.get_item(0)?, item.get_item(1)?)?;
+            }
         }
     }
     for (key, val) in stripped {
@@ -596,6 +605,76 @@ class PluginViolation:
             assert!(
                 cp,
                 "violations in list items under non-matching field must be ignored"
+            );
+        });
+    }
+
+    /// A `CopyOnWriteDict` keeps its real items in a Python-level overlay with
+    /// the underlying C-level hash table left empty.  Code that calls
+    /// `PyDict::iter()` (C-level) misses those items entirely and returns
+    /// `continue_processing=True` for a `DROP TABLE` payload — a security hole.
+    ///
+    /// This test constructs exactly that scenario and verifies the plugin still
+    /// detects and blocks the violation.
+    #[test]
+    fn wrap_payload_for_isolation() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+
+            // Build a CopyOnWriteDict where the C-level dict is empty but
+            // Python-level items() / keys() / __iter__ expose the real data.
+            let cow_mod = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    r#"
+class CopyOnWriteDict(dict):
+    """dict subclass that stores visible items in a write-layer.
+    The C-level hash table is intentionally left empty so that
+    PyDict::iter() (C-level PyDict_Next) returns nothing."""
+    def __init__(self, data):
+        super().__init__()                          # C dict is empty
+        object.__setattr__(self, '_writes', dict(data))
+    def __getitem__(self, key):   return self._writes[key]
+    def __setitem__(self, k, v):  self._writes[k] = v
+    def __delitem__(self, key):   del self._writes[key]
+    def __iter__(self):           return iter(self._writes)
+    def __len__(self):            return len(self._writes)
+    def __contains__(self, key):  return key in self._writes
+    def keys(self):               return self._writes.keys()
+    def values(self):             return self._writes.values()
+    def items(self):              return self._writes.items()
+    def get(self, k, d=None):     return self._writes.get(k, d)
+
+def make_cow_payload(sql):
+    class Payload:
+        def __init__(self):
+            self.args = CopyOnWriteDict({'query': sql})
+    return Payload()
+"#
+                ),
+                pyo3::ffi::c_str!("cow_test"),
+                pyo3::ffi::c_str!("cow_test"),
+            )
+            .unwrap();
+
+            let make_cow = cow_mod.getattr("make_cow_payload").unwrap();
+            // Dangerous: DELETE without WHERE hidden in the write layer
+            let payload = make_cow.call1(("DELETE FROM users",)).unwrap();
+
+            let cfg_dict = PyDict::new(py);
+            let core = super::SqlSanitizerPluginCore::new(cfg_dict.as_any()).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let cp: bool = result
+                .bind(py)
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(
+                !cp,
+                "CopyOnWriteDict args must be scanned via the mapping protocol, not C-level iter"
             );
         });
     }

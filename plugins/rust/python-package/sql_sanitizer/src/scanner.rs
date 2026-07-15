@@ -14,7 +14,7 @@
 //    `payload.args` before returning a modified-payload result.
 
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::PyList;
 
 use crate::comments::strip_sql_comments;
 use crate::config::SqlSanitizerConfig;
@@ -56,21 +56,26 @@ pub fn scan_value(
                 }
             }
         }
-    } else if let Ok(dict) = value.cast::<PyDict>() {
-        for (k, v) in dict.iter() {
-            let k_str: String = k.extract()?;
-            scan_value(&k_str, &v, cfg, issues, stripped)?;
-        }
     } else if let Ok(list) = value.cast::<PyList>() {
+        // Lists are checked before the dict-like branch because dicts and lists
+        // both support item access in Python; we want lists handled explicitly.
         for item in list.iter() {
-            if let Ok(d) = item.cast::<PyDict>() {
-                // Dict items: use their own keys
-                for (k, v) in d.iter() {
-                    let k_str: String = k.extract()?;
-                    scan_value(&k_str, &v, cfg, issues, stripped)?;
+            if let Ok(dict_items) = item.call_method0("items") {
+                // Dict-like items: use Python-level items() so subclasses such as
+                // CopyOnWriteDict (write-layer outside the C hash table) are
+                // iterated correctly.
+                for entry in dict_items.try_iter()? {
+                    let entry = entry?;
+                    let k_str: String = entry.get_item(0)?.extract()?;
+                    scan_value(&k_str, &entry.get_item(1)?, cfg, issues, stripped)?;
                 }
             } else if let Ok(text) = item.extract::<String>() {
-                // Plain string items inherit the parent key name
+                // Plain string items inherit the parent key name.
+                // NOTE: list items are scanned for issues but are intentionally
+                // excluded from `stripped`.  `rebuild_args_with_stripped` applies
+                // a shallow top-level overlay, so recording a (key, value) pair
+                // here would overwrite the whole list with a single string.
+                // Path-aware payload reconstruction is deferred.
                 let should_scan = cfg
                     .fields
                     .as_ref()
@@ -82,6 +87,17 @@ pub fn scan_value(
                     }
                 }
             }
+        }
+    } else if let Ok(dict_items) = value.call_method0("items") {
+        // Dict-like value: use Python-level items() so subclasses such as
+        // CopyOnWriteDict (which keep their visible entries in a write-layer
+        // outside the C hash table) are iterated correctly.  Plain `dict` also
+        // satisfies this branch.  The PyList branch above ensures lists are not
+        // accidentally matched here.
+        for item in dict_items.try_iter()? {
+            let item = item?;
+            let k_str: String = item.get_item(0)?.extract()?;
+            scan_value(&k_str, &item.get_item(1)?, cfg, issues, stripped)?;
         }
     }
     // Other Python types (int, float, None, bytes …) are silently ignored.
@@ -109,13 +125,17 @@ pub fn scan_args(
         return Ok((issues, stripped));
     }
 
-    if let Ok(dict) = args.cast::<PyDict>() {
-        for (k, v) in dict.iter() {
-            let k_str: String = k.extract()?;
-            scan_value(&k_str, &v, cfg, &mut issues, &mut stripped)?;
+    // Use Python-level items() so dict subclasses (e.g. CopyOnWriteDict) whose
+    // visible entries live in a write-layer outside the C hash table are iterated
+    // correctly.  C-level PyDict_Next would silently miss them.
+    if let Ok(dict_items) = args.call_method0("items") {
+        for item in dict_items.try_iter()? {
+            let item = item?;
+            let k_str: String = item.get_item(0)?.extract()?;
+            scan_value(&k_str, &item.get_item(1)?, cfg, &mut issues, &mut stripped)?;
         }
     }
-    // Non-dict args (should not happen in practice) are skipped silently.
+    // Non-mapping args (should not happen in practice) are skipped silently.
 
     Ok((issues, stripped))
 }

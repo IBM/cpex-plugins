@@ -101,7 +101,9 @@ impl SqlSanitizerConfig {
                 } else if let Ok(p) = item.getattr("pattern") {
                     p.extract::<String>()?
                 } else {
-                    continue;
+                    return Err(pyo3::exceptions::PyTypeError::new_err(
+                        "blocked_statements items must be str or re.Pattern objects",
+                    ));
                 };
                 // Avoid double-wrapping if the caller already embedded flags.
                 let wrapped = if raw.starts_with("(?") {

@@ -26,24 +26,101 @@ static UPDATE_RE: Lazy<Regex> =
 static WHERE_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)\bWHERE\b").expect("Invalid WHERE regex"));
 
+/// Replace the content of single-quoted SQL string literals with empty strings
+/// so that analysis regexes do not match keywords or patterns inside values.
+///
+/// `UPDATE t SET x='WHERE 1=1'` → `UPDATE t SET x=''`
+/// Handles SQL `''` escaped-quote convention.
+fn mask_string_literals(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len());
+    let mut chars = sql.chars().peekable();
+    let mut in_quote = false;
+
+    while let Some(ch) = chars.next() {
+        if !in_quote {
+            out.push(ch);
+            if ch == '\'' {
+                in_quote = true;
+            }
+        } else if ch == '\'' {
+            if chars.peek() == Some(&'\'') {
+                chars.next(); // consume escaped-quote, discard both
+            } else {
+                out.push('\''); // emit closing quote
+                in_quote = false;
+            }
+        }
+        // else: discard literal content
+    }
+    out
+}
+
+/// Split SQL into statements on `;` separators, respecting single-quoted
+/// literals so that `;` inside a literal is not treated as a boundary.
+///
+/// Empty and whitespace-only segments are omitted.
+fn split_statements(sql: &str) -> Vec<String> {
+    let mut stmts: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut chars = sql.chars().peekable();
+    let mut in_quote = false;
+
+    while let Some(ch) = chars.next() {
+        if in_quote {
+            current.push(ch);
+            if ch == '\'' {
+                if chars.peek() == Some(&'\'') {
+                    current.push(chars.next().unwrap()); // escaped quote
+                } else {
+                    in_quote = false;
+                }
+            }
+        } else if ch == '\'' {
+            in_quote = true;
+            current.push(ch);
+        } else if ch == ';' {
+            let s = current.trim().to_string();
+            if !s.is_empty() {
+                stmts.push(s);
+            }
+            current.clear();
+        } else {
+            current.push(ch);
+        }
+    }
+    let tail = current.trim().to_string();
+    if !tail.is_empty() {
+        stmts.push(tail);
+    }
+    stmts
+}
+
 /// Check a **single** SQL statement (no semicolons) for security issues.
 fn find_issues_in_statement(stmt: &str, cfg: &SqlSanitizerConfig) -> Vec<String> {
+    // Mask string literal content so keywords inside quoted values
+    // (e.g. `UPDATE t SET note='WHERE 1=1'`) cannot spoof or bypass detection.
+    let masked = mask_string_literals(stmt);
+
     let mut issues = Vec::new();
 
     // Blocked statement patterns
     for (raw, re) in &cfg.blocked_patterns {
-        if re.is_match(stmt) {
+        if re.is_match(&masked) {
             issues.push(format!("Blocked statement matched: {}", raw));
         }
     }
 
     // DELETE FROM without WHERE
-    if cfg.block_delete_without_where && DELETE_FROM_RE.is_match(stmt) && !WHERE_RE.is_match(stmt) {
+    if cfg.block_delete_without_where
+        && DELETE_FROM_RE.is_match(&masked)
+        && !WHERE_RE.is_match(&masked)
+    {
         issues.push("DELETE without WHERE clause".to_string());
     }
 
     // UPDATE without WHERE
-    if cfg.block_update_without_where && UPDATE_RE.is_match(stmt) && !WHERE_RE.is_match(stmt) {
+    if cfg.block_update_without_where && UPDATE_RE.is_match(&masked) && !WHERE_RE.is_match(&masked)
+    {
         issues.push("UPDATE without WHERE clause".to_string());
     }
 
@@ -61,7 +138,6 @@ fn find_issues_in_statement(stmt: &str, cfg: &SqlSanitizerConfig) -> Vec<String>
 ///
 /// A list of human-readable issue descriptions.  Empty means no issues found.
 pub fn find_issues(sql: &str, cfg: &SqlSanitizerConfig) -> Vec<String> {
-    // Strip comments before pattern matching (but keep `sql` for interpolation check).
     let processed = if cfg.strip_comments {
         strip_sql_comments(sql)
     } else {
@@ -70,19 +146,15 @@ pub fn find_issues(sql: &str, cfg: &SqlSanitizerConfig) -> Vec<String> {
 
     let mut issues = Vec::new();
 
-    // Split on `;` and analyse each statement independently so that a WHERE
-    // clause in one statement cannot mask a WHERE-less statement elsewhere.
-    for stmt in processed.split(';') {
-        let stmt = stmt.trim();
-        if stmt.is_empty() {
-            continue;
-        }
-        issues.extend(find_issues_in_statement(stmt, cfg));
+    // Split on `;` (respecting literals) and analyse each statement independently
+    // so that a WHERE clause in one statement cannot mask a violation elsewhere.
+    for stmt in split_statements(&processed) {
+        issues.extend(find_issues_in_statement(&stmt, cfg));
     }
 
-    // Parameterization check runs on the pre-strip text so that interpolation
-    // patterns inside comments are also detected.
-    if cfg.require_parameterization && has_interpolation(sql) {
+    // Parameterization check on processed (comment-stripped), literal-masked SQL
+    // to avoid false positives from format markers inside quoted string values.
+    if cfg.require_parameterization && has_interpolation(&mask_string_literals(&processed)) {
         issues.push("Possible non-parameterized interpolation detected".to_string());
     }
 
@@ -226,8 +298,8 @@ mod tests {
     fn detects_interpolation_when_required() {
         let mut cfg = default_cfg();
         cfg.require_parameterization = true;
-        let sql = "SELECT * FROM users WHERE name = '{}'";
-        let issues = find_issues(sql, &cfg);
+        // Bare {} outside a literal — typical Python f-string / .format() template
+        let issues = find_issues("SELECT * FROM users WHERE id = {}", &cfg);
         assert_eq!(
             issues,
             vec!["Possible non-parameterized interpolation detected"]
@@ -278,10 +350,41 @@ mod tests {
     fn detects_printf_format_as_interpolation() {
         let mut cfg = default_cfg();
         cfg.require_parameterization = true;
-        let issues = find_issues("SELECT * FROM users WHERE name = '%s'", &cfg);
+        // Bare %s outside a literal — typical Python %-operator SQL template
+        let issues = find_issues("SELECT * FROM users WHERE name = %s", &cfg);
         assert_eq!(
             issues,
             vec!["Possible non-parameterized interpolation detected"]
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Literal-aware detection (regression tests for literal-bypass bugs)
+    // -----------------------------------------------------------------------
+
+    /// WHERE appearing only inside a quoted value must not satisfy the WHERE
+    /// guard — the statement still has no structural WHERE clause.
+    #[test]
+    fn where_in_string_literal_is_not_treated_as_clause() {
+        let issues = find_issues("UPDATE users SET note = 'has WHERE text'", &default_cfg());
+        assert_eq!(issues, vec!["UPDATE without WHERE clause"]);
+    }
+
+    /// A semicolon inside a quoted string must not split the statement, so
+    /// the DROP TABLE token inside the literal must not be flagged.
+    #[test]
+    fn semicolon_in_string_literal_does_not_split_statement() {
+        let issues = find_issues("SELECT 'hello; DROP TABLE t'", &default_cfg());
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    /// A printf-style `%s` inside a quoted LIKE pattern must not trigger the
+    /// parameterization check.
+    #[test]
+    fn interpolation_marker_in_string_literal_is_not_flagged() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("SELECT * FROM t WHERE name LIKE '%s%'", &cfg);
+        assert_eq!(issues, Vec::<String>::new());
     }
 }
