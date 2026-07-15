@@ -286,16 +286,17 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("cpex_framework_bridge", workspace_deps)
         self.assertIn("criterion", workspace_deps)
         self.assertIn("log", workspace_deps)
-        self.assertIn("pyo3-async-runtimes", workspace_deps)
+        self.assertIn("mutants", workspace_deps)
         self.assertIn("pyo3", workspace_deps)
         self.assertIn("pyo3-log", workspace_deps)
         self.assertIn("pyo3-stub-gen", workspace_deps)
-        self.assertIn("rand", workspace_deps)
         self.assertIn("regex", workspace_deps)
         self.assertIn("serde", workspace_deps)
         self.assertIn("serde_json", workspace_deps)
         self.assertIn("thiserror", workspace_deps)
-        self.assertIn("tokio", workspace_deps)
+        self.assertNotIn("pyo3-async-runtimes", workspace_deps)
+        self.assertNotIn("rand", workspace_deps)
+        self.assertNotIn("tokio", workspace_deps)
 
         expected_plugin_deps = {
             "encoded_exfil_detection": {
@@ -332,12 +333,11 @@ class PluginCatalogTests(unittest.TestCase):
                 "dependencies": {
                     "cpex_framework_bridge": {"workspace": True},
                     "log": {"workspace": True},
+                    "mutants": {"workspace": True},
                     "pyo3": {"workspace": True},
-                    "pyo3-async-runtimes": {"workspace": True},
                     "pyo3-log": {"workspace": True},
                     "pyo3-stub-gen": {"workspace": True, "optional": True},
                     "thiserror": {"workspace": True},
-                    "tokio": {"workspace": True},
                 },
                 "dev-dependencies": {
                     "criterion": {"workspace": True},
@@ -347,10 +347,10 @@ class PluginCatalogTests(unittest.TestCase):
                 "dependencies": {
                     "cpex_framework_bridge": {"workspace": True},
                     "log": {"workspace": True},
+                    "mutants": {"workspace": True},
                     "pyo3": {"workspace": True},
                     "pyo3-log": {"workspace": True},
                     "pyo3-stub-gen": {"workspace": True, "optional": True},
-                    "rand": {"workspace": True},
                     "serde": {"workspace": True},
                     "serde_json": {"workspace": True},
                 },
@@ -3002,7 +3002,7 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertNotIn("cargo-audit", security_section)
         self.assertNotIn("cargo audit", security_section)
         self.assertIn("cargo install cargo-deny", security_section)
-        self.assertEqual("cargo deny check --config deny.toml\n", deny_run)
+        self.assertEqual("cargo deny --all-features check --config deny.toml\n", deny_run)
         self.assertNotIn("-A unmaintained", security_section)
         self.assertNotIn("--workspace", security_section)
         self.assertNotIn("--manifest-path", security_section)

@@ -16,6 +16,7 @@ from cpex.framework import (
 )
 from cpex.framework.settings import get_settings
 
+from cpex_retry_with_backoff.retry_with_backoff_rust import __version__ as _RUST_CORE_VERSION
 from cpex_retry_with_backoff.retry_with_backoff_rust import RetryWithBackoffPluginCore
 
 log = logging.getLogger(__name__)
@@ -50,15 +51,16 @@ class RetryWithBackoffPlugin(Plugin):
                     override["max_retries"] = ceiling
 
         self._core = RetryWithBackoffPluginCore(raw_cfg)
-        log.info("retry_with_backoff: Initialized with Rust core (v0.3.2)")
+        log.info("retry_with_backoff: Initialized with Rust core (v%s)", _RUST_CORE_VERSION)
 
     async def tool_post_invoke(
         self,
         payload: ToolPostInvokePayload,
         context: PluginContext,
+        extensions=None,
     ) -> ToolPostInvokeResult:
         """Delegate to Rust core for tool post-invoke processing."""
-        return self._core.tool_post_invoke(payload, context)
+        return self._core.tool_post_invoke(payload, context, extensions)
 
     async def resource_post_fetch(
         self,

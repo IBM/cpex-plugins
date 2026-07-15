@@ -79,6 +79,22 @@ Allowed URLs return `continue_processing=true`.
 
 Blocked URLs return `continue_processing=false` with a `PluginViolation` using code `URL_REPUTATION_BLOCK`. Violation details include the URL or domain involved in the decision.
 
+`resource_pre_fetch` accepts an optional `extensions` parameter carrying OpenTelemetry trace context. When a trace context is present (via `extensions.request.trace_id`), the plugin emits operational metrics on `result.metadata["url_reputation"]` with the following schema:
+
+```python
+result.metadata["url_reputation"] = {
+    "total_checked": 1,                    # int — always 1; one URL is checked per call
+    "total_blocked": 0,                     # int — 0 or 1; this call's outcome, not a running total
+    "reputation_categories": [],            # list[str] — category slugs; empty when allowed
+}
+```
+
+`resource_pre_fetch` evaluates exactly one URL per call with no running counter, so — mirroring `rate_limiter`'s per-call `allowed`/`throttled` semantics — `total_checked` and `total_blocked` describe only the current call's outcome; the gateway aggregates counts across spans/time. When the URL is blocked, `reputation_categories` contains exactly one slug describing why (e.g. `blocked_domain`, `insecure_scheme`, `high_entropy_domain`, `illegal_tld`, `unicode_spoofing`, `blocked_pattern`, `malformed_url`, `malformed_domain`, `internal_error`).
+
+**Gating:** Metrics are only emitted when a valid `trace_id` is present in the trace context (`extensions.request.trace_id`). No trace context means no `result.metadata` write at all.
+
+**Security Note (S1):** The plugin **never includes the raw URL or domain** in `result.metadata`. Only counts and category slugs (derived from the plugin's static, hardcoded violation reasons) are reported; the actual URL/domain stays confined to `PluginViolation.details` on the blocking path, a separate channel unaffected by this metrics addition.
+
 ## Limitations
 
 - Reputation data is static configuration only; there are no external provider lookups.

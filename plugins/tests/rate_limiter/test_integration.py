@@ -12,6 +12,7 @@ from cpex.framework import (
     PromptPrehookPayload,
     ToolPreInvokePayload,
 )
+from cpex.framework.extensions import Extensions, RequestExtension
 
 from cpex_rate_limiter.rate_limiter import RateLimiterPlugin
 
@@ -333,7 +334,10 @@ class TestByTool:
         context = _make_context()
         for _ in range(20):
             result = await plugin.tool_pre_invoke(payload, context)
-        assert result.metadata.get("limited") is False
+        # No extensions/trace_id passed => gated, no metadata write at all
+        # (the legacy always-on flat `{"limited": ...}` write is gone; see
+        # TestMetricsEmission for the trace_id-present namespaced behavior).
+        assert result.metadata == {}
 
 
 # ---------------------------------------------------------------------------
@@ -398,3 +402,140 @@ class TestAlgorithms:
             assert result.continue_processing is True
         result = await plugin.tool_pre_invoke(payload, context)
         assert result.continue_processing is False
+
+
+# ---------------------------------------------------------------------------
+# Metrics emission (issue #129): trace_id-gated result.metadata["rate_limiter"]
+# ---------------------------------------------------------------------------
+
+
+def _trace(trace_id: str = "t1") -> Extensions:
+    return Extensions(request=RequestExtension(trace_id=trace_id))
+
+
+class TestMetricsEmission:
+    """Exercise the namespaced `result.metadata["rate_limiter"]` metrics
+    across all three result-building branches: early-return-not-limited,
+    allowed, and throttled/not-allowed. Mirrors the pii_filter/secrets_detection
+    contract: metrics are gated on `trace_id` and never carry raw content or
+    identity.
+    """
+
+    async def test_not_limited_branch_gates_on_trace_id(self):
+        # No limits configured at all => the early-return "not limited"
+        # branch (checks.is_empty() in the Rust engine).
+        plugin = RateLimiterPlugin(_make_config(by_user=None))
+        payload = ToolPreInvokePayload(name="anything")
+        context = _make_context()
+
+        # Without extensions/trace_id: no metadata write at all.
+        result = await plugin.tool_pre_invoke(payload, context)
+        assert result.continue_processing is True
+        assert result.metadata == {}
+
+        # With trace_id: namespaced metrics present. Only the 3 scalar
+        # fields (allowed/throttled/backend) are emitted — the engine's own
+        # `limited`/`remaining`/`reset_in`/`dimensions` fields are not folded
+        # in, since they can never pass the gateway's S4 sanitizer (scalars
+        # not on its numeric allowlist, or a nested dict it always drops).
+        result = await plugin.tool_pre_invoke(payload, context, _trace())
+        assert result.continue_processing is True
+        metrics = result.metadata["rate_limiter"]
+        assert metrics["allowed"] == 1
+        assert metrics["throttled"] == 0
+        assert metrics["backend"] == "memory"
+        assert set(metrics.keys()) == {"allowed", "throttled", "backend"}
+
+    async def test_allowed_branch_emits_metrics_and_keeps_http_headers(self):
+        plugin = RateLimiterPlugin(_make_config(by_user="5/s"))
+        payload = ToolPreInvokePayload(name="search")
+
+        # Without trace_id: http_headers unaffected, metadata empty.
+        result = await plugin.tool_pre_invoke(
+            payload, _make_context(user="alice"),
+        )
+        assert result.continue_processing is True
+        assert result.http_headers is not None
+        assert result.metadata == {}
+
+        # With trace_id: only allowed/throttled/backend are emitted — the
+        # engine's own `limited`/`remaining`/`reset_in`/`dimensions` fields
+        # are deliberately not folded in (see Finding 2 rationale above).
+        result = await plugin.tool_pre_invoke(
+            payload, _make_context(user="bob"), _trace(),
+        )
+        assert result.continue_processing is True
+        assert result.http_headers is not None
+        metrics = result.metadata["rate_limiter"]
+        assert metrics["allowed"] == 1
+        assert metrics["throttled"] == 0
+        assert metrics["backend"] == "memory"
+        assert set(metrics.keys()) == {"allowed", "throttled", "backend"}
+
+    async def test_throttled_branch_emits_metrics_without_identifiers(self):
+        plugin = RateLimiterPlugin(_make_config(by_user="1/s"))
+        payload = ToolPreInvokePayload(name="search")
+        context = _make_context(user="carol", tenant_id="acme")
+
+        # Exhaust the limit, then throttle — with trace_id present.
+        await plugin.tool_pre_invoke(payload, context, _trace())
+        result = await plugin.tool_pre_invoke(payload, context, _trace())
+
+        assert result.continue_processing is False
+        assert result.violation is not None
+        assert result.violation.code == "RATE_LIMIT"
+        # The violation's own details (echoing the engine's `meta`) do carry
+        # identity — proving the metrics exclusion below is deliberate.
+        assert result.violation.details.get("user_id") == "carol"
+
+        metrics = result.metadata["rate_limiter"]
+        assert metrics["allowed"] == 0
+        assert metrics["throttled"] == 1
+        assert metrics["backend"] == "memory"
+        # S1: no user/tenant identifiers leak into the metrics dict.
+        assert "user_id" not in metrics
+        assert "tenant_id" not in metrics
+
+    async def test_throttled_branch_without_trace_id_emits_no_metadata(self):
+        plugin = RateLimiterPlugin(_make_config(by_user="1/s"))
+        payload = ToolPreInvokePayload(name="search")
+        context = _make_context(user="dave")
+
+        await plugin.tool_pre_invoke(payload, context)
+        result = await plugin.tool_pre_invoke(payload, context)
+
+        assert result.continue_processing is False
+        assert result.violation is not None
+        assert result.metadata == {}
+
+    async def test_prompt_pre_fetch_emits_metrics_when_trace_id_present(self):
+        plugin = RateLimiterPlugin(_make_config(by_user="3/s"))
+        payload = PromptPrehookPayload(prompt_id="my-prompt")
+        context = _make_context()
+
+        result = await plugin.prompt_pre_fetch(payload, context, _trace())
+
+        assert result.continue_processing is True
+        metrics = result.metadata["rate_limiter"]
+        assert metrics["allowed"] == 1
+        assert metrics["backend"] == "memory"
+
+    async def test_prompt_pre_fetch_without_extensions_is_backward_compatible(self):
+        plugin = RateLimiterPlugin(_make_config(by_user="3/s"))
+        payload = PromptPrehookPayload(prompt_id="my-prompt")
+        context = _make_context()
+
+        # Legacy 2-arg call (no `extensions`) must not error.
+        result = await plugin.prompt_pre_fetch(payload, context)
+
+        assert result.continue_processing is True
+        assert result.metadata == {}
+
+    async def test_backend_field_reflects_memory_config(self):
+        plugin = RateLimiterPlugin(_make_config(by_user="5/s", backend="memory"))
+        payload = ToolPreInvokePayload(name="search")
+        context = _make_context()
+
+        result = await plugin.tool_pre_invoke(payload, context, _trace())
+
+        assert result.metadata["rate_limiter"]["backend"] == "memory"

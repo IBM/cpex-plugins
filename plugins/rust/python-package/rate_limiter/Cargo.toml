@@ -1,6 +1,6 @@
 [package]
 name = "rate_limiter"
-version = "0.1.6"
+version = "0.1.7"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -24,17 +24,17 @@ stub-gen = ["dep:pyo3-stub-gen"]
 cpex_framework_bridge = { workspace = true }
 log = { workspace = true }
 pyo3 = { workspace = true }
-pyo3-async-runtimes = { workspace = true }
+pyo3-async-runtimes = { version = "0.29.0", features = ["tokio-runtime"] }
 pyo3-stub-gen = { workspace = true, optional = true }
 pyo3-log = { workspace = true }
-mutants = "0.0.4"
+mutants = { workspace = true }
 parking_lot = "0.12.5"
 thiserror = { workspace = true }
 redis = { version = "1.2.1", features = ["aio", "tokio-comp", "tls-rustls", "tls-rustls-insecure", "tokio-rustls-comp"] }
 # Enable default features (includes tls12 for TLS 1.2 support) plus the ring provider.
 rustls = { version = "0.23.40", features = ["ring"] }
 rustls-pki-types = "1.14"
-tokio = { workspace = true }
+tokio = { version = "1.52.3", features = ["full"] }
 
 [dev-dependencies]
 rcgen = { version = "0.12", default-features = false, features = ["ring", "pem"] }

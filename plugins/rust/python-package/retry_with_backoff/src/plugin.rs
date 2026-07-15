@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::delay::compute_delay_ms;
 use crate::state::{ToolRetryState, maybe_evict_stale, monotonic_secs};
-use cpex_framework_bridge::build_framework_object;
+use cpex_framework_bridge::{build_framework_object, build_framework_object_dyn};
 use log::{debug, warn};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList};
@@ -50,12 +50,16 @@ impl RetryWithBackoffPluginCore {
         })
     }
 
+    #[pyo3(signature = (payload, context, extensions=None))]
     pub fn tool_post_invoke(
         &self,
         py: Python<'_>,
         payload: &Bound<'_, PyAny>,
         context: &Bound<'_, PyAny>,
+        extensions: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
+        let trace_id = read_trace_id(extensions);
+
         // Extract tool name
         let tool_name = payload.getattr("name")?.extract::<String>()?;
 
@@ -69,26 +73,19 @@ impl RetryWithBackoffPluginCore {
         // Extract result
         let result = payload.getattr("result")?;
 
-        // Build metadata
-        let metadata = self.build_metadata(py, &config)?;
-
         // Check if this is a failure
         let is_failure = self.is_failure(py, &result, &config)?;
 
         if !is_failure {
-            // Success - clear state
+            // Success - clear state. No retry happened this call, so the
+            // namespaced metrics (when emitted) report zero on both counters.
             self.clear_state(&tool_name, &request_id);
-            return build_framework_object(
-                py,
-                "ToolPostInvokeResult",
-                [
-                    (
-                        "retry_delay_ms",
-                        0u64.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    ("metadata", metadata),
-                ],
-            );
+            let mut kwargs: Vec<(&str, Py<PyAny>)> = vec![(
+                "retry_delay_ms",
+                0u64.into_pyobject(py)?.into_any().unbind(),
+            )];
+            push_retry_with_backoff_metrics_kwarg(py, trace_id.as_deref(), &mut kwargs, 0, 0);
+            return build_framework_object_dyn(py, "ToolPostInvokeResult", kwargs);
         }
 
         // Failure - update state and check retry budget
@@ -100,10 +97,12 @@ impl RetryWithBackoffPluginCore {
 
         state.consecutive_failures += 1;
         state.last_failure_at = monotonic_secs();
+        // Copy out before further borrows/mutations of `state_map` below.
+        let retry_count = state.consecutive_failures;
 
-        if state.consecutive_failures <= config.max_retries {
+        if retry_count <= config.max_retries {
             // Within retry budget - calculate delay
-            let attempt = state.consecutive_failures.saturating_sub(1);
+            let attempt = retry_count.saturating_sub(1);
             let delay_ms = compute_delay_ms(
                 attempt,
                 config.backoff_base_ms,
@@ -113,40 +112,36 @@ impl RetryWithBackoffPluginCore {
 
             debug!(
                 "tool_post_invoke: tool={} request_id={} failure={}/{} delay_ms={}",
-                tool_name, request_id, state.consecutive_failures, config.max_retries, delay_ms
+                tool_name, request_id, retry_count, config.max_retries, delay_ms
             );
 
-            return build_framework_object(
+            let mut kwargs: Vec<(&str, Py<PyAny>)> = vec![(
+                "retry_delay_ms",
+                delay_ms.into_pyobject(py)?.into_any().unbind(),
+            )];
+            push_retry_with_backoff_metrics_kwarg(
                 py,
-                "ToolPostInvokeResult",
-                [
-                    (
-                        "retry_delay_ms",
-                        delay_ms.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    ("metadata", metadata),
-                ],
+                trace_id.as_deref(),
+                &mut kwargs,
+                retry_count,
+                delay_ms,
             );
+            return build_framework_object_dyn(py, "ToolPostInvokeResult", kwargs);
         }
 
         // Exhausted retry budget - remove state
         warn!(
             "tool_post_invoke: tool={} request_id={} exhausted after {} failure(s)",
-            tool_name, request_id, state.consecutive_failures
+            tool_name, request_id, retry_count
         );
         state_map.remove(&key);
 
-        build_framework_object(
-            py,
-            "ToolPostInvokeResult",
-            [
-                (
-                    "retry_delay_ms",
-                    0u64.into_pyobject(py)?.into_any().unbind(),
-                ),
-                ("metadata", metadata),
-            ],
-        )
+        let mut kwargs: Vec<(&str, Py<PyAny>)> = vec![(
+            "retry_delay_ms",
+            0u64.into_pyobject(py)?.into_any().unbind(),
+        )];
+        push_retry_with_backoff_metrics_kwarg(py, trace_id.as_deref(), &mut kwargs, retry_count, 0);
+        build_framework_object_dyn(py, "ToolPostInvokeResult", kwargs)
     }
 
     pub fn resource_post_fetch(
@@ -161,6 +156,45 @@ impl RetryWithBackoffPluginCore {
     }
 }
 
+/// Read `obj[key]` through the Python mapping protocol (`PyObject_GetItem`,
+/// i.e. `__getitem__`).
+///
+/// Unlike [`pyo3::types::PyDict::get_item`], which reads the C-level dict
+/// storage directly, this respects `dict` subclasses that keep their data in a
+/// Python-level overlay rather than the C-level storage. The gateway wraps tool
+/// results in exactly such a subclass (the framework's `CopyOnWriteDict`, whose
+/// C-level storage is empty), so `PyDict::get_item` silently misses every key —
+/// a failing tool result then looks like a success and no retry is signalled.
+///
+/// Returns `Ok(None)` for a genuinely absent key (`KeyError`, matching
+/// `dict.get` semantics) or a non-subscriptable `obj` (`TypeError`). Any other
+/// exception — e.g. a custom `__getitem__`/property that raises on access — is
+/// propagated rather than swallowed, so a broken mapping surfaces as an error
+/// instead of silently masquerading as "not a failure" (no retry).
+fn mapping_get<'py>(obj: &Bound<'py, PyAny>, key: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
+    match obj.get_item(key) {
+        Ok(v) => Ok(Some(v)),
+        Err(e) => {
+            let py = obj.py();
+            if e.is_instance_of::<pyo3::exceptions::PyKeyError>(py)
+                || e.is_instance_of::<pyo3::exceptions::PyTypeError>(py)
+            {
+                Ok(None)
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+/// True when `obj[key]` exists and extracts to `true`. Propagates any error
+/// from [`mapping_get`] other than a missing key / non-subscriptable `obj`.
+fn mapping_get_bool(obj: &Bound<'_, PyAny>, key: &str) -> PyResult<bool> {
+    Ok(mapping_get(obj, key)?
+        .and_then(|v| v.extract::<bool>().ok())
+        .unwrap_or(false))
+}
+
 impl RetryWithBackoffPluginCore {
     fn is_failure(
         &self,
@@ -168,19 +202,16 @@ impl RetryWithBackoffPluginCore {
         result: &Bound<'_, PyAny>,
         config: &RetryConfig,
     ) -> PyResult<bool> {
-        // Check if result is a dict
-        let Ok(result_dict) = result.cast::<PyDict>() else {
-            return Ok(false);
-        };
+        // Read every key through the Python mapping protocol (see `mapping_get`):
+        // the gateway wraps tool results in dict subclasses (e.g. CopyOnWriteDict)
+        // whose data lives in a Python-level overlay, so the C-level
+        // `PyDict::get_item` would observe an empty dict and miss `isError`.
 
-        // Check isError flag
-        if let Some(is_error) = result_dict.get_item("isError")?
-            && is_error.extract::<bool>().unwrap_or(false)
-        {
-            // Check structured content for status_code
-            if let Some(structured) = result_dict.get_item("structuredContent")?
-                && let Ok(structured_dict) = structured.cast::<PyDict>()
-                && let Some(status) = structured_dict.get_item("status_code")?
+        // Top-level isError flag
+        if mapping_get_bool(result, "isError")? {
+            // status_code (when present) lives under structuredContent
+            if let Some(structured) = mapping_get(result, "structuredContent")?
+                && let Some(status) = mapping_get(&structured, "status_code")?
                 && let Ok(status_code) = status.extract::<i32>()
             {
                 return Ok(config.retry_on_status.contains(&status_code));
@@ -188,21 +219,15 @@ impl RetryWithBackoffPluginCore {
             return Ok(true);
         }
 
-        // Check structuredContent; track presence to gate text content check
-        // Treat `"structuredContent": None` as absent (matches original Python semantics)
-        let has_structured_content = result_dict
-            .get_item("structuredContent")?
-            .map(|v| !v.is_none())
-            .unwrap_or(false);
-        if let Some(structured) = result_dict.get_item("structuredContent")?
-            && let Ok(structured_dict) = structured.cast::<PyDict>()
-        {
-            if let Some(is_error) = structured_dict.get_item("isError")?
-                && is_error.extract::<bool>().unwrap_or(false)
-            {
+        // Check structuredContent; track presence to gate text content check.
+        // Treat `"structuredContent": None` as absent (matches original Python semantics).
+        let structured = mapping_get(result, "structuredContent")?.filter(|v| !v.is_none());
+        let has_structured_content = structured.is_some();
+        if let Some(ref structured_dict) = structured {
+            if mapping_get_bool(structured_dict, "isError")? {
                 return Ok(true);
             }
-            if let Some(status) = structured_dict.get_item("status_code")?
+            if let Some(status) = mapping_get(structured_dict, "status_code")?
                 && let Ok(status_code) = status.extract::<i32>()
                 && config.retry_on_status.contains(&status_code)
             {
@@ -213,36 +238,33 @@ impl RetryWithBackoffPluginCore {
         // Check text content only when enabled and structuredContent is absent
         if config.check_text_content
             && !has_structured_content
-            && let Some(content) = result_dict.get_item("content")?
+            && let Some(content) = mapping_get(result, "content")?
             && let Ok(content_list) = content.cast::<PyList>()
         {
             for item in content_list.iter() {
-                if let Ok(item_dict) = item.cast::<PyDict>() {
-                    // Only process items explicitly marked as type "text"
-                    let is_text = item_dict
-                        .get_item("type")?
-                        .and_then(|v| v.extract::<String>().ok())
-                        .as_deref()
-                        == Some("text");
-                    if !is_text {
-                        continue;
+                // Only process items explicitly marked as type "text"
+                let is_text = mapping_get(&item, "type")?
+                    .and_then(|v| v.extract::<String>().ok())
+                    .as_deref()
+                    == Some("text");
+                if !is_text {
+                    continue;
+                }
+                // Try to parse text as JSON
+                if let Some(text) = mapping_get(&item, "text")?
+                    && let Ok(text_str) = text.extract::<String>()
+                    && let Ok(parsed) = serde_json::from_str::<Value>(&text_str)
+                    && let Some(obj) = parsed.as_object()
+                {
+                    // Check isError in parsed JSON
+                    if obj.get("isError").and_then(|v| v.as_bool()) == Some(true) {
+                        return Ok(true);
                     }
-                    // Try to parse text as JSON
-                    if let Some(text) = item_dict.get_item("text")?
-                        && let Ok(text_str) = text.extract::<String>()
-                        && let Ok(parsed) = serde_json::from_str::<Value>(&text_str)
-                        && let Some(obj) = parsed.as_object()
+                    // Check status_code in parsed JSON
+                    if let Some(status) = obj.get("status_code").and_then(|v| v.as_i64())
+                        && config.retry_on_status.contains(&(status as i32))
                     {
-                        // Check isError in parsed JSON
-                        if obj.get("isError").and_then(|v| v.as_bool()) == Some(true) {
-                            return Ok(true);
-                        }
-                        // Check status_code in parsed JSON
-                        if let Some(status) = obj.get("status_code").and_then(|v| v.as_i64())
-                            && config.retry_on_status.contains(&(status as i32))
-                        {
-                            return Ok(true);
-                        }
+                        return Ok(true);
                     }
                 }
             }
@@ -274,6 +296,79 @@ impl RetryWithBackoffPluginCore {
     fn evict_stale(&self, map: &mut HashMap<String, ToolRetryState>) {
         maybe_evict_stale(map, &PLUGIN_LAST_EVICTION_MS);
     }
+}
+
+/// Build the namespaced metrics dict for the `result.metadata` channel.
+/// Returns `None` (no work) when `trace_id` is absent (gate: no trace means
+/// no metrics). Emits exactly the two per-call counters decided for this
+/// plugin: `retry_count` (`ToolRetryState::consecutive_failures` after this
+/// call's outcome was recorded — 0 on success) and `retry_delay_ms` (the
+/// per-attempt delay `compute_delay_ms` just computed for this call — 0 on
+/// success and once the retry budget is exhausted). There is deliberately no
+/// cumulative `total_backoff_ms`: no new state accumulator is added.
+///
+/// This replaces (does not sit alongside) the old un-namespaced, un-gated
+/// `retry_policy` config echo for `tool_post_invoke` — that write violated
+/// "zero overhead when untraced" and duplicated static config rather than
+/// per-call observability data. `resource_post_fetch` is untouched and keeps
+/// emitting `retry_policy` via `build_metadata`.
+fn build_retry_with_backoff_metrics<'py>(
+    py: Python<'py>,
+    trace_id: Option<&str>,
+    retry_count: u32,
+    retry_delay_ms: u64,
+) -> PyResult<Option<Bound<'py, PyDict>>> {
+    if trace_id.is_none() {
+        return Ok(None);
+    }
+    let inner = PyDict::new(py);
+    inner.set_item("retry_count", retry_count)?;
+    inner.set_item("retry_delay_ms", retry_delay_ms)?;
+    let outer = PyDict::new(py);
+    outer.set_item("retry_with_backoff", inner)?;
+    Ok(Some(outer))
+}
+
+/// Best-effort attach of the namespaced metrics dict onto `kwargs` when
+/// `trace_id` is present. Never fails the caller: any error building the
+/// metrics dict is logged once and metrics are omitted, so the normal
+/// retry result is still returned.
+///
+/// Gates on `trace_id` before building anything, so untraced calls (the
+/// common case) never pay for the dict construction.
+fn push_retry_with_backoff_metrics_kwarg(
+    py: Python<'_>,
+    trace_id: Option<&str>,
+    kwargs: &mut Vec<(&str, Py<PyAny>)>,
+    retry_count: u32,
+    retry_delay_ms: u64,
+) {
+    let Some(tid) = trace_id else {
+        return;
+    };
+    match build_retry_with_backoff_metrics(py, Some(tid), retry_count, retry_delay_ms) {
+        Ok(Some(md)) => kwargs.push(("metadata", md.into_any().unbind())),
+        Ok(None) => {}
+        Err(e) => log::warn!("retry_with_backoff: metrics build failed, omitting: {e}"),
+    }
+}
+
+/// Best-effort read of `extensions.request.trace_id`. Returns `None` on any
+/// missing attribute, `None` value, wrong type, or PyO3 error — never raises.
+/// Mirrors `pii_filter::plugin::read_trace_id` / `secrets_detection::plugin::read_trace_id`
+/// / `rate_limiter::plugin::read_trace_id`.
+fn read_trace_id(extensions: Option<&Bound<'_, PyAny>>) -> Option<String> {
+    let ext = extensions?;
+    let request = ext.getattr("request").ok()?;
+    if request.is_none() {
+        return None;
+    }
+    let trace = request.getattr("trace_id").ok()?;
+    if trace.is_none() {
+        return None;
+    }
+    let s: String = trace.extract().ok()?;
+    if s.is_empty() { None } else { Some(s) }
 }
 
 #[cfg(test)]
@@ -366,6 +461,21 @@ class ResourcePostFetchResult:
             .unwrap()
             .extract()
             .unwrap()
+    }
+
+    /// Builds an `extensions`-shaped object carrying `request.trace_id`.
+    /// Mirrors the equivalent helper in `rate_limiter::plugin::tests`.
+    fn extensions_with_trace<'py>(py: Python<'py>, trace_id: &str) -> PyResult<Bound<'py, PyAny>> {
+        let ext_module = PyModule::from_code(
+            py,
+            c_str!(
+                "class Req:\n    def __init__(self, t):\n        self.trace_id = t\n\
+                 class Ext:\n    def __init__(self, t):\n        self.request = Req(t)\n"
+            ),
+            c_str!("rwb_ext.py"),
+            c_str!("rwb_ext"),
+        )?;
+        ext_module.getattr("Ext")?.call1((trace_id,))
     }
 
     // ── pure-Rust tests ───────────────────────────────────────────────────────
@@ -467,7 +577,7 @@ class ResourcePostFetchResult:
             setup_cpex_framework(py);
             let core = make_plugin();
             let (payload, ctx) = make_payload_and_context(py, "tool_a", false).unwrap();
-            let result = core.tool_post_invoke(py, &payload, &ctx).unwrap();
+            let result = core.tool_post_invoke(py, &payload, &ctx, None).unwrap();
             assert_eq!(extract_delay(py, &result), 0, "success must return 0 delay");
         });
     }
@@ -480,7 +590,7 @@ class ResourcePostFetchResult:
             setup_cpex_framework(py);
             let core = make_plugin(); // base_ms = 100
             let (payload, ctx) = make_payload_and_context(py, "tool_b", true).unwrap();
-            let result = core.tool_post_invoke(py, &payload, &ctx).unwrap();
+            let result = core.tool_post_invoke(py, &payload, &ctx, None).unwrap();
             assert_eq!(
                 extract_delay(py, &result),
                 100,
@@ -497,8 +607,14 @@ class ResourcePostFetchResult:
             setup_cpex_framework(py);
             let core = make_plugin(); // base_ms = 100, jitter = false
             let (payload, ctx) = make_payload_and_context(py, "tool_c", true).unwrap();
-            let d1 = extract_delay(py, &core.tool_post_invoke(py, &payload, &ctx).unwrap());
-            let d2 = extract_delay(py, &core.tool_post_invoke(py, &payload, &ctx).unwrap());
+            let d1 = extract_delay(
+                py,
+                &core.tool_post_invoke(py, &payload, &ctx, None).unwrap(),
+            );
+            let d2 = extract_delay(
+                py,
+                &core.tool_post_invoke(py, &payload, &ctx, None).unwrap(),
+            );
             // attempt 0 → 100ms, attempt 1 → 200ms
             assert_eq!(d1, 100, "first failure delay");
             assert_eq!(
@@ -516,9 +632,9 @@ class ResourcePostFetchResult:
             setup_cpex_framework(py);
             let core = make_plugin(); // max_retries = 2
             let (payload, ctx) = make_payload_and_context(py, "tool_d", true).unwrap();
-            let _ = core.tool_post_invoke(py, &payload, &ctx).unwrap(); // failure 1
-            let _ = core.tool_post_invoke(py, &payload, &ctx).unwrap(); // failure 2
-            let result = core.tool_post_invoke(py, &payload, &ctx).unwrap(); // exhausted
+            let _ = core.tool_post_invoke(py, &payload, &ctx, None).unwrap(); // failure 1
+            let _ = core.tool_post_invoke(py, &payload, &ctx, None).unwrap(); // failure 2
+            let result = core.tool_post_invoke(py, &payload, &ctx, None).unwrap(); // exhausted
             assert_eq!(
                 extract_delay(py, &result),
                 0,
@@ -538,13 +654,247 @@ class ResourcePostFetchResult:
             let core = make_plugin(); // max_retries = 2, base_ms = 100, jitter = false
             let (fail_p, ctx) = make_payload_and_context(py, "tool_e", true).unwrap();
             let (ok_p, _) = make_payload_and_context(py, "tool_e", false).unwrap();
-            let _ = core.tool_post_invoke(py, &fail_p, &ctx).unwrap(); // failure 1
-            let _ = core.tool_post_invoke(py, &ok_p, &ctx).unwrap(); // success → clear state
-            let d = extract_delay(py, &core.tool_post_invoke(py, &fail_p, &ctx).unwrap());
+            let _ = core.tool_post_invoke(py, &fail_p, &ctx, None).unwrap(); // failure 1
+            let _ = core.tool_post_invoke(py, &ok_p, &ctx, None).unwrap(); // success → clear state
+            let d = extract_delay(py, &core.tool_post_invoke(py, &fail_p, &ctx, None).unwrap());
             assert_eq!(
                 d, 100,
                 "after success reset, next failure must be attempt 0 (base delay)"
             );
+        });
+    }
+
+    // ── PyO3 tests: tool_post_invoke namespaced metrics (trace_id gating) ────
+
+    #[test]
+    fn read_trace_id_returns_value_when_present_and_none_otherwise() {
+        Python::initialize();
+        Python::attach(|py| {
+            let with_id = extensions_with_trace(py, "abc123").unwrap();
+            let without = extensions_with_trace(py, "").unwrap();
+            assert_eq!(read_trace_id(Some(&with_id)), Some("abc123".to_string()));
+            assert_eq!(read_trace_id(Some(&without)), None);
+            assert_eq!(read_trace_id(None), None);
+        });
+    }
+
+    #[test]
+    fn tool_post_invoke_no_trace_id_omits_metadata_on_all_branches() {
+        // Kills mutants around the trace_id gate: without a trace_id, no
+        // branch (success / within-budget / exhausted) may attach any
+        // `result.metadata` at all — not even an empty `retry_with_backoff`
+        // key.
+        Python::initialize();
+        Python::attach(|py| {
+            setup_cpex_framework(py);
+            let core = make_plugin(); // max_retries = 2, base_ms = 100
+            let (fail_p, ctx) = make_payload_and_context(py, "tool_notrace", true).unwrap();
+            let (ok_p, _) = make_payload_and_context(py, "tool_notrace", false).unwrap();
+
+            // success branch
+            let result = core.tool_post_invoke(py, &ok_p, &ctx, None).unwrap();
+            let metadata = result
+                .bind(py)
+                .getattr("metadata")
+                .unwrap()
+                .cast_into::<PyDict>()
+                .unwrap();
+            assert_eq!(metadata.len(), 0, "success branch must omit metadata");
+
+            // within-budget branch
+            let result = core.tool_post_invoke(py, &fail_p, &ctx, None).unwrap();
+            let metadata = result
+                .bind(py)
+                .getattr("metadata")
+                .unwrap()
+                .cast_into::<PyDict>()
+                .unwrap();
+            assert_eq!(metadata.len(), 0, "within-budget branch must omit metadata");
+
+            // exhausted branch
+            let result = core.tool_post_invoke(py, &fail_p, &ctx, None).unwrap();
+            let metadata = result
+                .bind(py)
+                .getattr("metadata")
+                .unwrap()
+                .cast_into::<PyDict>()
+                .unwrap();
+            assert_eq!(metadata.len(), 0, "exhausted branch must omit metadata");
+        });
+    }
+
+    #[test]
+    fn tool_post_invoke_success_with_trace_id_emits_zero_valued_metrics() {
+        Python::initialize();
+        Python::attach(|py| {
+            setup_cpex_framework(py);
+            let core = make_plugin();
+            let ext = extensions_with_trace(py, "trace-success").unwrap();
+            let (ok_p, ctx) = make_payload_and_context(py, "tool_succ", false).unwrap();
+
+            let result = core.tool_post_invoke(py, &ok_p, &ctx, Some(&ext)).unwrap();
+            assert_eq!(extract_delay(py, &result), 0);
+
+            let metadata = result
+                .bind(py)
+                .getattr("metadata")
+                .unwrap()
+                .cast_into::<PyDict>()
+                .unwrap();
+            let metrics = metadata
+                .get_item("retry_with_backoff")
+                .unwrap()
+                .expect("namespaced metrics present when trace_id is set");
+            assert_eq!(
+                metrics
+                    .get_item("retry_count")
+                    .unwrap()
+                    .extract::<u32>()
+                    .unwrap(),
+                0
+            );
+            assert_eq!(
+                metrics
+                    .get_item("retry_delay_ms")
+                    .unwrap()
+                    .extract::<u64>()
+                    .unwrap(),
+                0
+            );
+            // Regression: the old un-namespaced config echo must be gone.
+            assert!(metadata.get_item("retry_policy").unwrap().is_none());
+        });
+    }
+
+    #[test]
+    fn tool_post_invoke_within_budget_with_trace_id_emits_count_and_positive_delay() {
+        Python::initialize();
+        Python::attach(|py| {
+            setup_cpex_framework(py);
+            let core = make_plugin(); // max_retries = 2, base_ms = 100, jitter = false
+            let ext = extensions_with_trace(py, "trace-retry").unwrap();
+            let (fail_p, ctx) = make_payload_and_context(py, "tool_retry", true).unwrap();
+
+            let result = core
+                .tool_post_invoke(py, &fail_p, &ctx, Some(&ext))
+                .unwrap();
+            assert_eq!(extract_delay(py, &result), 100, "first attempt = base_ms");
+
+            let metadata = result
+                .bind(py)
+                .getattr("metadata")
+                .unwrap()
+                .cast_into::<PyDict>()
+                .unwrap();
+            let metrics = metadata
+                .get_item("retry_with_backoff")
+                .unwrap()
+                .expect("namespaced metrics present when trace_id is set");
+            assert_eq!(
+                metrics
+                    .get_item("retry_count")
+                    .unwrap()
+                    .extract::<u32>()
+                    .unwrap(),
+                1,
+                "retry_count must be consecutive_failures after this failure"
+            );
+            assert_eq!(
+                metrics
+                    .get_item("retry_delay_ms")
+                    .unwrap()
+                    .extract::<u64>()
+                    .unwrap(),
+                100,
+                "retry_delay_ms must equal the per-attempt delay just computed"
+            );
+            assert!(metadata.get_item("retry_policy").unwrap().is_none());
+
+            // Second failure: count increments, delay doubles.
+            let result = core
+                .tool_post_invoke(py, &fail_p, &ctx, Some(&ext))
+                .unwrap();
+            assert_eq!(extract_delay(py, &result), 200);
+            let metadata = result
+                .bind(py)
+                .getattr("metadata")
+                .unwrap()
+                .cast_into::<PyDict>()
+                .unwrap();
+            let metrics = metadata.get_item("retry_with_backoff").unwrap().unwrap();
+            assert_eq!(
+                metrics
+                    .get_item("retry_count")
+                    .unwrap()
+                    .extract::<u32>()
+                    .unwrap(),
+                2
+            );
+            assert_eq!(
+                metrics
+                    .get_item("retry_delay_ms")
+                    .unwrap()
+                    .extract::<u64>()
+                    .unwrap(),
+                200
+            );
+        });
+    }
+
+    #[test]
+    fn tool_post_invoke_exhausted_with_trace_id_emits_final_count_and_zero_delay() {
+        Python::initialize();
+        Python::attach(|py| {
+            setup_cpex_framework(py);
+            let core = make_plugin(); // max_retries = 2
+            let ext = extensions_with_trace(py, "trace-exhausted").unwrap();
+            let (fail_p, ctx) = make_payload_and_context(py, "tool_exhaust", true).unwrap();
+
+            let _ = core
+                .tool_post_invoke(py, &fail_p, &ctx, Some(&ext))
+                .unwrap(); // failure 1 (within budget)
+            let _ = core
+                .tool_post_invoke(py, &fail_p, &ctx, Some(&ext))
+                .unwrap(); // failure 2 (within budget)
+            let result = core
+                .tool_post_invoke(py, &fail_p, &ctx, Some(&ext))
+                .unwrap(); // failure 3 — exhausted (max_retries = 2)
+
+            assert_eq!(
+                extract_delay(py, &result),
+                0,
+                "exhausted must return 0 delay"
+            );
+
+            let metadata = result
+                .bind(py)
+                .getattr("metadata")
+                .unwrap()
+                .cast_into::<PyDict>()
+                .unwrap();
+            let metrics = metadata
+                .get_item("retry_with_backoff")
+                .unwrap()
+                .expect("namespaced metrics present when trace_id is set");
+            assert_eq!(
+                metrics
+                    .get_item("retry_count")
+                    .unwrap()
+                    .extract::<u32>()
+                    .unwrap(),
+                3,
+                "retry_count must reflect the final (exhausting) failure count"
+            );
+            assert_eq!(
+                metrics
+                    .get_item("retry_delay_ms")
+                    .unwrap()
+                    .extract::<u64>()
+                    .unwrap(),
+                0,
+                "exhausted budget must report zero delay (no new delay computed)"
+            );
+            assert!(metadata.get_item("retry_policy").unwrap().is_none());
         });
     }
 
@@ -581,6 +931,102 @@ class ResourcePostFetchResult:
             assert!(
                 is_fail,
                 "isError:true in JSON text content must trigger failure"
+            );
+        });
+    }
+
+    #[test]
+    fn test_is_failure_reads_dict_subclass_overlay_storage() {
+        // Regression (gateway CopyOnWriteDict): the gateway wraps tool results in
+        // a `dict` subclass that keeps its data in a Python-level overlay, leaving
+        // the C-level dict storage empty. Reading via `PyDict::get_item` (C-level)
+        // misses `isError`, so a failing result looked like a success and no retry
+        // was ever signalled. `is_failure` must read through the mapping protocol.
+        Python::initialize();
+        Python::attach(|py| {
+            setup_cpex_framework(py);
+            let config = RetryConfig {
+                max_retries: 2,
+                backoff_base_ms: 100,
+                max_backoff_ms: 10_000,
+                retry_on_status: vec![500],
+                jitter: false,
+                check_text_content: false,
+                tool_overrides: HashMap::new(),
+            };
+            let core = RetryWithBackoffPluginCore {
+                config: config.clone(),
+                state_manager: Arc::new(Mutex::new(HashMap::new())),
+            };
+            // A `dict` subclass whose data lives in a Python-level overlay while
+            // the C-level dict storage stays empty (mirrors CopyOnWriteDict).
+            let module = PyModule::from_code(
+                py,
+                c_str!(
+                    "class CowDict(dict):\n    def __init__(self, data):\n        super().__init__()\n        self._overlay = dict(data)\n    def __getitem__(self, k):\n        return self._overlay[k]\n    def get(self, k, default=None):\n        return self._overlay.get(k, default)\n    def __contains__(self, k):\n        return k in self._overlay\n"
+                ),
+                c_str!("cow.py"),
+                c_str!("cow"),
+            )
+            .unwrap();
+            let inner = PyDict::new(py);
+            inner.set_item("isError", true).unwrap();
+            inner.set_item("structuredContent", py.None()).unwrap();
+            let cow = module.getattr("CowDict").unwrap().call1((inner,)).unwrap();
+
+            // Sanity: C-level dict storage is empty, so the old PyDict::get_item
+            // path would observe nothing and (wrongly) report no failure.
+            assert_eq!(cow.cast::<PyDict>().unwrap().len(), 0);
+
+            let is_fail = core.is_failure(py, &cow, &config).unwrap();
+            assert!(
+                is_fail,
+                "isError:true stored in a dict-subclass overlay must trigger failure"
+            );
+        });
+    }
+
+    #[test]
+    fn test_is_failure_propagates_unexpected_getitem_error() {
+        // Regression: `mapping_get` must only swallow KeyError/TypeError (missing
+        // key / non-subscriptable). A `__getitem__` that raises anything else
+        // (a bug, a broken proxy) must surface as an error from `is_failure`
+        // rather than being silently treated as "not a failure" — the latter
+        // would open another silent no-retry path identical in spirit to the
+        // CopyOnWriteDict regression this file fixes.
+        Python::initialize();
+        Python::attach(|py| {
+            setup_cpex_framework(py);
+            let config = RetryConfig {
+                max_retries: 2,
+                backoff_base_ms: 100,
+                max_backoff_ms: 10_000,
+                retry_on_status: vec![500],
+                jitter: false,
+                check_text_content: false,
+                tool_overrides: HashMap::new(),
+            };
+            let core = RetryWithBackoffPluginCore {
+                config: config.clone(),
+                state_manager: Arc::new(Mutex::new(HashMap::new())),
+            };
+            let module = PyModule::from_code(
+                py,
+                c_str!(
+                    "class BrokenDict(dict):\n    def __getitem__(self, k):\n        raise RuntimeError('boom')\n"
+                ),
+                c_str!("broken.py"),
+                c_str!("broken"),
+            )
+            .unwrap();
+            let broken = module.getattr("BrokenDict").unwrap().call0().unwrap();
+
+            let err = core
+                .is_failure(py, &broken, &config)
+                .expect_err("a non-KeyError/TypeError __getitem__ failure must propagate");
+            assert!(
+                err.is_instance_of::<pyo3::exceptions::PyRuntimeError>(py),
+                "expected the original RuntimeError to propagate, got: {err}"
             );
         });
     }

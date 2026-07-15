@@ -6,7 +6,13 @@ import typing
 __all__ = [
     "RetryStateManager",
     "RetryWithBackoffPluginCore",
+    "__version__",
 ]
+
+# Not picked up by pyo3_stub_gen (module-level `m.add(...)` attrs aren't
+# auto-generated) -- declared by hand. Kept in sync manually with the
+# `m.add("__version__", env!("CARGO_PKG_VERSION"))` call in src/lib.rs.
+__version__: builtins.str
 
 @typing.final
 class RetryStateManager:
@@ -24,5 +30,5 @@ class RetryStateManager:
 @typing.final
 class RetryWithBackoffPluginCore:
     def __new__(cls, config: typing.Any) -> RetryWithBackoffPluginCore: ...
-    def tool_post_invoke(self, payload: typing.Any, context: typing.Any) -> typing.Any: ...
+    def tool_post_invoke(self, payload: typing.Any, context: typing.Any, extensions: typing.Optional[typing.Any] = None) -> typing.Any: ...
     def resource_post_fetch(self, _payload: typing.Any, _context: typing.Any) -> typing.Any: ...
