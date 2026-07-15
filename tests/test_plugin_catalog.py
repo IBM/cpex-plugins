@@ -512,6 +512,7 @@ class PluginCatalogTests(unittest.TestCase):
                 "rate_limiter",
                 "retry_with_backoff",
                 "secrets_detection",
+                "sql_sanitizer",
                 "url_reputation",
             },
         )
@@ -524,6 +525,7 @@ class PluginCatalogTests(unittest.TestCase):
                 "rate_limiter": "cpex_rate_limiter",
                 "retry_with_backoff": "cpex_retry_with_backoff",
                 "secrets_detection": "cpex_secrets_detection",
+                "sql_sanitizer": "cpex_sql_sanitizer",
                 "url_reputation": "cpex_url_reputation",
             },
         )
@@ -535,6 +537,7 @@ class PluginCatalogTests(unittest.TestCase):
                 "rate_limiter": "cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
                 "retry_with_backoff": "cpex_retry_with_backoff.retry_with_backoff.RetryWithBackoffPlugin",
                 "secrets_detection": "cpex_secrets_detection.secrets_detection.SecretsDetectionPlugin",
+                "sql_sanitizer": "cpex_sql_sanitizer.sql_sanitizer.SQLSanitizerPlugin",
                 "url_reputation": "cpex_url_reputation.url_reputation.URLReputationPlugin",
             },
         )
@@ -2348,6 +2351,7 @@ class PluginCatalogTests(unittest.TestCase):
                 "rate_limiter",
                 "retry_with_backoff",
                 "secrets_detection",
+                "sql_sanitizer",
             ],
         )
 
@@ -2444,6 +2448,7 @@ class PluginCatalogTests(unittest.TestCase):
                         "rate_limiter",
                         "retry_with_backoff",
                         "secrets_detection",
+                        "sql_sanitizer",
                     ],
                 },
                 payload["mutation_jobs"],
@@ -2552,6 +2557,7 @@ class PluginCatalogTests(unittest.TestCase):
             "rate_limiter",
             "retry_with_backoff",
             "secrets_detection",
+            "sql_sanitizer",
             "url_reputation",
         ]
         result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "plugins")
@@ -2564,7 +2570,7 @@ class PluginCatalogTests(unittest.TestCase):
 
         result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "plugin_count")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "6")
+        self.assertEqual(result.stdout.strip(), "7")
 
         result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "cargo_packages")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -3107,13 +3113,14 @@ class PluginCatalogTests(unittest.TestCase):
                 if "=" in line
             )
             self.assertEqual(outputs["has_plugins"], "true")
-            self.assertEqual(outputs["plugin_count"], "6")
+            self.assertEqual(outputs["plugin_count"], "7")
             expected_plugins = [
                 "encoded_exfil_detection",
                 "pii_filter",
                 "rate_limiter",
                 "retry_with_backoff",
                 "secrets_detection",
+                "sql_sanitizer",
                 "url_reputation",
             ]
             self.assertEqual(json.loads(outputs["plugins"]), expected_plugins)

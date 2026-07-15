@@ -1,0 +1,20 @@
+description: "Rust-backed SQL statement sanitizer — blocks risky DDL/DML and WHERE-clause-less mutations"
+author: "ContextForge Contributors"
+version: "0.1.0"
+kind: "cpex_sql_sanitizer.sql_sanitizer.SQLSanitizerPlugin"
+available_hooks:
+  - "prompt_pre_fetch"
+  - "tool_pre_invoke"
+default_configs:
+  fields: null
+  blocked_statements:
+    - "\\bDROP\\b"
+    - "\\bTRUNCATE\\b"
+    - "\\bALTER\\b"
+    - "\\bGRANT\\b"
+    - "\\bREVOKE\\b"
+  block_delete_without_where: true
+  block_update_without_where: true
+  strip_comments: true
+  require_parameterization: false
+  block_on_violation: true

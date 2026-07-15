@@ -1,0 +1,771 @@
+// Copyright 2026
+// SPDX-License-Identifier: Apache-2.0
+//
+// Rust-owned SQL sanitizer plugin core.
+// Python only keeps a thin compatibility shim so the gateway can import a
+// `Plugin` subclass while all logic lives here.
+
+use cpex_framework_bridge::{build_framework_object_dyn, default_result as bridge_default_result};
+use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyModule};
+
+use crate::config::SqlSanitizerConfig;
+use crate::scanner::scan_args;
+
+const LOGGER_NAME: &str = "cpex_sql_sanitizer.sql_sanitizer";
+
+/// The Rust-owned core exposed to Python as a single `#[pyclass]`.
+///
+/// The thin Python shim (`sql_sanitizer.py`) creates one instance per plugin
+/// life-cycle and delegates every hook call here.
+#[pyclass]
+pub struct SqlSanitizerPluginCore {
+    config: SqlSanitizerConfig,
+}
+
+#[pymethods]
+impl SqlSanitizerPluginCore {
+    /// Construct from a Python `dict` or Pydantic model (the value of `PluginConfig.config`).
+    #[new]
+    pub fn new(config: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let config = SqlSanitizerConfig::from_py_object(config)?;
+        Ok(Self { config })
+    }
+
+    /// `prompt_pre_fetch` hook — scan prompt arguments for risky SQL.
+    #[pyo3(signature = (payload, context, extensions=None))]
+    pub fn prompt_pre_fetch(
+        &self,
+        py: Python<'_>,
+        payload: &Bound<'_, PyAny>,
+        context: &Bound<'_, PyAny>,
+        extensions: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let _ = (&context, &extensions);
+        self.handle_pre_hook(
+            py,
+            payload,
+            "PromptPrehookResult",
+            "Potentially dangerous SQL detected in prompt args",
+        )
+    }
+
+    /// `tool_pre_invoke` hook — scan tool arguments for risky SQL.
+    #[pyo3(signature = (payload, context, extensions=None))]
+    pub fn tool_pre_invoke(
+        &self,
+        py: Python<'_>,
+        payload: &Bound<'_, PyAny>,
+        context: &Bound<'_, PyAny>,
+        extensions: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let _ = (&context, &extensions);
+        self.handle_pre_hook(
+            py,
+            payload,
+            "ToolPreInvokeResult",
+            "Potentially dangerous SQL detected in tool args",
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+impl SqlSanitizerPluginCore {
+    /// Shared logic for both `prompt_pre_fetch` and `tool_pre_invoke`.
+    ///
+    /// Outcome priority:
+    /// 1. Issues found **and** `block_on_violation=true`  → blocked result with `PluginViolation`
+    /// 2. Comments were stripped                          → modified-payload result
+    /// 3. Issues found **and** `block_on_violation=false` → pass-through with `metadata.sql_issues`
+    /// 4. No issues, no stripping                        → bare default result
+    fn handle_pre_hook(
+        &self,
+        py: Python<'_>,
+        payload: &Bound<'_, PyAny>,
+        result_class: &str,
+        description: &str,
+    ) -> PyResult<Py<PyAny>> {
+        let args = payload.getattr("args")?;
+
+        let (issues, stripped) = scan_args(&args, &self.config)?;
+
+        // ── 1. Block path ──────────────────────────────────────────────────
+        if !issues.is_empty() && self.config.block_on_violation {
+            log_violation(py, result_class, &issues)?;
+
+            let details = PyDict::new(py);
+            details.set_item("issues", &issues)?;
+
+            let violation = build_framework_object_dyn(
+                py,
+                "PluginViolation",
+                vec![
+                    (
+                        "reason",
+                        "Risky SQL detected".into_pyobject(py)?.into_any().unbind(),
+                    ),
+                    (
+                        "description",
+                        description.into_pyobject(py)?.into_any().unbind(),
+                    ),
+                    (
+                        "code",
+                        "SQL_SANITIZER".into_pyobject(py)?.into_any().unbind(),
+                    ),
+                    ("details", details.into_any().unbind()),
+                ],
+            )?;
+
+            return build_framework_object_dyn(
+                py,
+                result_class,
+                vec![
+                    (
+                        "continue_processing",
+                        false.into_pyobject(py)?.to_owned().into_any().unbind(),
+                    ),
+                    ("violation", violation),
+                ],
+            );
+        }
+
+        // ── 2. Modified-payload path (comment stripping) ──────────────────
+        if !stripped.is_empty() {
+            let new_args = rebuild_args_with_stripped(py, &args, &stripped)?;
+            let modified = clone_payload(py, payload, "args", &new_args)?;
+
+            let metadata = PyDict::new(py);
+            metadata.set_item("sql_sanitized", true)?;
+            // In monitoring mode, preserve any detected issues alongside the
+            // stripped payload so audit consumers see the full picture.
+            if !issues.is_empty() {
+                metadata.set_item("sql_issues", &issues)?;
+            }
+
+            return build_framework_object_dyn(
+                py,
+                result_class,
+                vec![
+                    ("modified_payload", modified),
+                    ("metadata", metadata.into_any().unbind()),
+                ],
+            );
+        }
+
+        // ── 3. Monitoring path (issues but not blocking) ──────────────────
+        if !issues.is_empty() {
+            let metadata = PyDict::new(py);
+            metadata.set_item("sql_issues", &issues)?;
+            return build_framework_object_dyn(
+                py,
+                result_class,
+                vec![("metadata", metadata.into_any().unbind())],
+            );
+        }
+
+        // ── 4. Clean pass-through ─────────────────────────────────────────
+        default_result(py, result_class)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Private free functions
+// ---------------------------------------------------------------------------
+
+fn default_result(py: Python<'_>, class_name: &str) -> PyResult<Py<PyAny>> {
+    bridge_default_result(py, class_name)
+}
+
+/// Shallow-copy `args` dict and overlay the comment-stripped values.
+///
+/// Uses the Python-level mapping protocol (`items()`) so that dict subclasses
+/// such as `CopyOnWriteDict` that keep their visible entries outside the
+/// C-level hash table are copied faithfully.
+fn rebuild_args_with_stripped(
+    py: Python<'_>,
+    args: &Bound<'_, PyAny>,
+    stripped: &[(String, String)],
+) -> PyResult<Py<PyAny>> {
+    // Start from a shallow copy of the existing args so unaffected keys are preserved.
+    let new_dict = PyDict::new(py);
+    if let Ok(dict_items) = args.call_method0("items") {
+        // Use Python-level items() so dict subclasses (e.g. CopyOnWriteDict)
+        // whose visible entries live outside the C hash table are copied correctly.
+        if let Ok(iter) = dict_items.try_iter() {
+            for item in iter {
+                let item = item?;
+                new_dict.set_item(item.get_item(0)?, item.get_item(1)?)?;
+            }
+        }
+    }
+    for (key, val) in stripped {
+        new_dict.set_item(key, val)?;
+    }
+    Ok(new_dict.into_any().unbind())
+}
+
+/// Clone `payload` with one attribute replaced.  Prefers Pydantic `model_copy`
+/// so that field validation is respected; falls back to `copy.copy` + `setattr`.
+fn clone_payload(
+    py: Python<'_>,
+    payload: &Bound<'_, PyAny>,
+    attr: &str,
+    new_value: &Py<PyAny>,
+) -> PyResult<Py<PyAny>> {
+    if payload.hasattr("model_copy")? {
+        let update = PyDict::new(py);
+        update.set_item(attr, new_value.bind(py))?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("update", &update)?;
+        Ok(payload
+            .call_method("model_copy", (), Some(&kwargs))?
+            .unbind())
+    } else {
+        let copy_mod = PyModule::import(py, "copy")?;
+        let cloned = copy_mod.getattr("copy")?.call1((payload,))?;
+        cloned.setattr(attr, new_value.bind(py))?;
+        Ok(cloned.unbind())
+    }
+}
+
+/// Emit a WARNING-level log line listing the detected issues.
+fn log_violation(py: Python<'_>, stage: &str, issues: &[String]) -> PyResult<()> {
+    let logging = PyModule::import(py, "logging")?;
+    let logger = logging.getattr("getLogger")?.call1((LOGGER_NAME,))?;
+    let msg = format!(
+        "SQL-SANITIZER [{}] blocked — issues: {}",
+        stage,
+        issues.join(", ")
+    );
+    logger.call_method1("warning", (msg,))?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use pyo3::ffi::c_str;
+    use pyo3::prelude::*;
+    use pyo3::types::{PyDict, PyModule};
+
+    fn install_fake_framework(py: Python<'_>) -> PyResult<()> {
+        let framework = PyModule::from_code(
+            py,
+            c_str!(
+                r#"
+class PromptPrehookResult:
+    def __init__(self, continue_processing=True, violation=None, modified_payload=None, metadata=None):
+        self.continue_processing = continue_processing
+        self.violation = violation
+        self.modified_payload = modified_payload
+        self.metadata = metadata or {}
+
+class ToolPreInvokeResult:
+    def __init__(self, continue_processing=True, violation=None, modified_payload=None, metadata=None):
+        self.continue_processing = continue_processing
+        self.violation = violation
+        self.modified_payload = modified_payload
+        self.metadata = metadata or {}
+
+class PluginViolation:
+    def __init__(self, reason=None, description=None, code=None, details=None):
+        self.reason = reason
+        self.description = description
+        self.code = code
+        self.details = details or {}
+"#
+            ),
+            c_str!("framework.py"),
+            c_str!("cpex.framework"),
+        )?;
+        let cpex = PyModule::from_code(py, c_str!(""), c_str!("cpex.py"), c_str!("cpex"))?;
+        cpex.setattr("framework", &framework)?;
+        let sys = PyModule::import(py, "sys")?;
+        let modules = sys.getattr("modules")?;
+        modules.set_item("cpex", &cpex)?;
+        modules.set_item("cpex.framework", &framework)?;
+        Ok(())
+    }
+
+    /// Build a minimal fake payload: `SimpleNamespace(args=args_dict, name="test", prompt_id="p")`.
+    fn make_payload<'py>(
+        py: Python<'py>,
+        args: &Bound<'py, PyDict>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let types_mod = PyModule::import(py, "types")?;
+        let ns_cls = types_mod.getattr("SimpleNamespace")?;
+        let kw = PyDict::new(py);
+        kw.set_item("args", args)?;
+        kw.set_item("name", "test_tool")?;
+        kw.set_item("prompt_id", "test_prompt")?;
+        ns_cls.call((), Some(&kw))
+    }
+
+    #[test]
+    fn blocks_unsafe_delete() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let empty = PyDict::new(py);
+            let core = super::SqlSanitizerPluginCore::new(empty.as_any()).unwrap();
+            let args = PyDict::new(py);
+            args.set_item("sql", "DELETE FROM users").unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core
+                .prompt_pre_fetch(py, &payload, &none_val, None)
+                .unwrap();
+            let cp: bool = result
+                .bind(py)
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(!cp, "DELETE without WHERE must be blocked");
+        });
+    }
+
+    #[test]
+    fn allows_safe_select() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let empty = PyDict::new(py);
+            let core = super::SqlSanitizerPluginCore::new(empty.as_any()).unwrap();
+            let args = PyDict::new(py);
+            args.set_item("sql", "SELECT * FROM users WHERE id = 1")
+                .unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let cp: bool = result
+                .bind(py)
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(cp, "Safe SELECT should be allowed");
+        });
+    }
+
+    #[test]
+    fn per_statement_fix_four_updates_all_blocked() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let empty = PyDict::new(py);
+            let core = super::SqlSanitizerPluginCore::new(empty.as_any()).unwrap();
+            // Four WHERE-less UPDATEs; final SELECT has WHERE — must still block
+            let sql = "UPDATE a SET x=1; UPDATE b SET x=2; UPDATE c SET x=3; \
+                       UPDATE d SET x=4; SELECT * FROM e WHERE id=1";
+            let args = PyDict::new(py);
+            args.set_item("query", sql).unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let cp: bool = result
+                .bind(py)
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(
+                !cp,
+                "WHERE-less UPDATEs must be blocked even when WHERE appears elsewhere"
+            );
+        });
+    }
+
+    /// SQL with a `--` comment → the comment is stripped → `modified_payload` is
+    /// returned with the cleaned SQL.  Catches:
+    ///   - `plugin.rs:136` (`!stripped.is_empty()` → `stripped.is_empty()`)
+    ///   - `scanner.rs:55` (`clean != text` → `clean == text`)
+    #[test]
+    fn comment_stripping_returns_modified_payload() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let empty = PyDict::new(py);
+            let core = super::SqlSanitizerPluginCore::new(empty.as_any()).unwrap();
+            let args = PyDict::new(py);
+            // Safe SQL but with a trailing comment — should be stripped
+            args.set_item("sql", "SELECT 1 -- drop hint").unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let bound = result.bind(py);
+            let cp: bool = bound
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(cp, "safe SQL with comment should still be allowed");
+            let mp = bound.getattr("modified_payload").unwrap();
+            assert!(
+                !mp.is_none(),
+                "modified_payload must be set when comments are stripped"
+            );
+        });
+    }
+
+    /// Monitoring mode (`block_on_violation=false`) + SQL that both has issues
+    /// AND contains a strippable comment → result must carry *both*
+    /// `modified_payload` and `metadata.sql_issues`.
+    ///
+    /// Regression test for the bug where the modified-payload path returned
+    /// early without populating `sql_issues`, silently losing audit information.
+    #[test]
+    fn monitoring_mode_with_comment_includes_sql_issues_in_metadata() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let cfg_dict = PyDict::new(py);
+            cfg_dict.set_item("block_on_violation", false).unwrap();
+            let core = super::SqlSanitizerPluginCore::new(cfg_dict.as_any()).unwrap();
+            let args = PyDict::new(py);
+            // Dangerous SQL with a comment: both stripping AND an issue occur
+            args.set_item("sql", "DELETE FROM sessions -- cleanup")
+                .unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let bound = result.bind(py);
+            let mp = bound.getattr("modified_payload").unwrap();
+            assert!(
+                !mp.is_none(),
+                "modified_payload must be set (comment stripped)"
+            );
+            let metadata = bound.getattr("metadata").unwrap();
+            let has_issues: bool = metadata
+                .call_method1("__contains__", ("sql_issues",))
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(
+                has_issues,
+                "sql_issues must be present in metadata even when comment stripping also occurred"
+            );
+        });
+    }
+
+    /// `block_on_violation=false` + dangerous SQL → pass-through with
+    /// `metadata.sql_issues` populated.  Catches
+    /// `plugin.rs:154` (`!issues.is_empty()` → `issues.is_empty()`).
+    #[test]
+    fn monitoring_mode_populates_sql_issues_metadata() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let cfg_dict = PyDict::new(py);
+            cfg_dict.set_item("block_on_violation", false).unwrap();
+            let core = super::SqlSanitizerPluginCore::new(cfg_dict.as_any()).unwrap();
+            let args = PyDict::new(py);
+            args.set_item("sql", "DELETE FROM sessions").unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let bound = result.bind(py);
+            let cp: bool = bound
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(cp, "monitoring mode must not block");
+            let metadata = bound.getattr("metadata").unwrap();
+            let has_key: bool = metadata
+                .call_method1("__contains__", ("sql_issues",))
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(
+                has_key,
+                "metadata.sql_issues must be set in monitoring mode"
+            );
+        });
+    }
+
+    /// `block_on_violation=false` + safe SQL → `metadata.sql_issues` must NOT
+    /// be present.  Together with `monitoring_mode_populates_sql_issues_metadata`
+    /// this brackets the `!issues.is_empty()` guard.
+    #[test]
+    fn monitoring_mode_safe_sql_has_no_issues_metadata() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let cfg_dict = PyDict::new(py);
+            cfg_dict.set_item("block_on_violation", false).unwrap();
+            let core = super::SqlSanitizerPluginCore::new(cfg_dict.as_any()).unwrap();
+            let args = PyDict::new(py);
+            args.set_item("sql", "SELECT 1").unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let bound = result.bind(py);
+            let metadata = bound.getattr("metadata").unwrap();
+            // metadata should be an empty dict — no sql_issues key
+            let has_key: bool = metadata
+                .call_method1("__contains__", ("sql_issues",))
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(!has_key, "safe SQL must not produce sql_issues metadata");
+        });
+    }
+
+    /// `fields=["sql"]` + dangerous SQL in a *different* field → must be
+    /// allowed.  Catches:
+    ///   - `scanner.rs:46`  (`s == key` → `s != key`)
+    ///   - `config.rs:86`   (`!val.is_none()` → `val.is_none()` for fields)
+    #[test]
+    fn field_filter_allows_violation_in_non_matching_field() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let cfg_dict = PyDict::new(py);
+            cfg_dict.set_item("fields", vec!["sql"]).unwrap();
+            let core = super::SqlSanitizerPluginCore::new(cfg_dict.as_any()).unwrap();
+            let args = PyDict::new(py);
+            // Dangerous SQL is in `query`, not in `sql` — must be ignored
+            args.set_item("query", "DELETE FROM users").unwrap();
+            args.set_item("sql", "SELECT 1").unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let cp: bool = result
+                .bind(py)
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(cp, "violation in non-matching field must be ignored");
+        });
+    }
+
+    /// Custom `blocked_statements` pattern → SQL matching the pattern is
+    /// blocked.  Catches `config.rs:94` (`!val.is_none()` → `val.is_none()`
+    /// for blocked_statements).
+    #[test]
+    fn custom_blocked_pattern_blocks_matching_sql() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let cfg_dict = PyDict::new(py);
+            // Replace default patterns with a custom one that blocks SELECT
+            cfg_dict
+                .set_item("blocked_statements", vec!["\\bSELECT\\b"])
+                .unwrap();
+            let core = super::SqlSanitizerPluginCore::new(cfg_dict.as_any()).unwrap();
+            let args = PyDict::new(py);
+            args.set_item("sql", "SELECT * FROM users").unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let cp: bool = result
+                .bind(py)
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(!cp, "SQL matching a custom blocked pattern must be blocked");
+        });
+    }
+
+    /// `fields=["sql"]` + dangerous SQL in a list value under a *different*
+    /// field → must be allowed.  Catches `scanner.rs:78`
+    /// (`s == key` → `s != key` for list string items).
+    #[test]
+    fn field_filter_list_items_respect_field_filter() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let cfg_dict = PyDict::new(py);
+            cfg_dict.set_item("fields", vec!["sql"]).unwrap();
+            let core = super::SqlSanitizerPluginCore::new(cfg_dict.as_any()).unwrap();
+            let args = PyDict::new(py);
+            // List of strings under key `queries` (not in `fields`) — must be ignored
+            let queries =
+                pyo3::types::PyList::new(py, ["DELETE FROM users", "DROP TABLE t"]).unwrap();
+            args.set_item("queries", &queries).unwrap();
+            args.set_item("sql", "SELECT 1").unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let cp: bool = result
+                .bind(py)
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(
+                cp,
+                "violations in list items under non-matching field must be ignored"
+            );
+        });
+    }
+
+    /// A `CopyOnWriteDict` keeps its real items in a Python-level overlay with
+    /// the underlying C-level hash table left empty.  Code that calls
+    /// `PyDict::iter()` (C-level) misses those items entirely and returns
+    /// `continue_processing=True` for a `DROP TABLE` payload — a security hole.
+    ///
+    /// This test constructs exactly that scenario and verifies the plugin still
+    /// detects and blocks the violation.
+    #[test]
+    fn wrap_payload_for_isolation() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+
+            // Build a CopyOnWriteDict where the C-level dict is empty but
+            // Python-level items() / keys() / __iter__ expose the real data.
+            let cow_mod = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    r#"
+class CopyOnWriteDict(dict):
+    """dict subclass that stores visible items in a write-layer.
+    The C-level hash table is intentionally left empty so that
+    PyDict::iter() (C-level PyDict_Next) returns nothing."""
+    def __init__(self, data):
+        super().__init__()                          # C dict is empty
+        object.__setattr__(self, '_writes', dict(data))
+    def __getitem__(self, key):   return self._writes[key]
+    def __setitem__(self, k, v):  self._writes[k] = v
+    def __delitem__(self, key):   del self._writes[key]
+    def __iter__(self):           return iter(self._writes)
+    def __len__(self):            return len(self._writes)
+    def __contains__(self, key):  return key in self._writes
+    def keys(self):               return self._writes.keys()
+    def values(self):             return self._writes.values()
+    def items(self):              return self._writes.items()
+    def get(self, k, d=None):     return self._writes.get(k, d)
+
+def make_cow_payload(sql):
+    class Payload:
+        def __init__(self):
+            self.args = CopyOnWriteDict({'query': sql})
+    return Payload()
+"#
+                ),
+                pyo3::ffi::c_str!("cow_test"),
+                pyo3::ffi::c_str!("cow_test"),
+            )
+            .unwrap();
+
+            let make_cow = cow_mod.getattr("make_cow_payload").unwrap();
+            // Dangerous: DELETE without WHERE hidden in the write layer
+            let payload = make_cow.call1(("DELETE FROM users",)).unwrap();
+
+            let cfg_dict = PyDict::new(py);
+            let core = super::SqlSanitizerPluginCore::new(cfg_dict.as_any()).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let cp: bool = result
+                .bind(py)
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(
+                !cp,
+                "CopyOnWriteDict args must be scanned via the mapping protocol, not C-level iter"
+            );
+        });
+    }
+
+    /// `UPDATE "users" SET admin=1` — quoted table name must still match the
+    /// UPDATE regex so the WHERE-clause guard fires.
+    /// Regression for: UPDATE_RE using `\w+` which skips double-quoted identifiers.
+    #[test]
+    fn quoted_table_name_update_is_blocked() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let empty = PyDict::new(py);
+            let core = super::SqlSanitizerPluginCore::new(empty.as_any()).unwrap();
+            let args = PyDict::new(py);
+            args.set_item("sql", r#"UPDATE "users" SET admin=1"#)
+                .unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let cp: bool = result
+                .bind(py)
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(!cp, r#"UPDATE "users" without WHERE must be blocked"#);
+        });
+    }
+
+    /// Stripping a comment from a nested field (e.g. `wrapper.sql`) must NOT
+    /// overwrite an unrelated top-level field with the same key name.
+    /// Regression for: `stripped` recording the nested key name and applying it
+    /// as a top-level overlay in `rebuild_args_with_stripped`.
+    #[test]
+    fn nested_comment_stripping_does_not_overwrite_top_level_key() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let cfg_dict = PyDict::new(py);
+            cfg_dict.set_item("block_on_violation", false).unwrap();
+            let core = super::SqlSanitizerPluginCore::new(cfg_dict.as_any()).unwrap();
+
+            // Top-level `sql` is safe. Nested `wrapper.sql` has a comment.
+            // The nested comment must NOT cause `sql` to be overwritten.
+            let wrapper = PyDict::new(py);
+            wrapper
+                .set_item("sql", "SELECT 1 -- nested comment")
+                .unwrap();
+            let args = PyDict::new(py);
+            args.set_item("sql", "SELECT 2").unwrap(); // safe top-level value
+            args.set_item("wrapper", &wrapper).unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let bound = result.bind(py);
+            // No modified_payload: the nested comment should NOT produce a stripped entry
+            let mp = bound.getattr("modified_payload").unwrap();
+            assert!(
+                mp.is_none(),
+                "nested comment stripping must not produce a modified_payload"
+            );
+        });
+    }
+
+    /// `{"batch": [["DROP TABLE users"]]}` — a list-of-lists payload must be
+    /// recursed into so the inner string is scanned and the violation blocked.
+    /// Regression for: `scanner.rs` only recursing one level into lists.
+    #[test]
+    fn nested_list_items_are_scanned() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let empty = PyDict::new(py);
+            let core = super::SqlSanitizerPluginCore::new(empty.as_any()).unwrap();
+
+            // [[dangerous SQL]] — two levels of list nesting
+            let inner = pyo3::types::PyList::new(py, ["DROP TABLE users"]).unwrap();
+            let outer = pyo3::types::PyList::new(py, [&inner]).unwrap();
+            let args = PyDict::new(py);
+            args.set_item("batch", &outer).unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let cp: bool = result
+                .bind(py)
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(!cp, "DROP TABLE inside nested list must be blocked");
+        });
+    }
+}

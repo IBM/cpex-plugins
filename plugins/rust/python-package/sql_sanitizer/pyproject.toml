@@ -1,0 +1,37 @@
+[build-system]
+requires = ["maturin>=1.13.3,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "cpex-sql-sanitizer"
+dynamic = ["version"]
+description = "Rust-backed SQL sanitizer plugin for MCP Gateway"
+authors = [{ name = "ContextForge Contributors" }]
+license = { text = "Apache-2.0" }
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "cpex>=0.1.0,<0.2",
+]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+[project.entry-points."cpex.plugins"]
+sql_sanitizer = "cpex_sql_sanitizer.sql_sanitizer:SQLSanitizerPlugin"
+
+[tool.maturin]
+module-name = "cpex_sql_sanitizer.sql_sanitizer_rust"
+python-source = "."
+features = ["pyo3/extension-module"]
+
+[dependency-groups]
+dev = [
+    "maturin>=1.13.3",
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.3.0",
+]
