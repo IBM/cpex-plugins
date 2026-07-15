@@ -39,6 +39,56 @@ class TestPluginHookResults:
         # No extensions/trace_id passed => gated, no metadata write at all.
         assert result.metadata == {}
 
+    async def test_tool_post_invoke_redacts_quoted_aws_secret_access_key(self, plugin):
+        payload = ToolPostInvokePayload(
+            name="get_file_contents",
+            result={
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            'aws_secret_access_key = '  # pragma: allowlist secret
+                            '"FAKESecretAccessKeyForTestingEXAMPLE0000"'
+                        ),
+                    }
+                ],
+                "isError": False,
+            },
+        )
+
+        result = await plugin.tool_post_invoke(payload, make_context())
+
+        assert result.continue_processing is True
+        assert result.violation is None
+        assert result.modified_payload is not None
+        assert result.modified_payload.result["content"][0]["text"] == "[REDACTED]"
+
+    async def test_tool_post_invoke_blocks_quoted_aws_secret_access_key(self):
+        plugin = SecretsDetectionPlugin(
+            make_config(block_on_detection=True, redact=False)
+        )
+        payload = ToolPostInvokePayload(
+            name="get_file_contents",
+            result={
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            'aws_secret_access_key = '  # pragma: allowlist secret
+                            '"FAKESecretAccessKeyForTestingEXAMPLE0000"'
+                        ),
+                    }
+                ],
+                "isError": False,
+            },
+        )
+
+        result = await plugin.tool_post_invoke(payload, make_context())
+
+        assert result.continue_processing is False
+        assert result.violation is not None
+        assert result.violation.code == "SECRETS_DETECTED"
+
     async def test_tool_post_invoke_redaction_survives_cpex_policy_with_isolated_payload(self, plugin):
         payload = ToolPostInvokePayload(
             name="writer",

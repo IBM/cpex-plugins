@@ -75,6 +75,26 @@ mod tests {
     }
 
     #[test]
+    fn detects_quoted_aws_secret_access_keys() {
+        let config = SecretsDetectionConfig {
+            redact: true,
+            redaction_text: "[REDACTED]".to_string(),
+            ..Default::default()
+        };
+
+        for text in [
+            "aws_secret_access_key = \"FAKESecretAccessKeyForTestingEXAMPLE0000\"", // pragma: allowlist secret
+            "aws_secret_access_key = 'FAKESecretAccessKeyForTestingEXAMPLE0000'", // pragma: allowlist secret
+        ] {
+            let (findings, redacted) = detect_and_redact(text, &config);
+
+            assert_eq!(findings.len(), 1, "{text}: {findings:?}");
+            assert_eq!(findings[0].pii_type, "aws_secret_access_key");
+            assert_eq!(redacted, config.redaction_text);
+        }
+    }
+
+    #[test]
     fn detects_slack_token() {
         let config = SecretsDetectionConfig::default();
         let (findings, _) = detect_and_redact(
