@@ -457,7 +457,7 @@ jobs:
               }
             fi
             gh workflow run release-rust-python-package.yaml \
-              --ref main \
+              --ref "${tag}" \
               -f "tag=${tag}" \
               -f repository=pypi \
               -f publish_enabled=true
