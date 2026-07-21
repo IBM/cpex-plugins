@@ -45,7 +45,8 @@ on:
 
 concurrency:
   group: ci-rust-python-package-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}
-  cancel-in-progress: true
+  # Main runs can create release tags after full CI, so only superseded PR runs are safe to cancel.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

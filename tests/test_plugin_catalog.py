@@ -2715,6 +2715,17 @@ class PluginCatalogTests(unittest.TestCase):
         }
         self.assertTrue(expected_paths.issubset(actual_paths))
 
+    def test_ci_workflow_only_cancels_superseded_pull_requests(self) -> None:
+        workflow = (
+            REPO_ROOT / ".github" / "workflows" / "ci-rust-python-package.yaml"
+        ).read_text()
+        self.assertIn("concurrency:", workflow)
+        self.assertIn("github.head_ref || github.ref_name", workflow)
+        self.assertIn(
+            "cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+            workflow,
+        )
+
     def test_catalog_workflow_paths_match_contract(self) -> None:
         workflow = (
             REPO_ROOT / ".github" / "workflows" / "ci-plugin-catalog.yaml"
@@ -2847,9 +2858,6 @@ class PluginCatalogTests(unittest.TestCase):
         workflow = (
             REPO_ROOT / ".github" / "workflows" / "ci-rust-python-package.yaml"
         ).read_text()
-        self.assertIn("concurrency:", workflow)
-        self.assertIn("cancel-in-progress: true", workflow)
-        self.assertIn("github.head_ref || github.ref_name", workflow)
         self.assertIn("push:\n    branches: [main]", workflow)
         self.assertIn("pull_request:\n    branches: [main]", workflow)
         self.assertIn('- "Makefile"', workflow)
