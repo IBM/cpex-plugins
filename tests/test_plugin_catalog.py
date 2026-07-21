@@ -1737,6 +1737,43 @@ class PluginCatalogTests(unittest.TestCase):
             self.assertEqual(payload["release_validation_tags"], ["rate-limiter-v0.0.2"])
             self.assertTrue(payload["has_release_validation_tags"])
 
+    def test_ci_selection_detects_new_plugin_for_initial_release(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            git = lambda *args: subprocess.run(  # noqa: E731
+                ["git", *args],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            git("init")
+            git("config", "user.name", "Test User")
+            git("config", "user.email", "test@example.com")
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/rust/python-package/rate_limiter"]\n'
+            )
+            self._create_plugin(root, "rate_limiter")
+            git("add", ".")
+            git("commit", "--no-verify", "-m", "seed layout")
+            base_sha = git("rev-parse", "HEAD").stdout.strip()
+
+            (root / "Cargo.toml").write_text(
+                "[workspace]\nmembers = [\n"
+                '    "plugins/rust/python-package/rate_limiter",\n'
+                '    "plugins/rust/python-package/sql_sanitizer",\n'
+                "]\n"
+            )
+            self._create_plugin(root, "sql_sanitizer")
+            git("add", ".")
+            git("commit", "--no-verify", "-m", "add sql sanitizer")
+
+            result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["release_validation_tags"], ["sql-sanitizer-v0.0.1"])
+            self.assertTrue(payload["has_release_validation_tags"])
+
     def test_ci_selection_treats_catalog_test_change_as_not_shared(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
