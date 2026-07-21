@@ -35,7 +35,7 @@ pub static PATTERNS: LazyLock<HashMap<&'static str, Regex>> = LazyLock::new(|| {
     patterns.insert(
         "generic_api_key_assignment",
         Regex::new(
-            r#"(?ix)\b(?:(?:x[-_])?api[-_]?key|apikey|api[_-]?token|access[_-]?token|bearer[_-]?token|auth[_-]?token)\b\s*[:=]\s*['"]?[A-Za-z0-9_\-]{20,}['"]?"#,
+            r#"(?ix)\b(?:(?:x[-_])?api[-_]?key|apikey|api[_-]?token|access[_-]?token|bearer[_-]?token|auth[_-]?token)\b\s*[:=]\s*['"]?([A-Za-z0-9_\-]{20,})['"]?"#,
         )
         .expect("valid generic_api_key_assignment regex"),
     );
@@ -72,8 +72,13 @@ pub static PATTERNS: LazyLock<HashMap<&'static str, Regex>> = LazyLock::new(|| {
     patterns
 });
 
-pub static CAPTURE_PATTERNS: LazyLock<HashSet<&'static str>> =
-    LazyLock::new(|| HashSet::from(["base64_24"]));
+pub static CAPTURE_PATTERNS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    HashSet::from([
+        "aws_secret_access_key",
+        "generic_api_key_assignment",
+        "base64_24",
+    ])
+});
 
 #[cfg(test)]
 mod tests {

@@ -235,7 +235,7 @@ class CleanObject:
             );
             assert_eq!(
                 redacted_tuple.get_item(1)?.extract::<String>()?,
-                "[REDACTED]"
+                "AWS_SECRET_ACCESS_KEY=[REDACTED]"
             );
 
             Ok(())

@@ -128,10 +128,10 @@ mod tests {
 
             assert_eq!(findings.len(), 1, "{name}: {findings:?}");
             assert_eq!(findings[0].pii_type, "aws_secret_access_key", "{name}");
-            assert!(!redacted.contains(SECRET_FIXTURE), "{name}: {redacted}");
-            assert!(
-                redacted.contains(&config.redaction_text),
-                "{name}: {redacted}"
+            assert_eq!(
+                redacted,
+                text.replace(SECRET_FIXTURE, &config.redaction_text),
+                "{name}"
             );
         }
     }
@@ -212,7 +212,7 @@ mod tests {
     }
 
     #[test]
-    fn redacts_each_supported_secret_as_one_replacement_with_all_patterns_enabled() {
+    fn redacts_only_secret_value_for_each_supported_detector_with_all_patterns_enabled() {
         let config = SecretsDetectionConfig {
             enabled: crate::patterns::PATTERNS
                 .keys()
@@ -223,56 +223,73 @@ mod tests {
             ..Default::default()
         };
 
-        for (name, secret) in [
-            ("aws_access_key_id", "AKIAFAKE12345EXAMPLE".to_string()),
+        for (name, text, expected) in [
+            (
+                "aws_access_key_id",
+                "aws_access_key_id=AKIAFAKE12345EXAMPLE".to_string(),
+                "aws_access_key_id=[TESTING-REDACTED]".to_string(),
+            ),
             (
                 "aws_secret_access_key",
-                "AWS_SECRET_ACCESS_KEY=FAKESecretAccessKeyForTestingEXAMPLE0000".to_string(),
+                "aws_secret_access_key=\"FAKESecretAccessKeyForTestingEXAMPLE0000\"".to_string(),
+                "aws_secret_access_key=\"[TESTING-REDACTED]\"".to_string(),
             ),
             (
                 "google_api_key",
-                "AIzaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
+                "google_api_key=AIzaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
+                "google_api_key=[TESTING-REDACTED]".to_string(),
             ),
             (
                 "github_token",
-                "ghp_abcdefghijklmnopqrstuvwxyz0123456789".to_string(),
+                "github_token=ghp_abcdefghijklmnopqrstuvwxyz0123456789".to_string(), // pragma: allowlist secret
+                "github_token=[TESTING-REDACTED]".to_string(),
             ),
             (
                 "stripe_secret_key",
-                "sk_test_abcdefghijklmnopqrstuvwxyz".to_string(),
+                "stripe_secret_key=sk_test_abcdefghijklmnopqrstuvwxyz".to_string(),
+                "stripe_secret_key=[TESTING-REDACTED]".to_string(),
             ),
             (
                 "generic_api_key_assignment",
-                "api_key=test12345678901234567890".to_string(),
+                "api_key=\"test12345678901234567890\"".to_string(),
+                "api_key=\"[TESTING-REDACTED]\"".to_string(),
             ),
             (
                 "slack_token",
                 [
-                    "xoxb",
+                    "slack_token=xoxb",
                     "123456789012",
                     "123456789012",
                     "abcdefghijklmnopqrstuvwx",
                 ]
                 .join("-"),
+                "slack_token=[TESTING-REDACTED]".to_string(),
             ),
             (
                 "private_key_block",
-                "-----BEGIN RSA PRIVATE KEY-----".to_string(),
+                "private_key_block=-----BEGIN RSA PRIVATE KEY-----".to_string(),
+                "private_key_block=[TESTING-REDACTED]".to_string(),
             ),
             (
                 "jwt_like",
-                "eyJaaaaaaaaaaa.eyJbbbbbbbbbbb.cccccccccccccc".to_string(),
+                "jwt_like=eyJaaaaaaaaaaa.eyJbbbbbbbbbbb.cccccccccccccc".to_string(),
+                "jwt_like=[TESTING-REDACTED]".to_string(),
             ),
             (
                 "hex_secret_32",
-                "0123456789abcdef0123456789abcdef".to_string(),
+                "hex_secret_32=0123456789abcdef0123456789abcdef".to_string(),
+                "hex_secret_32=[TESTING-REDACTED]".to_string(),
             ),
-            ("base64_24", "QUJDREVGR0hJSktMTU5PUFFSU1RVVldY".to_string()),
+            (
+                "base64_24",
+                "base64_24=QUJDREVGR0hJSktMTU5PUFFSU1RVVldY".to_string(), // pragma: allowlist secret
+                "base64_24=[TESTING-REDACTED]".to_string(),
+            ),
         ] {
-            let (findings, redacted) = detect_and_redact(&secret, &config);
+            let (findings, redacted) = detect_and_redact(&text, &config);
             assert_eq!(findings.len(), 1, "{name}: {findings:?}");
             assert_eq!(findings[0].pii_type, name, "{name}: {findings:?}");
-            assert_eq!(redacted, config.redaction_text, "{name}");
+            assert_eq!(redacted, expected, "{name}");
         }
     }
 

@@ -517,8 +517,8 @@ class LeakModel:
         let internal = redacted.getattr("internal")?.extract::<String>()?;
         let external = redacted.getattr("external")?.extract::<String>()?;
 
-        assert_eq!(internal, config.redaction_text);
-        assert_eq!(external, config.redaction_text);
+        assert_eq!(internal, "AWS_SECRET_ACCESS_KEY=[REDACTED]");
+        assert_eq!(external, "AWS_SECRET_ACCESS_KEY=[REDACTED]");
         assert_ne!(
             internal,
             "AWS_SECRET_ACCESS_KEY=FAKESecretAccessKeyForTestingEXAMPLE0000"
@@ -847,7 +847,11 @@ class Model:
             .iter()
             .filter_map(|value| value.extract::<String>().ok())
             .collect();
-        assert!(values.iter().any(|value| value == "[REDACTED]"));
+        assert!(
+            values
+                .iter()
+                .any(|value| value == "AWS_SECRET_ACCESS_KEY=[REDACTED]")
+        );
 
         Ok(())
     })

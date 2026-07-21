@@ -132,7 +132,7 @@ config:
 
 - Redaction preserves payload shape where possible instead of flattening everything to plain dicts.
 - `aws_secret_access_key` recognizes `=` and `:` assignments with optional single or double quotes around the value.
-- `base64_24` uses capture-group redaction so leading non-base64 boundary characters are preserved.
+- `aws_secret_access_key`, `generic_api_key_assignment`, and `base64_24` use capture-group redaction so only the detected secret span is replaced; assignment labels, separators, quotes, and leading non-base64 boundary characters are preserved.
 - Broad detectors remain opt-in to reduce noisy matches on ordinary identifiers.
 - Binary resource bodies are not scanned; `resource_post_fetch` only scans text content exposed as `payload.content.text`.
 - The plugin does not decode archives, compressed data, or arbitrary encoded blobs before scanning.

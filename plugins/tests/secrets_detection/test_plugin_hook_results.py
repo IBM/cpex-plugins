@@ -6,6 +6,8 @@ from cpex.framework.memory import wrap_payload_for_isolation
 
 from secrets_detection.helpers import *  # noqa: F403,F405
 
+AWS_SECRET_VALUE = "FAKESecretAccessKeyForTestingEXAMPLE0000"  # pragma: allowlist secret
+
 AWS_SECRET_ASSIGNMENTS = [
     pytest.param(
         'aws_secret_access_key = "FAKESecretAccessKeyForTestingEXAMPLE0000"',  # pragma: allowlist secret
@@ -85,8 +87,7 @@ class TestPluginHookResults:
         assert result.violation is None
         assert result.modified_payload is not None
         redacted = result.modified_payload.result["content"][0]["text"]
-        assert "[REDACTED]" in redacted
-        assert redacted != assignment
+        assert redacted == assignment.replace(AWS_SECRET_VALUE, "[REDACTED]")
         assert payload.result["content"][0]["text"] == assignment
 
     @pytest.mark.parametrize("assignment", AWS_SECRET_ASSIGNMENTS)

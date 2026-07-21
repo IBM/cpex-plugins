@@ -26,13 +26,15 @@ pub fn detect_and_redact(text: &str, config: &SecretsDetectionConfig) -> (Vec<Fi
         }
 
         if CAPTURE_PATTERNS.contains(name) {
-            // Capturing patterns exclude boundary chars from findings. Rust
-            // regex has no lookbehind, so group 1 is the actual secret span.
+            // Capturing patterns exclude labels, quotes, or boundary chars
+            // from findings. Group 1 is always the actual secret span.
             for captures in pattern.captures_iter(text) {
                 let Some(matched) = captures.get(1) else {
                     continue;
                 };
-                if is_base64_boundary_char(text[matched.end()..].chars().next()) {
+                if *name == "base64_24"
+                    && is_base64_boundary_char(text[matched.end()..].chars().next())
+                {
                     continue;
                 }
                 candidates.push(MatchCandidate {

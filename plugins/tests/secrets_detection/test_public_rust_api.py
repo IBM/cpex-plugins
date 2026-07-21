@@ -189,7 +189,7 @@ class TestPublicRustApi:
         assert isinstance(redacted, SecretBox)
         assert redacted.value == "AWS_ACCESS_KEY_ID=[REDACTED]"
         assert any(
-            value == "[REDACTED]"
+            value == "AWS_SECRET_ACCESS_KEY=[REDACTED]"
             for key, value in redacted.__dict__.items()
             if not isinstance(key, str)
         )
@@ -368,7 +368,7 @@ class TestPublicRustApi:
             {"type": "aws_access_key_id"},
             {"type": "aws_secret_access_key"},
         ]
-        assert redacted == "[REDACTED]"
+        assert redacted == "AWS_SECRET_ACCESS_KEY=[REDACTED]"
 
     def test_scan_container_redacts_non_replayable_custom_object(self):
         class NonReplayableBox:
