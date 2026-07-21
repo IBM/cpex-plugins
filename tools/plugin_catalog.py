@@ -615,7 +615,10 @@ def _release_validation_tags_for_records(
         if cargo_path not in changed_paths:
             continue
         old_text = _git_file_text(root, base, cargo_path)
-        old_version = _cargo_version_from_text(old_text) if old_text is not None else None
+        if old_text is None:
+            tags.append(f"{plugin.slug.replace('_', '-')}-v{plugin.version}")
+            continue
+        old_version = _cargo_version_from_text(old_text)
         if old_version is not None and old_version != plugin.version:
             tags.append(f"{plugin.slug.replace('_', '-')}-v{plugin.version}")
     return sorted(tags)
