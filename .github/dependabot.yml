@@ -1,0 +1,74 @@
+version: 2
+updates:
+  # Rust/Cargo workspace dependencies
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: UTC
+    groups:
+      # Group all minor/patch bumps into one PR; major versions open individually
+      rust-minor-patch:
+        update-types:
+          - minor
+          - patch
+    labels:
+      - dependencies
+      - rust
+    open-pull-requests-limit: 5
+
+  # Python dependencies — root uv workspace (6 plugins via pyproject.toml)
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: UTC
+    groups:
+      python-minor-patch:
+        update-types:
+          - minor
+          - patch
+    labels:
+      - dependencies
+      - python
+    open-pull-requests-limit: 5
+
+  # Python dependencies — sql_sanitizer (standalone uv workspace)
+  - package-ecosystem: pip
+    directory: /plugins/rust/python-package/sql_sanitizer
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: UTC
+    groups:
+      sql-sanitizer-minor-patch:
+        update-types:
+          - minor
+          - patch
+    labels:
+      - dependencies
+      - python
+    open-pull-requests-limit: 3
+
+  # GitHub Actions pinned-SHA bumps
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: UTC
+    groups:
+      actions-minor-patch:
+        update-types:
+          - minor
+          - patch
+    labels:
+      - dependencies
+      - github-actions
+    open-pull-requests-limit: 5

@@ -1,0 +1,116 @@
+name: Plugin Maintenance
+
+on:
+  schedule:
+    - cron: '0 8 1 * *'   # 1st of each month, 08:00 UTC
+  workflow_dispatch:        # manual trigger — use before any unplanned release
+
+concurrency:
+  group: plugin-maintenance
+  cancel-in-progress: false   # never cancel an in-flight maintenance run
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Verify Rust toolchain
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Set month label
+        id: date
+        run: echo "month=$(date -u +'%Y-%m')" >> "$GITHUB_OUTPUT"
+
+      - name: Install uv and maturin
+        run: python -m pip install uv==0.9.30 maturin==1.12.6
+
+      - name: Install cargo-nextest
+        run: |
+          mkdir -p "${CARGO_HOME:-$HOME/.cargo}/bin"
+          curl -LsSf https://get.nexte.st/0.9.133/linux | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+          cargo nextest --version
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny@0.19.0 --locked
+
+      # --- Update lock files ---
+
+      - name: Update Rust lock file
+        run: cargo update
+
+      - name: Update root Python lock file
+        run: uv lock --upgrade
+
+      - name: Update sql_sanitizer Python lock file
+        # sql_sanitizer manages its own uv workspace outside the root workspace
+        working-directory: plugins/rust/python-package/sql_sanitizer
+        run: uv lock --upgrade
+
+      # --- Validate ---
+
+      - name: Security advisory check
+        run: cargo deny --all-features check advisories --config deny.toml
+
+      - name: Test all plugins
+        shell: bash
+        run: |
+          set -euo pipefail
+          plugins=(
+            encoded_exfil_detection
+            pii_filter
+            rate_limiter
+            retry_with_backoff
+            secrets_detection
+            sql_sanitizer
+            url_reputation
+          )
+          for plugin in "${plugins[@]}"; do
+            echo "::group::Testing ${plugin}"
+            pushd "plugins/rust/python-package/${plugin}"
+            make sync
+            NEXTEST_PROFILE=ci make ci-build
+            popd
+            echo "::endgroup::"
+          done
+
+      # --- Open PR if lock files changed ---
+
+      - name: Open maintenance PR
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7
+        with:
+          commit-message: "chore: monthly dependency update ${{ steps.date.outputs.month }}"
+          title: "chore: monthly dependency update – ${{ steps.date.outputs.month }}"
+          body: |
+            ## Monthly Dependency Update – ${{ steps.date.outputs.month }}
+
+            Automated maintenance cycle per [MAINTENANCE.md](MAINTENANCE.md).
+
+            ### Changes
+            - `cargo update` applied to Rust workspace (`Cargo.lock`)
+            - `uv lock --upgrade` applied to root Python workspace (`uv.lock`)
+            - `uv lock --upgrade` applied to `sql_sanitizer` plugin lock file
+
+            ### Validation performed in CI
+            - All 7 plugins built and tested on `ubuntu-latest`
+            - `cargo deny check advisories` passed — no new CVEs
+
+            ### Reviewer checklist
+            - [ ] Review lock file diffs for unexpected major-version jumps
+            - [ ] Confirm gateway compatibility constraints in `pyproject.toml` remain satisfied
+            - [ ] Record any deferred updates or new constraints in `MAINTENANCE.md` compat table
+
+          branch: chore/dep-update-${{ steps.date.outputs.month }}
+          delete-branch: true
+          labels: dependencies,maintenance
+          signoff: true
