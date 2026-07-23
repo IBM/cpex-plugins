@@ -1,0 +1,19 @@
+[workspace]
+
+[package]
+name = "secrets_detection_rust"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+cpex-core = "=0.2.2"
+cpex-sdk = "=0.2.2"
+regex = "1.12.3"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+
+[dev-dependencies]
+cpex = "=0.2.2"
+tokio = { version = "1", features = ["macros", "rt"] }
