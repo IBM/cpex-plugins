@@ -38,7 +38,7 @@ with the current Python-facing plugin needs framework support for those fields.
 cargo test
 ```
 
-Current result: 45 tests pass.
+Current result: 47 tests pass.
 
 ## Manual Probe
 

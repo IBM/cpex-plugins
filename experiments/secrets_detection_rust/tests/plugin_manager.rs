@@ -162,6 +162,81 @@ async fn tool_pre_invoke_clean_payload_allows_without_modification() {
 }
 
 #[tokio::test]
+async fn tool_pre_invoke_rejects_invalid_field_allowlist_at_load() {
+    let manager = Arc::new(PluginManager::default());
+    manager.register_factory(KIND, Box::new(SecretsDetectionFactory));
+    let yaml = plugin_yaml(
+        "cmf.tool_pre_invoke",
+        r#"      field_allowlist:
+        - bad.
+"#,
+    );
+
+    let err = match manager.load_config_yaml(&yaml) {
+        Ok(_) => panic!("invalid field_allowlist should fail config loading"),
+        Err(err) => err.to_string(),
+    };
+
+    assert!(
+        err.contains("field_allowlist path \"bad.\" must not start or end with '.'"),
+        "unexpected config error: {err}"
+    );
+}
+
+#[tokio::test]
+async fn tool_pre_invoke_nested_filters_match_crate_smoke() {
+    let payload = tool_call_payload(HashMap::from([
+        (
+            "accounts".to_string(),
+            json!({
+                "keep": "AWS_ACCESS_KEY_ID=AKIATEST12345EXAMPLE",
+                "skip": "AWS_ACCESS_KEY_ID=AKIASKIP12345EXAMPLE"
+            }),
+        ),
+        (
+            "ignored".to_string(),
+            json!("AWS_ACCESS_KEY_ID=AKIAIGNR12345EXAMPLE"),
+        ),
+    ]));
+    let original = payload.clone();
+
+    let result = invoke_manager(
+        "cmf.tool_pre_invoke",
+        r#"      block_on_detection: false
+      redact: true
+      redaction_text: "[REDACTED]"
+      field_allowlist:
+        - accounts
+      field_denylist:
+        - accounts.skip
+"#,
+        payload,
+    )
+    .await;
+
+    assert!(result.continue_processing);
+    assert!(result.violation.is_none());
+
+    let modified = pipeline_payload(&result);
+    assert_eq!(
+        tool_call_argument(modified, "accounts")["keep"],
+        json!("AWS_ACCESS_KEY_ID=[REDACTED]")
+    );
+    assert_eq!(
+        tool_call_argument(modified, "accounts")["skip"],
+        json!("AWS_ACCESS_KEY_ID=AKIASKIP12345EXAMPLE")
+    );
+    assert_eq!(
+        tool_call_argument(modified, "ignored"),
+        &json!("AWS_ACCESS_KEY_ID=AKIAIGNR12345EXAMPLE")
+    );
+    assert_eq!(
+        tool_call_argument(&original, "accounts")["keep"],
+        json!("AWS_ACCESS_KEY_ID=AKIATEST12345EXAMPLE")
+    );
+}
+
+#[tokio::test]
 async fn tool_post_invoke_blocks_json_content() {
     let payload = tool_result_payload(json!({
         "token": "AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"
