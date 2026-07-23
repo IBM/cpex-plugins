@@ -66,3 +66,19 @@ Use the printed `continue_processing`, `violation`, `metadata`, and payload
 content to inspect the manager-level behavior. In CPEX 0.2.2, `metadata` is
 expected to print as `None` through `PluginManager`, and denied results are
 expected to print `modified_payload: none`.
+
+## Crate Consumer Smoke Test
+
+The crate-level smoke fixture lives outside the spike crate package boundary and
+depends on it by relative path. This mirrors the Python wheel-level smoke test
+with a standalone Cargo consumer.
+
+```bash
+cd smoke/crate_consumer
+cargo run
+```
+
+It verifies that an external crate can use only the public
+`secrets_detection_rust::{SecretsDetectionFactory, KIND}` exports to load the
+plugin, reject invalid field config, and preserve nested allowlist/denylist
+behavior without mutating the original CMF payload.
