@@ -214,6 +214,7 @@ name = "cpex_secrets_crate_smoke"
 version = "0.0.0"
 dependencies = [
  "cpex",
+ "cpex-core",
  "cpex-sdk",
  "secrets_detection_rust",
  "serde_json",

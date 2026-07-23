@@ -80,5 +80,6 @@ cargo run
 
 It verifies that an external crate can use only the public
 `secrets_detection_rust::{SecretsDetectionFactory, KIND}` exports to load the
-plugin, reject invalid field config, and preserve nested allowlist/denylist
-behavior without mutating the original CMF payload.
+plugin, run the same hook scenarios as the manual probe, reject invalid field
+config, and preserve nested allowlist/denylist behavior without mutating the
+original CMF payload.
