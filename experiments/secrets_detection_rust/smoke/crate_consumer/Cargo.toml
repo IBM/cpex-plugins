@@ -1,0 +1,15 @@
+[workspace]
+
+[package]
+name = "cpex_secrets_crate_smoke"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+cpex = "=0.2.2"
+cpex-core = "=0.2.2"
+cpex-sdk = "=0.2.2"
+secrets_detection_rust = { path = "../.." }
+serde_json = "1.0.149"
+tokio = { version = "1", features = ["macros", "rt"] }
