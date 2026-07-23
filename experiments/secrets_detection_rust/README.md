@@ -57,6 +57,7 @@ The default scenario is `tool-redact`. Available scenarios:
 cargo run --example manual_probe -- tool-redact
 cargo run --example manual_probe -- tool-block
 cargo run --example manual_probe -- prompt-filter
+cargo run --example manual_probe -- tool-allow-deny
 cargo run --example manual_probe -- tool-result-filter
 cargo run --example manual_probe -- resource-block
 ```

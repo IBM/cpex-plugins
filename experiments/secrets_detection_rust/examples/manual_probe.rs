@@ -29,11 +29,15 @@ async fn main() {
         "tool-redact" => tool_redact(),
         "tool-block" => tool_block(),
         "prompt-filter" => prompt_filter(),
+        "tool-allow-deny" => tool_allow_deny(),
         "tool-result-filter" => tool_result_filter(),
         "resource-block" => resource_block(),
         _ => {
             eprintln!("unknown scenario: {scenario_name}");
-            eprintln!("available: tool-redact, tool-block, prompt-filter, tool-result-filter, resource-block");
+            eprintln!(
+                "available: tool-redact, tool-block, prompt-filter, tool-allow-deny, \
+                 tool-result-filter, resource-block"
+            );
             std::process::exit(2);
         }
     };
@@ -128,6 +132,33 @@ fn prompt_filter() -> Scenario {
             (
                 "ignored".to_string(),
                 json!("AWS_ACCESS_KEY_ID=AKIAFAKE12345EXAMPLE"),
+            ),
+        ])),
+    }
+}
+
+fn tool_allow_deny() -> Scenario {
+    Scenario {
+        hook: "cmf.tool_pre_invoke",
+        config_block: r#"      block_on_detection: false
+      redact: true
+      redaction_text: "[REDACTED]"
+      field_allowlist:
+        - accounts
+      field_denylist:
+        - accounts.skip
+"#,
+        payload: tool_call_payload(HashMap::from([
+            (
+                "accounts".to_string(),
+                json!({
+                    "keep": "AWS_ACCESS_KEY_ID=AKIATEST12345EXAMPLE",
+                    "skip": "AWS_ACCESS_KEY_ID=AKIASKIP12345EXAMPLE"
+                }),
+            ),
+            (
+                "ignored".to_string(),
+                json!("AWS_ACCESS_KEY_ID=AKIAIGNR12345EXAMPLE"),
             ),
         ])),
     }
