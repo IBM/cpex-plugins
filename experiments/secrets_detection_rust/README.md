@@ -38,4 +38,30 @@ with the current Python-facing plugin needs framework support for those fields.
 cargo test
 ```
 
-Current result: 29 tests pass.
+Current result: 45 tests pass.
+
+## Manual Probe
+
+The spike crate does not expose a CLI or Python entry point. To inspect it
+manually, run the included example host. It registers the plugin factory, loads
+CPEX YAML config, invokes one CMF hook, and prints the resulting
+`PipelineResult`.
+
+```bash
+cargo run --example manual_probe
+```
+
+The default scenario is `tool-redact`. Available scenarios:
+
+```bash
+cargo run --example manual_probe -- tool-redact
+cargo run --example manual_probe -- tool-block
+cargo run --example manual_probe -- prompt-filter
+cargo run --example manual_probe -- tool-result-filter
+cargo run --example manual_probe -- resource-block
+```
+
+Use the printed `continue_processing`, `violation`, `metadata`, and payload
+content to inspect the manager-level behavior. In CPEX 0.2.2, `metadata` is
+expected to print as `None` through `PluginManager`, and denied results are
+expected to print `modified_payload: none`.
