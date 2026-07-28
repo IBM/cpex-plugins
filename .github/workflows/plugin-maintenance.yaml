@@ -79,7 +79,7 @@ jobs:
             echo "::group::Testing ${plugin}"
             pushd "plugins/rust/python-package/${plugin}"
             make sync
-            NEXTEST_PROFILE=ci make ci-build
+            NEXTEST_PROFILE=ci make ci
             popd
             echo "::endgroup::"
           done
@@ -112,5 +112,5 @@ jobs:
 
           branch: chore/dep-update-${{ steps.date.outputs.month }}
           delete-branch: true
-          labels: dependencies,maintenance
+          labels: dependencies
           signoff: true
