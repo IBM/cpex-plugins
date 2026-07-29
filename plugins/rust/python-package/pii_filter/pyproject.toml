@@ -32,6 +32,6 @@ features = ["pyo3/extension-module"]
 [dependency-groups]
 dev = [
     "maturin>=1.13.3",
-    "pytest>=9.0.3",
+    "pytest>=9.1.1",
     "pytest-asyncio>=1.3.0",
 ]
