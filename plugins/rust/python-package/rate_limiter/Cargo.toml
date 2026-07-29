@@ -37,7 +37,7 @@ rustls-pki-types = "1.14"
 tokio = { version = "1.52.3", features = ["full"] }
 
 [dev-dependencies]
-rcgen = { version = "0.12", default-features = false, features = ["ring", "pem"] }
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
 criterion = { workspace = true }
 
 [[bench]]
