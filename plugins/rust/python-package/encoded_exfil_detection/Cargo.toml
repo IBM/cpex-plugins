@@ -21,7 +21,7 @@ default = []
 stub-gen = ["dep:pyo3-stub-gen"]
 
 [dependencies]
-base64 = "0.22.1"
+base64 = "0.23.0"
 cpex_framework_bridge = { workspace = true }
 log = { workspace = true }
 pyo3 = { workspace = true }
