@@ -2,12 +2,13 @@
 members = [
     "crates/framework_bridge",
     "plugins/rust/python-package/encoded_exfil_detection",
+    "plugins/rust/python-package/output_length_guard",
     "plugins/rust/python-package/pii_filter",
     "plugins/rust/python-package/rate_limiter",
     "plugins/rust/python-package/retry_with_backoff",
-    "plugins/rust/python-package/url_reputation",
     "plugins/rust/python-package/secrets_detection",
     "plugins/rust/python-package/sql_sanitizer",
+    "plugins/rust/python-package/url_reputation",
 ]
 resolver = "3"
 
