@@ -19,7 +19,7 @@ updates:
       - rust
     open-pull-requests-limit: 5
 
-  # Python dependencies — root uv workspace (6 plugins via pyproject.toml)
+  # Python dependencies — root uv workspace (all 7 plugins via pyproject.toml)
   - package-ecosystem: uv
     directory: /
     schedule:
@@ -36,24 +36,6 @@ updates:
       - dependencies
       - "python:uv"
     open-pull-requests-limit: 5
-
-  # Python dependencies — sql_sanitizer (standalone uv workspace)
-  - package-ecosystem: uv
-    directory: /plugins/rust/python-package/sql_sanitizer
-    schedule:
-      interval: weekly
-      day: monday
-      time: "08:00"
-      timezone: UTC
-    groups:
-      sql-sanitizer-minor-patch:
-        update-types:
-          - minor
-          - patch
-    labels:
-      - dependencies
-      - "python:uv"
-    open-pull-requests-limit: 3
 
   # GitHub Actions pinned-SHA bumps
   - package-ecosystem: github-actions

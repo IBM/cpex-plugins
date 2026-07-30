@@ -7,10 +7,10 @@
 
 use cpex_framework_bridge::{build_framework_object_dyn, default_result as bridge_default_result};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyModule};
+use pyo3::types::{PyDict, PyList, PyModule};
 
 use crate::config::SqlSanitizerConfig;
-use crate::scanner::scan_args;
+use crate::scanner::{PathSeg, StrippedFields, scan_args};
 
 const LOGGER_NAME: &str = "cpex_sql_sanitizer.sql_sanitizer";
 
@@ -179,7 +179,13 @@ fn default_result(py: Python<'_>, class_name: &str) -> PyResult<Py<PyAny>> {
     bridge_default_result(py, class_name)
 }
 
-/// Shallow-copy `args` dict and overlay the comment-stripped values.
+/// Copy `args` and overlay the comment-stripped values at their recorded paths.
+///
+/// Each entry in `stripped` carries the full path from `args` down to the string
+/// that was rewritten, so nested dicts and list items are updated too — the SQL
+/// forwarded downstream then matches the SQL that was analysed.  Containers along
+/// a path are copied rather than mutated in place, leaving the caller's payload
+/// untouched.
 ///
 /// Uses the Python-level mapping protocol (`items()`) so that dict subclasses
 /// such as `CopyOnWriteDict` that keep their visible entries outside the
@@ -187,24 +193,87 @@ fn default_result(py: Python<'_>, class_name: &str) -> PyResult<Py<PyAny>> {
 fn rebuild_args_with_stripped(
     py: Python<'_>,
     args: &Bound<'_, PyAny>,
-    stripped: &[(String, String)],
+    stripped: &StrippedFields,
 ) -> PyResult<Py<PyAny>> {
     // Start from a shallow copy of the existing args so unaffected keys are preserved.
+    let mut current: Py<PyAny> = shallow_copy_mapping(py, args)?;
+    for (path, val) in stripped {
+        let replacement = val.into_pyobject(py)?.into_any().unbind();
+        current = set_at_path(py, current.bind(py), path, replacement.bind(py))?;
+    }
+    Ok(current)
+}
+
+/// Shallow-copy a mapping into a plain `dict`, preserving subclass-visible entries.
+fn shallow_copy_mapping(py: Python<'_>, mapping: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     let new_dict = PyDict::new(py);
-    if let Ok(dict_items) = args.call_method0("items") {
-        // Use Python-level items() so dict subclasses (e.g. CopyOnWriteDict)
-        // whose visible entries live outside the C hash table are copied correctly.
-        if let Ok(iter) = dict_items.try_iter() {
-            for item in iter {
-                let item = item?;
-                new_dict.set_item(item.get_item(0)?, item.get_item(1)?)?;
-            }
+    if let Ok(dict_items) = mapping.call_method0("items")
+        && let Ok(iter) = dict_items.try_iter()
+    {
+        for item in iter {
+            let item = item?;
+            new_dict.set_item(item.get_item(0)?, item.get_item(1)?)?;
         }
     }
-    for (key, val) in stripped {
-        new_dict.set_item(key, val)?;
-    }
     Ok(new_dict.into_any().unbind())
+}
+
+/// Return a copy of `container` with `path` set to `value`.
+///
+/// Walks one segment at a time, copying each container it descends through.  A
+/// path segment that does not resolve (key absent, index out of range, or a
+/// scalar where a container was expected) leaves the structure unchanged rather
+/// than inventing entries — the scanner only produces paths it actually walked,
+/// so a miss means the payload changed underneath us.
+fn set_at_path(
+    py: Python<'_>,
+    container: &Bound<'_, PyAny>,
+    path: &[PathSeg],
+    value: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let Some(seg) = path.first() else {
+        return Ok(value.clone().unbind());
+    };
+
+    // Resolve the child this segment points at, if it still exists.
+    let child = match seg {
+        PathSeg::Key(k) => container.get_item(k.as_str()).ok(),
+        PathSeg::Index(i) => container.get_item(*i).ok(),
+    };
+
+    // Recurse into the child.  At the leaf the remaining path is empty, and the
+    // base case above returns `value` — so this one branch covers both cases and
+    // no explicit leaf test is needed.
+    let new_child: Py<PyAny> = match child {
+        Some(c) => set_at_path(py, &c, &path[1..], value)?,
+        None => return Ok(container.clone().unbind()),
+    };
+
+    // Rebuild this level with the replaced child.
+    match seg {
+        PathSeg::Index(i) => {
+            let Ok(list) = container.cast::<PyList>() else {
+                return Ok(container.clone().unbind());
+            };
+            let items: Vec<Py<PyAny>> = list
+                .iter()
+                .enumerate()
+                .map(|(idx, item)| {
+                    if idx == *i {
+                        new_child.clone_ref(py)
+                    } else {
+                        item.unbind()
+                    }
+                })
+                .collect();
+            Ok(PyList::new(py, items)?.into_any().unbind())
+        }
+        PathSeg::Key(k) => {
+            let copied = shallow_copy_mapping(py, container)?;
+            copied.bind(py).set_item(k.as_str(), new_child)?;
+            Ok(copied)
+        }
+    }
 }
 
 /// Clone `payload` with one attribute replaced.  Prefers Pydantic `model_copy`
@@ -705,12 +774,14 @@ def make_cow_payload(sql):
         });
     }
 
-    /// Stripping a comment from a nested field (e.g. `wrapper.sql`) must NOT
-    /// overwrite an unrelated top-level field with the same key name.
-    /// Regression for: `stripped` recording the nested key name and applying it
+    /// Stripping a comment from a nested field (e.g. `wrapper.sql`) must rewrite
+    /// that nested field — the payload sent downstream has to match the text that
+    /// was analysed — without disturbing an unrelated top-level field of the same
+    /// name.
+    /// Regression for: `stripped` recording only the leaf key name and applying it
     /// as a top-level overlay in `rebuild_args_with_stripped`.
     #[test]
-    fn nested_comment_stripping_does_not_overwrite_top_level_key() {
+    fn nested_comment_stripping_rewrites_nested_field_only() {
         pyo3::Python::initialize();
         Python::attach(|py| {
             install_fake_framework(py).unwrap();
@@ -719,7 +790,7 @@ def make_cow_payload(sql):
             let core = super::SqlSanitizerPluginCore::new(cfg_dict.as_any()).unwrap();
 
             // Top-level `sql` is safe. Nested `wrapper.sql` has a comment.
-            // The nested comment must NOT cause `sql` to be overwritten.
+            // The nested comment must NOT cause top-level `sql` to be overwritten.
             let wrapper = PyDict::new(py);
             wrapper
                 .set_item("sql", "SELECT 1 -- nested comment")
@@ -731,12 +802,96 @@ def make_cow_payload(sql):
             let none_val = py.None().into_bound(py);
             let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
             let bound = result.bind(py);
-            // No modified_payload: the nested comment should NOT produce a stripped entry
+
             let mp = bound.getattr("modified_payload").unwrap();
             assert!(
-                mp.is_none(),
-                "nested comment stripping must not produce a modified_payload"
+                !mp.is_none(),
+                "nested comment stripping must produce a modified_payload"
             );
+            let new_args = mp.getattr("args").unwrap();
+
+            // Unrelated top-level key is untouched.
+            let top: String = new_args.get_item("sql").unwrap().extract().unwrap();
+            assert_eq!(top, "SELECT 2", "top-level `sql` must not be overwritten");
+
+            // The nested value is the stripped text.
+            let nested: String = new_args
+                .get_item("wrapper")
+                .unwrap()
+                .get_item("sql")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(
+                nested, "SELECT 1 ",
+                "nested `wrapper.sql` must be comment-stripped"
+            );
+        });
+    }
+
+    /// End-to-end regression for the executable-comment bypass: SQL hidden in
+    /// `/*! … */` inside a **nested** field.  Before the fix the guard analysed
+    /// the comment-stripped text (a bare `SELECT 1`) while the nested value was
+    /// forwarded unrewritten, so MySQL received and executed the `DROP`.
+    #[test]
+    fn nested_executable_comment_is_blocked() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let empty = PyDict::new(py);
+            let core = super::SqlSanitizerPluginCore::new(empty.as_any()).unwrap();
+
+            let wrapper = PyDict::new(py);
+            wrapper
+                .set_item("sql", "SELECT 1 /*!32302 ; DROP TABLE users */")
+                .unwrap();
+            let args = PyDict::new(py);
+            args.set_item("wrapper", &wrapper).unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let bound = result.bind(py);
+            let cp: bool = bound
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(
+                !cp,
+                "DROP hidden in a MySQL executable comment in a nested field must be blocked"
+            );
+        });
+    }
+
+    /// A comment inside a list item must be rewritten in place, so the forwarded
+    /// list matches the analysed text rather than keeping the original string.
+    #[test]
+    fn list_item_comment_stripping_rewrites_that_item() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let cfg_dict = PyDict::new(py);
+            cfg_dict.set_item("block_on_violation", false).unwrap();
+            let core = super::SqlSanitizerPluginCore::new(cfg_dict.as_any()).unwrap();
+
+            let queries = pyo3::types::PyList::new(py, ["SELECT 1 -- c", "SELECT 2"]).unwrap();
+            let args = PyDict::new(py);
+            args.set_item("queries", &queries).unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let bound = result.bind(py);
+
+            let mp = bound.getattr("modified_payload").unwrap();
+            assert!(
+                !mp.is_none(),
+                "list item comment must produce a modified_payload"
+            );
+            let new_list = mp.getattr("args").unwrap().get_item("queries").unwrap();
+            let first: String = new_list.get_item(0).unwrap().extract().unwrap();
+            let second: String = new_list.get_item(1).unwrap().extract().unwrap();
+            assert_eq!(first, "SELECT 1 ", "commented item must be stripped");
+            assert_eq!(second, "SELECT 2", "untouched item must be preserved");
         });
     }
 
