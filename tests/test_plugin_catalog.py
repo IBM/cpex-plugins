@@ -3712,7 +3712,7 @@ class PluginCatalogTests(unittest.TestCase):
             workflow.index("name: Test built sdist in isolated virtualenv"),
         )
         self.assertIn(
-            "pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1",
+            "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2",
             workflow,
         )
         self.assertNotIn("actions/checkout@v4", workflow)
