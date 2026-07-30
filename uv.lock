@@ -9,7 +9,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
+exclude-newer = "2026-07-20T10:22:06.359571629Z"
 exclude-newer-span = "P10D"
 
 [manifest]
@@ -20,6 +20,7 @@ members = [
     "cpex-rate-limiter",
     "cpex-retry-with-backoff",
     "cpex-secrets-detection",
+    "cpex-sql-sanitizer",
     "cpex-url-reputation",
 ]
 constraints = [
@@ -459,6 +460,30 @@ dev = [
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-asyncio", specifier = ">=1.3.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
+]
+
+[[package]]
+name = "cpex-sql-sanitizer"
+source = { editable = "plugins/rust/python-package/sql_sanitizer" }
+dependencies = [
+    { name = "cpex" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "maturin" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "cpex", specifier = ">=0.1.0,<0.2" }]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "maturin", specifier = ">=1.13.3" },
+    { name = "pytest", specifier = ">=9.0.3" },
+    { name = "pytest-asyncio", specifier = ">=1.3.0" },
 ]
 
 [[package]]

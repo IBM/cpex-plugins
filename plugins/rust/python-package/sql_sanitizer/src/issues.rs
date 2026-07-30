@@ -10,7 +10,7 @@
 use once_cell::sync::Lazy;
 use regex::Regex;
 
-use crate::comments::strip_sql_comments;
+use crate::comments::{strip_sql_comments, unwrap_exec_comments};
 use crate::config::SqlSanitizerConfig;
 
 /// Matches common Python printf-style format specifiers (`%s`, `%d`, `%f`, `%i`, `%r`).
@@ -150,10 +150,17 @@ fn find_issues_in_statement(stmt: &str, cfg: &SqlSanitizerConfig) -> Vec<String>
 ///
 /// A list of human-readable issue descriptions.  Empty means no issues found.
 pub fn find_issues(sql: &str, cfg: &SqlSanitizerConfig) -> Vec<String> {
+    // Reveal MySQL executable comments (`/*! … */`) before anything else: MySQL
+    // runs their contents, so the guard has to analyse them as live SQL rather
+    // than let `strip_sql_comments` discard them.  This happens regardless of
+    // `strip_comments` — the setting governs the outgoing payload, not whether
+    // hidden statements are inspected.
+    let unwrapped = unwrap_exec_comments(sql);
+
     let processed = if cfg.strip_comments {
-        strip_sql_comments(sql)
+        strip_sql_comments(&unwrapped)
     } else {
-        sql.to_string()
+        unwrapped
     };
 
     let mut issues = Vec::new();
@@ -420,6 +427,73 @@ mod tests {
     #[test]
     fn semicolon_in_string_literal_does_not_split_statement() {
         let issues = find_issues("SELECT 'hello; DROP TABLE t'", &default_cfg());
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    // -----------------------------------------------------------------------
+    // MySQL / MariaDB executable comments
+    // -----------------------------------------------------------------------
+
+    /// MySQL executes the body of `/*! … */`; treating it as a comment let a
+    /// `DROP` reach the database while the guard saw only `SELECT 1`.
+    #[test]
+    fn executable_comment_hiding_drop_is_detected() {
+        let issues = find_issues("SELECT 1 /*!32302 ; DROP TABLE users */", &default_cfg());
+        assert_eq!(issues, vec!["Blocked statement matched: \\bDROP\\b"]);
+    }
+
+    #[test]
+    fn executable_comment_hiding_unscoped_delete_is_detected() {
+        let issues = find_issues("SELECT 1 /*!50000 ; DELETE FROM users */", &default_cfg());
+        assert_eq!(issues, vec!["DELETE without WHERE clause"]);
+    }
+
+    /// MariaDB's `/*M! … */` is executed by MariaDB and ignored by MySQL, so it
+    /// hides a statement from any guard that only knows the `/*!` spelling.
+    #[test]
+    fn mariadb_executable_comment_hiding_drop_is_detected() {
+        let issues = find_issues("SELECT 1 /*M!100000 ; DROP TABLE users */", &default_cfg());
+        assert_eq!(issues, vec!["Blocked statement matched: \\bDROP\\b"]);
+    }
+
+    #[test]
+    fn executable_comment_without_version_is_detected() {
+        let issues = find_issues("SELECT 1 /*! ; DROP TABLE users */", &default_cfg());
+        assert_eq!(issues, vec!["Blocked statement matched: \\bDROP\\b"]);
+    }
+
+    /// Unwrapping must survive `strip_comments = false` too: the setting governs
+    /// the outgoing payload, not whether hidden statements are inspected.
+    #[test]
+    fn executable_comment_detected_with_comment_stripping_disabled() {
+        let mut cfg = default_cfg();
+        cfg.strip_comments = false;
+        let issues = find_issues("SELECT 1 /*!32302 ; DROP TABLE users */", &cfg);
+        assert_eq!(issues, vec!["Blocked statement matched: \\bDROP\\b"]);
+    }
+
+    /// An optimizer hint is not an executable comment and carries no statement.
+    #[test]
+    fn optimizer_hint_is_not_flagged() {
+        let issues = find_issues("SELECT /*+ INDEX(t idx) */ * FROM t", &default_cfg());
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    /// A version-gated comment that only sets a session variable is legitimate
+    /// MySQL (common in dumps) and must not become a false positive.
+    #[test]
+    fn benign_versioned_executable_comment_is_allowed() {
+        let issues = find_issues("/*!40101 SET NAMES utf8 */", &default_cfg());
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    /// Inside a quoted value the sequence is data — no engine executes it.
+    #[test]
+    fn executable_comment_inside_literal_is_not_flagged() {
+        let issues = find_issues(
+            "SELECT '/*!32302 ; DROP TABLE users */' AS note",
+            &default_cfg(),
+        );
         assert_eq!(issues, Vec::<String>::new());
     }
 

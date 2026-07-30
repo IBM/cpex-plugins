@@ -50,11 +50,7 @@ jobs:
         run: cargo update
 
       - name: Update root Python lock file
-        run: uv lock --upgrade
-
-      - name: Update sql_sanitizer Python lock file
-        # sql_sanitizer manages its own uv workspace outside the root workspace
-        working-directory: plugins/rust/python-package/sql_sanitizer
+        # Single workspace lock — every plugin is a member of the root uv workspace
         run: uv lock --upgrade
 
       # --- Validate ---
