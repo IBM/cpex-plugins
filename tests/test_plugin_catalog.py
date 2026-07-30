@@ -2887,11 +2887,11 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("uv==0.9.30", workflow)
         self.assertIn("maturin==1.12.6", workflow)
         self.assertIn(
-            "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
             workflow,
         )
         self.assertIn(
-            "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0",
+            "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0",
             workflow,
         )
         self.assertNotIn("actions/checkout@v4", workflow)
@@ -2912,11 +2912,11 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertNotIn("tests/test_install_built_wheel.py", workflow)
         self.assertNotIn("python3 tools/plugin_catalog.py ci-selection", workflow)
         self.assertIn(
-            "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
             workflow,
         )
         self.assertIn(
-            "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0",
+            "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0",
             workflow,
         )
 
@@ -2930,11 +2930,11 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("python3 -m unittest tests/test_install_built_wheel.py", workflow)
         self.assertNotIn("tests/test_plugin_catalog.py", workflow)
         self.assertIn(
-            "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
             workflow,
         )
         self.assertIn(
-            "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0",
+            "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0",
             workflow,
         )
 
@@ -3688,11 +3688,11 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertNotIn('pytest pytest-asyncio PyYAML', workflow)
         self.assertIn('"${venv_python}" -m pytest', workflow)
         self.assertIn(
-            "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
             workflow,
         )
         self.assertIn(
-            "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0",
+            "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0",
             workflow,
         )
         self.assertIn(
@@ -3712,7 +3712,7 @@ class PluginCatalogTests(unittest.TestCase):
             workflow.index("name: Test built sdist in isolated virtualenv"),
         )
         self.assertIn(
-            "pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0",
+            "pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1",
             workflow,
         )
         self.assertNotIn("actions/checkout@v4", workflow)

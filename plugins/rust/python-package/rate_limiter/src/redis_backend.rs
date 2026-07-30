@@ -939,13 +939,12 @@ mod tests {
     /// Generate a self-signed certificate PEM and its private key PEM using rcgen.
     #[cfg(test)]
     fn generate_test_cert_pem() -> (Vec<u8>, Vec<u8>) {
-        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
-            .expect("rcgen cert generation");
+        let rcgen::CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
+                .expect("rcgen cert generation");
         (
-            cert.serialize_pem()
-                .expect("cert PEM serialize")
-                .into_bytes(),
-            cert.serialize_private_key_pem().into_bytes(),
+            cert.pem().into_bytes(),
+            signing_key.serialize_pem().into_bytes(),
         )
     }
 
