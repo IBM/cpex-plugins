@@ -576,7 +576,7 @@ class DunderState:
                     .extract::<String>()?,
                 "safe"
             );
-            assert!(!target.getattr("__reduce__")?.is(&PyString::new(py, "safe")));
+            assert!(!target.getattr("__reduce__")?.is(PyString::new(py, "safe")));
             Ok(())
         })
         .unwrap();
