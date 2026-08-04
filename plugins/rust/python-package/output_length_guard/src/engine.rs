@@ -4,12 +4,12 @@ use log::{debug, info};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
 
+use crate::config::OutputLengthGuardConfig;
+
 /// Output Length Guard engine implementation.
 #[pyclass]
-#[allow(dead_code)]
 pub struct OutputLengthGuardEngine {
-    // TODO: Add engine state fields and remove #[allow(dead_code)]
-    example_option: String,
+    config: OutputLengthGuardConfig,
 }
 
 #[pymethods]
@@ -19,14 +19,16 @@ impl OutputLengthGuardEngine {
     pub fn new(config: &Bound<'_, PyDict>) -> PyResult<Self> {
         info!("Initializing Output Length Guard engine");
 
-        let example_option = config
-            .get_item("example_option")?
-            .and_then(|v| v.extract::<String>().ok())
-            .unwrap_or_else(|| "default_value".to_string());
+        /* let example_option = config
+        .get_item("example_option")?
+        .and_then(|v| v.extract::<String>().ok())
+        .unwrap_or_else(|| "default_value".to_string()); */
 
-        debug!("Configuration: example_option={}", example_option);
+        let config: OutputLengthGuardConfig = OutputLengthGuardConfig::from_py_dict(config)?;
 
-        Ok(Self { example_option })
+        //debug!("Configuration: example_option={}", config);
+
+        Ok(Self { config })
     }
 
     /// Hook called after tool is invoked.
