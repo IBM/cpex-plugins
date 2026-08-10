@@ -35,5 +35,5 @@ dev = [
     "maturin>=1.13.3",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.3.0",
-    "redis>=7.4.0",
+    "redis>=8.1.0",
 ]
