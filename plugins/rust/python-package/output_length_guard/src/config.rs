@@ -1,3 +1,8 @@
+// Copyright 2026
+// SPDX-License-Identifier: Apache-2.0
+//
+// Configuration for output length guard plugin
+
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -212,58 +217,6 @@ impl OutputLengthGuardConfig {
 
     pub fn is_blocking(&self) -> bool {
         self.strategy == Strategy::Block
-    }
-
-    pub fn to_policy(&self) -> LengthGuardPolicy {
-        LengthGuardPolicy {
-            min_chars: self.min_chars,
-            max_chars: self.max_chars,
-            min_tokens: self.min_tokens,
-            max_tokens: self.max_tokens,
-            chars_per_token: self.chars_per_token,
-            limit_mode: self.limit_mode,
-            strategy: self.strategy,
-            ellipsis: self.ellipsis.clone(),
-            word_boundary: self.word_boundary,
-            max_text_length: self.max_text_length,
-            max_structure_size: self.max_structure_size,
-            max_recursion_depth: self.max_recursion_depth,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LengthGuardPolicy {
-    pub min_chars: u32,
-    pub max_chars: Option<u32>,
-    pub min_tokens: u32,
-    pub max_tokens: Option<u32>,
-    pub chars_per_token: u8,
-    pub limit_mode: LimitMode,
-    pub strategy: Strategy,
-    pub ellipsis: String,
-    pub word_boundary: bool,
-    pub max_text_length: u32,
-    pub max_structure_size: u32,
-    pub max_recursion_depth: u32,
-}
-
-impl Default for LengthGuardPolicy {
-    fn default() -> Self {
-        Self {
-            min_chars: 0,
-            max_chars: None,
-            min_tokens: 0,
-            max_tokens: None,
-            chars_per_token: 4,
-            limit_mode: LimitMode::Character,
-            strategy: Strategy::Truncate,
-            ellipsis: "…".to_string(),
-            word_boundary: false,
-            max_text_length: 1_000_000,
-            max_structure_size: 10_000,
-            max_recursion_depth: 100,
-        }
     }
 }
 
@@ -578,38 +531,5 @@ mod tests {
 
         assert!(blocking.is_blocking());
         assert!(!truncating.is_blocking());
-    }
-
-    #[test]
-    fn to_policy_copies_all_fields() {
-        let config = OutputLengthGuardConfig {
-            min_chars: 10,
-            max_chars: Some(100),
-            min_tokens: 5,
-            max_tokens: Some(20),
-            chars_per_token: 3,
-            limit_mode: LimitMode::Token,
-            strategy: Strategy::Block,
-            ellipsis: "...".to_string(),
-            word_boundary: true,
-            max_text_length: 5000,
-            max_structure_size: 500,
-            max_recursion_depth: 25,
-        };
-
-        let policy = config.to_policy();
-
-        assert_eq!(policy.min_chars, 10);
-        assert_eq!(policy.max_chars, Some(100));
-        assert_eq!(policy.min_tokens, 5);
-        assert_eq!(policy.max_tokens, Some(20));
-        assert_eq!(policy.chars_per_token, 3);
-        assert_eq!(policy.limit_mode, LimitMode::Token);
-        assert_eq!(policy.strategy, Strategy::Block);
-        assert_eq!(policy.ellipsis, "...");
-        assert!(policy.word_boundary);
-        assert_eq!(policy.max_text_length, 5000);
-        assert_eq!(policy.max_structure_size, 500);
-        assert_eq!(policy.max_recursion_depth, 25);
     }
 }

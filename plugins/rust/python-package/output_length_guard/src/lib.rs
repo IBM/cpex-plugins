@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2024 ContextForge Contributors
-use pyo3::prelude::*;
 use log::debug;
+use pyo3::prelude::*;
 #[cfg(feature = "stub-gen")]
 use pyo3_stub_gen::define_stub_info_gatherer;
 
-pub mod engine;
 pub mod config;
+pub mod engine;
+pub mod guard;
+pub mod output_length_guard;
+pub mod structured;
 
 #[pymodule]
 fn output_length_guard_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
