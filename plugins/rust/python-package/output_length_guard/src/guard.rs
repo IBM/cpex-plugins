@@ -34,21 +34,20 @@ pub fn estimate_tokens(text: &str, chars_per_token: u64) -> usize {
     text.chars().count() / safe_chars_per_token
 }
 
-pub fn find_word_boundary(value: &str, cut: usize, max_chars: usize) -> usize {
+pub fn find_word_boundary(value: &str, length: usize, cut: usize, _max_chars: usize) -> usize {
     if value.is_empty() || cut == 0 {
         return cut;
     }
+    let cut = cut.min(length);
 
-    let chars: Vec<char> = value.chars().collect();
-    let cut = cut.min(chars.len());
-    let min_search = cut.saturating_sub(max_chars / 5);
-
-    for i in (min_search..cut).rev() {
-        if BOUNDARY_CHARS.contains(&chars[i]) {
-            return i + 1;
+    let cut_char_boundary = value.floor_char_boundary(cut);
+    if let Some(sliced_value) = value.get(..=cut_char_boundary) {
+        for (ch_index, ch) in sliced_value.char_indices().rev() {
+            if BOUNDARY_CHARS.contains(&ch) {
+                return ch_index + 1;
+            }
         }
     }
-
     cut
 }
 
@@ -63,23 +62,23 @@ pub fn truncate(
     limit_mode: LimitMode,
 ) -> String {
     let ell = ellipsis;
-    let chars: Vec<char> = value.chars().collect();
+    let length = value.chars().count();
+    //let chars: Vec<char> = value.chars().collect();
 
     if limit_mode == LimitMode::Token {
         if let Some(max_tokens) = max_tokens {
             if max_tokens > 0 {
                 let safe_chars_per_token = chars_per_token.max(1) as usize;
-                let estimated_tokens = chars.len() / safe_chars_per_token;
+                let estimated_tokens = length / safe_chars_per_token;
 
                 if estimated_tokens > max_tokens as usize {
-                    let capped_len = chars.len().min(max_text_length as usize);
+                    let capped_len = length.min(max_text_length as usize);
                     let mut cut = capped_len.min(max_tokens as usize * safe_chars_per_token);
 
                     if word_boundary && cut > 0 {
-                        cut = find_word_boundary(value, cut, cut);
+                        cut = find_word_boundary(value, length, cut, cut);
                     }
-
-                    let prefix: String = chars[..cut].iter().collect();
+                    let prefix: String = value.chars().take(cut).collect::<String>();
                     return format!("{prefix}{ell}");
                 }
             }
@@ -94,21 +93,21 @@ pub fn truncate(
         return value.to_string();
     }
     let max_chars = max_chars.unwrap_or(0) as usize;
-    if chars.len() <= max_chars {
+    if length <= max_chars {
         return value.to_string();
     }
 
     let ell_len = ell.chars().count();
     if ell_len >= max_chars {
-        return chars[..max_chars].iter().collect();
+        return value.chars().take(max_chars).collect();
     }
 
     let mut cut = max_chars - ell_len;
     if word_boundary && cut > 0 {
-        cut = find_word_boundary(value, cut, max_chars);
+        cut = find_word_boundary(value, length, cut, max_chars);
     }
 
-    let prefix: String = chars[..cut].iter().collect();
+    let prefix: String = value.chars().take(cut).collect::<String>();
     format!("{prefix}{ell}")
 }
 
