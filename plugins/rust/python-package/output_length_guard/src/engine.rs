@@ -44,7 +44,7 @@ impl OutputLengthGuardEngine {
             result_type,
         );
         if result.is_instance_of::<PyString>() {
-            return self.handle_plain_string(py, payload, result.cast::<PyString>()?.to_str()?);
+            return self.handle_plain_string(py, result.cast::<PyString>()?.to_str()?);
         }
 
         /*NestedStageSpec {
@@ -65,14 +65,12 @@ impl OutputLengthGuardEngine {
         todo!()
     }
 
-    fn handle_plain_string(
-        &self,
-        py: Python<'_>,
-        payload: &Bound<'_, PyAny>,
-        result: &str,
-    ) -> PyResult<Py<PyAny>> {
-        let handled = handle_text(py, result, &self.config)?;
-
+    fn handle_plain_string(&self, py: Python<'_>, result: &str) -> PyResult<Py<PyAny>> {
+        let new_text = handle_text(py, result, &self.config)?;
+        if let Some(violation) = new_text.violation {
+            return self.build_violation_object(py, violation);
+        }
+        if text_result
         /*  if let Some(violation) = handled.violation {
                     return Ok(ToolPostInvokeResult {
                         continue_processing: false,
@@ -101,6 +99,33 @@ impl OutputLengthGuardEngine {
                     violation: None,
                     metadata: Some(handled.metadata),
                 }) */
+        todo!()
+    }
+
+    fn build_violation_object(
+        &self,
+        py: Python<'_>,
+        violation: PluginViolation,
+    ) -> PyResult<Py<PyAny>> {
+        return build_framework_object(
+            py,
+            "PluginViolation",
+            [
+                (
+                    "reason",
+                    violation.reason.into_pyobject(py)?.into_any().unbind(),
+                ),
+                (
+                    "description",
+                    violation.description.into_pyobject(py)?.into_any().unbind(),
+                ),
+                (
+                    "code",
+                    violation.code.into_pyobject(py)?.into_any().unbind(),
+                ),
+                ("details", violation.details.into_any()),
+            ],
+        );
     }
 }
 
