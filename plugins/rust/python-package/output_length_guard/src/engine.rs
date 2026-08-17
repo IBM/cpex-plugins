@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2024 ContextForge Contributors
-use cpex_framework_bridge::{build_framework_object, default_result};
+use cpex_framework_bridge::{build_framework_object, build_framework_object_dyn, default_result};
 use log::{debug, info};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyModule, PyString};
+use pyo3::types::{PyDict, PyString};
 
 use crate::config::OutputLengthGuardConfig;
 use crate::output_length_guard::*;
@@ -32,9 +32,14 @@ impl OutputLengthGuardEngine {
         py: Python<'_>,
         payload: &Bound<'_, PyAny>,
         context: &Bound<'_, PyAny>,
+        extensions: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         debug!("Output Length Guard: tool_post_invoke called");
+
+        // Extract result
         let result = payload.getattr("result")?;
+        // Extract tool name
+        let tool_name = payload.getattr("name")?.extract::<String>()?;
         if result.is_none() {
             return default_result(py, "ToolPostInvokeResult");
         }
@@ -44,62 +49,52 @@ impl OutputLengthGuardEngine {
             result_type,
         );
         if result.is_instance_of::<PyString>() {
-            return self.handle_plain_string(py, result.cast::<PyString>()?.to_str()?);
+            return self.handle_plain_string(
+                py,
+                payload,
+                &tool_name,
+                result.cast::<PyString>()?.to_str()?,
+            );
         }
 
-        /*NestedStageSpec {
-            source_attr: "result",
-            stage: "tool_post_invoke",
-            result_class: "ToolPostInvokeResult",
-            subject_attr: "name",
-            violation_reason: "PII detected in tool result",
-            violation_description: "Sensitive information detected in tool result",
-            violation_code: "PII_DETECTED_IN_TOOL_RESULT",
-        }, */
-        // TODO: Implement tool post-invoke logic
-        /* let module = PyModule::import(py, "cpex.framework")?;
-        let result_class = module.getattr("ToolPostInvokeResult")?;
-        let kwargs = PyDict::new(py);
-        kwargs.set_item("continue_processing", true)?;
-        Ok(result_class.call((), Some(&kwargs))?.unbind()) */
+        // placeholder for more checks
         todo!()
     }
 
-    fn handle_plain_string(&self, py: Python<'_>, result: &str) -> PyResult<Py<PyAny>> {
+    fn handle_plain_string(
+        &self,
+        py: Python<'_>,
+        payload: &Bound<'_, PyAny>,
+        tool_name: &str,
+        result: &str,
+    ) -> PyResult<Py<PyAny>> {
         let new_text = handle_text(py, result, &self.config)?;
+        let mut kwargs: Vec<(&str, Py<PyAny>)> = vec![("meta", new_text.metadata.into_any())];
+        //handle violations
         if let Some(violation) = new_text.violation {
-            return self.build_violation_object(py, violation);
+            let violations = self.build_violation_object(py, violation)?;
+            kwargs.extend([
+                (
+                    "continue_processing",
+                    false.into_pyobject(py)?.to_owned().into_any().unbind(),
+                ),
+                ("violation", violations),
+            ]);
+        } else if new_text.text != result {
+            let tool_post_invoke_payload = build_framework_object(
+                py,
+                "ToolPostInvokePayload",
+                [
+                    ("name", tool_name.into_pyobject(py)?.into_any().unbind()),
+                    (
+                        "result",
+                        new_text.text.into_pyobject(py)?.into_any().unbind(),
+                    ),
+                ],
+            )?;
+            kwargs.push(("modified_payload", tool_post_invoke_payload));
         }
-        if text_result
-        /*  if let Some(violation) = handled.violation {
-                    return Ok(ToolPostInvokeResult {
-                        continue_processing: false,
-                        modified_payload: None,
-                        violation: Some(violation),
-                        metadata: Some(handled.metadata),
-                    });
-                }
-
-                if handled.text != result {
-                    return Ok(ToolPostInvokeResult {
-                        continue_processing: true,
-                        modified_payload: Some(ToolPostInvokePayload {
-                            name: payload.name.clone(),
-                            result: PyString::new(py, &handled.text).into_any().unbind(),
-                        }),
-                        violation: None,
-                        metadata: Some(handled.metadata),
-                    });
-                }
-        build_framework_object
-
-                Ok(ToolPostInvokeResult {
-                    continue_processing: true,
-                    modified_payload: None,
-                    violation: None,
-                    metadata: Some(handled.metadata),
-                }) */
-        todo!()
+        return build_framework_object_dyn(py, "ToolPostInvokeResult", kwargs);
     }
 
     fn build_violation_object(

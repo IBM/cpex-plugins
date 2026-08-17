@@ -1018,6 +1018,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "output_length_guard"
+version = "1.0.0"
+dependencies = [
+ "cpex_framework_bridge",
+ "criterion",
+ "log",
+ "pyo3",
+ "pyo3-log",
+ "pyo3-stub-gen",
+ "regex",
+]
+
+[[package]]
 name = "page_size"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
