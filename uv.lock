@@ -310,7 +310,7 @@ wheels = [
 
 [[package]]
 name = "cpex"
-version = "0.1.1"
+version = "0.1.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastapi" },
@@ -328,9 +328,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "rich" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/50/d5/f3961c8492e20c7f8988a5f041452ffae876878eb0e60a9c121be42e20c5/cpex-0.1.1.tar.gz", hash = "sha256:64ddfda6239f975bc5c0fa841e036e660ac478eb42f03225f7d3fe205680e049", size = 4658279, upload-time = "2026-06-04T19:00:52.486Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/55/ed/85fea0d1a91a4b10fe2bc00ea61879ebf4b87c5e17a16c3fad6f9dddac8e/cpex-0.1.3.tar.gz", hash = "sha256:a9e2bccc82e8f8ac54839a9aef434193e943e0c6eca2d5464f3011ef59f7302f", size = 2390201, upload-time = "2026-08-06T20:02:23.373Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/bb/a7/a3f4f37291ba266a138dc72918a9d570fef68ccecb1397cb25d8307f9bb1/cpex-0.1.1-py3-none-any.whl", hash = "sha256:4b0c753979a8c52b0e5eea2269e67328ea96d3bef477da3f3ec200ff297bcddc", size = 272528, upload-time = "2026-06-04T19:00:50.721Z" },
+    { url = "https://files.pythonhosted.org/packages/7b/b6/406951f08b00aff2dd24d54fab16413ca4a72906305fec61245fdfc0cbf7/cpex-0.1.3-py3-none-any.whl", hash = "sha256:a5d33bcd1b4328b36e9798a1258e9d6465e073c784e5b9d1c4588f1b93054848", size = 279062, upload-time = "2026-08-06T20:02:21.814Z" },
 ]
 
 [[package]]
@@ -352,7 +352,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cpex", specifier = ">=0.1.0,<0.2" },
+    { name = "cpex", specifier = ">=0.1.3,<0.2" },
     { name = "mcp", specifier = "<2" },
     { name = "pydantic", specifier = ">=2.13.4,<3" },
 ]
@@ -382,7 +382,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cpex", specifier = ">=0.1.0,<0.2" },
+    { name = "cpex", specifier = ">=0.1.3,<0.2" },
     { name = "mcp", specifier = "<2" },
 ]
 
@@ -416,7 +416,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cpex", specifier = ">=0.1.0,<0.2" },
+    { name = "cpex", specifier = ">=0.1.3,<0.2" },
     { name = "mcp", specifier = "<2" },
 ]
 
@@ -447,7 +447,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cpex", specifier = ">=0.1.0,<0.2" },
+    { name = "cpex", specifier = ">=0.1.3,<0.2" },
     { name = "mcp", specifier = "<2" },
     { name = "pydantic", specifier = ">=2.13.4,<3" },
 ]
@@ -479,7 +479,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cpex", specifier = ">=0.1.0,<0.2" },
+    { name = "cpex", specifier = ">=0.1.3,<0.2" },
     { name = "mcp", specifier = "<2" },
 ]
 
@@ -509,7 +509,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cpex", specifier = ">=0.1.0,<0.2" },
+    { name = "cpex", specifier = ">=0.1.3,<0.2" },
     { name = "mcp", specifier = "<2" },
 ]
 
@@ -539,7 +539,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cpex", specifier = ">=0.1.0,<0.2" },
+    { name = "cpex", specifier = ">=0.1.3,<0.2" },
     { name = "mcp", specifier = "<2" },
     { name = "pydantic", specifier = ">=2.13.4,<3" },
 ]
