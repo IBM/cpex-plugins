@@ -3,7 +3,7 @@
 use cpex_framework_bridge::{build_framework_object, build_framework_object_dyn, default_result};
 use log::{debug, info};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyString};
+use pyo3::types::{PyDict, PyList, PyString};
 
 use crate::config::OutputLengthGuardConfig;
 use crate::output_length_guard::*;
@@ -39,7 +39,7 @@ impl OutputLengthGuardEngine {
         // Extract result
         let result = payload.getattr("result")?;
         // Extract tool name
-        let tool_name = payload.getattr("name")?.extract::<String>()?;
+        let payload_name = payload.getattr("name")?.extract::<String>()?;
         if result.is_none() {
             return default_result(py, "ToolPostInvokeResult");
         }
@@ -48,14 +48,39 @@ impl OutputLengthGuardEngine {
             "OutputLengthGuard processing tool with result type: {}",
             result_type,
         );
+
+        // String result
         if result.is_instance_of::<PyString>() {
             return self.handle_plain_string(
                 py,
                 payload,
-                &tool_name,
+                &payload_name,
                 result.cast::<PyString>()?.to_str()?,
             );
         }
+        if result.is_instance_of::<PyDict>() {
+            let text = result.cast::<PyDict>()?;
+
+            //  Dict with text field
+            if let Some(text) = text.get_item("text")? {
+                if text.is_instance_of::<PyString>() {
+                    return self.handle_plain_string(
+                        py,
+                        payload,
+                        &payload_name,
+                        text.cast::<PyString>()?.to_str()?,
+                    );
+                }
+            }
+            // MCP CallToolResult as dict (from model_dump with 'content' key)
+            debug!(
+                "OutputLengthGuard: Dict result from tool '{}' has no 'text' field, passing through unchanged",
+                payload_name
+            );
+            return default_result(py, "ToolPostInvokeResult");
+        }
+
+        if result.is_instance_of::<PyList>() {}
 
         // placeholder for more checks
         todo!()
@@ -64,8 +89,8 @@ impl OutputLengthGuardEngine {
     fn handle_plain_string(
         &self,
         py: Python<'_>,
-        payload: &Bound<'_, PyAny>,
-        tool_name: &str,
+        _payload: &Bound<'_, PyAny>,
+        payload_name: &str,
         result: &str,
     ) -> PyResult<Py<PyAny>> {
         let new_text = handle_text(py, result, &self.config)?;
@@ -85,7 +110,7 @@ impl OutputLengthGuardEngine {
                 py,
                 "ToolPostInvokePayload",
                 [
-                    ("name", tool_name.into_pyobject(py)?.into_any().unbind()),
+                    ("name", payload_name.into_pyobject(py)?.into_any().unbind()),
                     (
                         "result",
                         new_text.text.into_pyobject(py)?.into_any().unbind(),
