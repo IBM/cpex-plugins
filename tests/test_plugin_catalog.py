@@ -572,6 +572,7 @@ class PluginCatalogTests(unittest.TestCase):
             {
                 "encoded_exfil_detection",
                 "ica_metering_exporter",
+                "output_length_guard",
                 "pii_filter",
                 "rate_limiter",
                 "retry_with_backoff",
@@ -586,6 +587,7 @@ class PluginCatalogTests(unittest.TestCase):
             {
                 "encoded_exfil_detection": "cpex_encoded_exfil_detection",
                 "ica_metering_exporter": "cpex_ica_metering_exporter",
+                "output_length_guard": "cpex_output_length_guard",
                 "pii_filter": "cpex_pii_filter",
                 "rate_limiter": "cpex_rate_limiter",
                 "retry_with_backoff": "cpex_retry_with_backoff",
@@ -599,6 +601,7 @@ class PluginCatalogTests(unittest.TestCase):
             {
                 "encoded_exfil_detection": "cpex_encoded_exfil_detection.encoded_exfil_detection.EncodedExfilDetectorPlugin",
                 "ica_metering_exporter": "cpex_ica_metering_exporter.plugin.IcaMeteringExporterPlugin",
+                "output_length_guard": "cpex_output_length_guard.output_length_guard.OutputLengthGuardPlugin",
                 "pii_filter": "cpex_pii_filter.pii_filter.PIIFilterPlugin",
                 "rate_limiter": "cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
                 "retry_with_backoff": "cpex_retry_with_backoff.retry_with_backoff.RetryWithBackoffPlugin",
@@ -2427,6 +2430,7 @@ class PluginCatalogTests(unittest.TestCase):
             dependents,
             [
                 "encoded_exfil_detection",
+                "output_length_guard",
                 "pii_filter",
                 "rate_limiter",
                 "retry_with_backoff",
@@ -2527,6 +2531,7 @@ class PluginCatalogTests(unittest.TestCase):
                     "in_diff": True,
                     "test_packages": [
                         "encoded_exfil_detection",
+                        "output_length_guard",
                         "pii_filter",
                         "rate_limiter",
                         "retry_with_backoff",
@@ -2630,6 +2635,7 @@ class PluginCatalogTests(unittest.TestCase):
     def test_ci_selection_field_prints_json_and_bool_scalars(self) -> None:
         expected_rust_plugins = [
             "encoded_exfil_detection",
+            "output_length_guard",
             "pii_filter",
             "rate_limiter",
             "retry_with_backoff",
@@ -3458,9 +3464,10 @@ class PluginCatalogTests(unittest.TestCase):
                 if "=" in line
             )
             self.assertEqual(outputs["has_plugins"], "true")
-            self.assertEqual(outputs["plugin_count"], "8")
+            self.assertEqual(outputs["plugin_count"], "9")
             expected_rust_plugins = [
                 "encoded_exfil_detection",
+                "output_length_guard",
                 "pii_filter",
                 "rate_limiter",
                 "retry_with_backoff",

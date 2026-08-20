@@ -1,0 +1,38 @@
+[build-system]
+requires = ["maturin>=1.13.3,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "cpex-output-length-guard"
+dynamic = ["version"]
+description = "Rust-backed output length guard plugin for MCP Gateway"
+authors = [{ name = "ContextForge Contributors" }]
+license = { text = "Apache-2.0" }
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "cpex>=0.1.3,<0.2",
+    "mcp<2",
+]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+[project.entry-points."cpex.plugins"]
+output_length_guard = "cpex_output_length_guard.output_length_guard:OutputLengthGuardPlugin"
+
+[tool.maturin]
+module-name = "cpex_output_length_guard.output_length_guard_rust"
+python-source = "."
+features = ["pyo3/extension-module"]
+
+[dependency-groups]
+dev = [
+    "maturin>=1.13.3",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.3.0",
+]
