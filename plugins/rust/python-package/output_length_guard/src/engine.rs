@@ -1,3 +1,5 @@
+use std::usize;
+
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2024 ContextForge Contributors
 use cpex_framework_bridge::{build_framework_object, build_framework_object_dyn, default_result};
@@ -80,7 +82,19 @@ impl OutputLengthGuardEngine {
             return default_result(py, "ToolPostInvokeResult");
         }
 
-        if result.is_instance_of::<PyList>() {}
+        if result.is_instance_of::<PyList>() {
+            if let Ok(list) = result.cast::<PyList>() {
+                if !list.is_empty() {
+                    if let Ok(first) = list.get_item(0) {
+                        if let Ok(dict) = first.cast::<PyDict>()
+                            && dict.contains("type")?
+                        {
+                            return self.handle_mcp_list(py, payload, &payload_name, list);
+                        }
+                    }
+                }
+            }
+        }
 
         // placeholder for more checks
         todo!()
@@ -117,6 +131,134 @@ impl OutputLengthGuardEngine {
                     ),
                 ],
             )?;
+            kwargs.push(("modified_payload", tool_post_invoke_payload));
+        }
+        return build_framework_object_dyn(py, "ToolPostInvokeResult", kwargs);
+    }
+
+    /// Handle MCP content array format: [{"type": "text", "text": "..."}].
+    fn handle_mcp_list(
+        &self,
+        py: Python<'_>,
+        payload: &Bound<'_, PyAny>,
+        payload_name: &str,
+        result: &Bound<PyList>,
+    ) -> PyResult<Py<PyAny>> {
+        let mut modified = false;
+        let mcp_out = PyList::empty(py);
+
+        for item in result.iter() {
+            let Ok(dict) = item.cast::<PyDict>() else {
+                mcp_out.append(&item)?;
+                continue;
+            };
+
+            let item_type: Option<String> = dict.get_item("type")?.and_then(|v| v.extract().ok());
+
+            match item_type.as_deref() {
+                Some("text") => {
+                    if dict.get_item("text").is_ok_and(|text| {
+                        text.is_some_and(|text_type| text_type.is_instance_of::<PyString>())
+                    }) {
+                        let current_text: String = dict
+                            .get_item("text")?
+                            .and_then(|v| v.extract().ok())
+                            .unwrap();
+
+                        let new_text = handle_text(py, &current_text, &self.config)?;
+                        let mut kwargs: Vec<(&str, Py<PyAny>)> =
+                            vec![("meta", new_text.metadata.into_any())];
+                        if let Some(violation) = new_text.violation {
+                            let violations = self.build_violation_object(py, violation)?;
+                            kwargs.extend([
+                                (
+                                    "continue_processing",
+                                    false.into_pyobject(py)?.to_owned().into_any().unbind(),
+                                ),
+                                ("violation", violations),
+                            ]);
+                            return build_framework_object_dyn(py, "ToolPostInvokeResult", kwargs);
+                        }
+
+                        if new_text.text != current_text {
+                            modified = true;
+                            let new_item = dict.copy()?;
+                            new_item.set_item("text", new_text.text)?;
+                            mcp_out.append(new_item)?;
+                            continue;
+                        }
+                    }
+                    mcp_out.append(&item)?;
+                }
+                Some("resource") => {
+                    let resource_any = dict.get_item("resource")?;
+                    let resource_dict = resource_any.as_ref().and_then(|r| r.cast::<PyDict>().ok());
+
+                    // item.get("resource") is not dict appened current item and continue to next
+                    let Some(resource) = resource_dict else {
+                        mcp_out.append(&item)?;
+                        continue;
+                    };
+
+                    let resource_text: Option<String> = resource.get_item("text")?.and_then(|v| {
+                        if v.is_instance_of::<PyString>() {
+                            v.extract().ok()
+                        } else {
+                            None
+                        }
+                    });
+
+                    // resource.get_item("text") is not string type append current item and continue to next
+                    let Some(current_text) = resource_text else {
+                        mcp_out.append(&item)?;
+                        continue;
+                    };
+
+                    let new_text = handle_text(py, &current_text, &self.config)?;
+
+                    let mut kwargs: Vec<(&str, Py<PyAny>)> =
+                        vec![("meta", new_text.metadata.into_any())];
+                    if let Some(violation) = new_text.violation {
+                        let violations = self.build_violation_object(py, violation)?;
+                        kwargs.extend([
+                            (
+                                "continue_processing",
+                                false.into_pyobject(py)?.to_owned().into_any().unbind(),
+                            ),
+                            ("violation", violations),
+                        ]);
+                        return build_framework_object_dyn(py, "ToolPostInvokeResult", kwargs);
+                    }
+
+                    if new_text.text != current_text {
+                        modified = true;
+                        let new_resource = resource.copy()?;
+                        new_resource.set_item("text", new_text.text)?;
+                        let new_item = dict.copy()?;
+                        new_item.set_item("resource", new_resource)?;
+                        mcp_out.append(new_item)?;
+                    } else {
+                        mcp_out.append(&item)?;
+                    }
+                }
+                _ => {
+                    mcp_out.append(&item)?;
+                }
+            }
+        }
+        let metadata = PyDict::new(py);
+        metadata.set_item("mcp_content_processed", true)?;
+        let mut kwargs: Vec<(&str, Py<PyAny>)> = vec![("meta", metadata.into_any().unbind())];
+        if modified {
+            let tool_post_invoke_payload = build_framework_object(
+                py,
+                "ToolPostInvokePayload",
+                [
+                    ("name", payload_name.into_pyobject(py)?.into_any().unbind()),
+                    ("result", mcp_out.into_any().unbind()),
+                ],
+            )?;
+
             kwargs.push(("modified_payload", tool_post_invoke_payload));
         }
         return build_framework_object_dyn(py, "ToolPostInvokeResult", kwargs);
