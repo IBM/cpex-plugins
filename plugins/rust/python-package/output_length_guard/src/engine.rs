@@ -85,12 +85,21 @@ impl OutputLengthGuardEngine {
         if result.is_instance_of::<PyList>() {
             if let Ok(list) = result.cast::<PyList>() {
                 if !list.is_empty() {
-                    if let Ok(first) = list.get_item(0) {
-                        if let Ok(dict) = first.cast::<PyDict>()
+                    // Handle if first item in list is dict
+                    if list
+                        .get_item(0)
+                        .is_ok_and(|first| first.is_instance_of::<PyDict>())
+                    {
+                        if let Ok(dict) = list.get_item(0)?.cast::<PyDict>()
                             && dict.contains("type")?
                         {
                             return self.handle_mcp_list(py, payload, &payload_name, list);
                         }
+                    }
+
+                    //handle if all items in list is string
+                    if list.iter().all(|item| item.is_instance_of::<PyString>()) {
+                        return self.handle_string_list(py, payload, &payload_name, list);
                     }
                 }
             }
@@ -256,6 +265,62 @@ impl OutputLengthGuardEngine {
                 [
                     ("name", payload_name.into_pyobject(py)?.into_any().unbind()),
                     ("result", mcp_out.into_any().unbind()),
+                ],
+            )?;
+
+            kwargs.push(("modified_payload", tool_post_invoke_payload));
+        }
+        return build_framework_object_dyn(py, "ToolPostInvokeResult", kwargs);
+    }
+
+    fn handle_string_list(
+        &self,
+        py: Python<'_>,
+        _payload: &Bound<'_, PyAny>,
+        payload_name: &str,
+        result: &Bound<PyList>,
+    ) -> PyResult<Py<PyAny>> {
+        let texts: Vec<String> = result.extract()?;
+
+        let mut modified = false;
+        let meta_list = PyList::empty(py);
+        let mut str_list_out = PyList::empty(py);
+
+        for (idx, text) in texts.iter().enumerate() {
+            let new_text = handle_text(py, text, &self.config)?;
+            meta_list.append(new_text.metadata)?;
+
+            if let Some(violation) = new_text.violation {
+                let violations = self.build_violation_object(py, violation)?;
+                let metadata = PyDict::new(py);
+                metadata.set_item("items", &meta_list)?;
+                metadata.set_item("violation_index", idx)?;
+                metadata.set_item("total_items", texts.len())?;
+                let kwargs: Vec<(&str, Py<PyAny>)> = vec![
+                    (
+                        "continue_processing",
+                        false.into_pyobject(py)?.to_owned().into_any().unbind(),
+                    ),
+                    ("violation", violations),
+                    ("metadata", metadata.into_any().unbind()),
+                ];
+                return build_framework_object_dyn(py, "ToolPostInvokeResult", kwargs);
+            }
+            if new_text.text != *text {
+                modified = true;
+            }
+            str_list_out.append(new_text.text);
+        }
+        let metadata = PyDict::new(py);
+        metadata.set_item("items", &meta_list)?;
+        let mut kwargs: Vec<(&str, Py<PyAny>)> = vec![("metadata", metadata.into_any().unbind())];
+        if modified {
+            let tool_post_invoke_payload = build_framework_object(
+                py,
+                "ToolPostInvokePayload",
+                [
+                    ("name", payload_name.into_pyobject(py)?.into_any().unbind()),
+                    ("result", str_list_out.into_any().unbind()),
                 ],
             )?;
 
