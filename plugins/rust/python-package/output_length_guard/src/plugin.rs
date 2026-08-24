@@ -172,22 +172,13 @@ impl OutputLengthGuardPluginCore {
         trace_id: Option<&str>,
         _name: &str,
     ) -> PyResult<Py<PyAny>> {
-        let mut total_chars: usize = 0;
-        let mut items_modified: usize = 0;
-
-        let (out_items, was_modified) = match self.process_mcp_items_result(py, list, trace_id)? {
-            Ok(r) => r,
-            Err(violation) => return build_blocked_result(py, trace_id, violation),
-        };
+        let (out_items, was_modified, total_chars, items_modified) =
+            match self.process_mcp_items_result(py, list, trace_id)? {
+                Ok(r) => r,
+                Err(violation) => return build_blocked_result(py, trace_id, violation),
+            };
 
         if was_modified {
-            // tally chars for metrics (approximate: sum lengths of truncated items)
-            for item in &out_items {
-                if let Ok(s) = item.bind(py).extract::<String>() {
-                    total_chars += s.len();
-                    items_modified += 1;
-                }
-            }
             let new_list = PyList::new(py, out_items)?;
             let new_result_obj = new_list.into_any().unbind();
             let new_payload = clone_payload_with_attr(py, payload, "result", &new_result_obj)?;
@@ -323,7 +314,7 @@ impl OutputLengthGuardPluginCore {
         }
 
         // Process content array
-        let (out_items, was_modified) =
+        let (out_items, was_modified, total_chars_seen, items_modified_count) =
             match self.process_mcp_items_result(py, content_list, trace_id)? {
                 Ok(r) => r,
                 Err(violation) => return build_blocked_result(py, trace_id, violation),
@@ -343,10 +334,18 @@ impl OutputLengthGuardPluginCore {
             meta.set_item("mcp_result_processed", true)?;
             meta.set_item("items_modified", true)?;
             meta.set_item("structured_content_processed", sc_processed)?;
-            let kwargs: Vec<(&str, Py<PyAny>)> = vec![
+            let mut kwargs: Vec<(&str, Py<PyAny>)> = vec![
                 ("modified_payload", new_payload),
                 ("metadata", meta.into_any().unbind()),
             ];
+            push_metrics_kwargs(
+                py,
+                trace_id,
+                &mut kwargs,
+                total_chars_seen,
+                true,
+                items_modified_count,
+            )?;
             return build_result_dyn(py, "ToolPostInvokeResult", kwargs);
         }
 
@@ -365,7 +364,7 @@ impl OutputLengthGuardPluginCore {
         py: Python<'_>,
         list: &Bound<'_, PyList>,
         _trace_id: Option<&str>,
-    ) -> PyResult<Result<(Vec<Py<PyAny>>, bool), Py<PyAny>>> {
+    ) -> PyResult<Result<(Vec<Py<PyAny>>, bool, usize, usize), Py<PyAny>>> {
         // Security: reject lists that exceed max_structure_size
         if list.len() > self.cfg.max_structure_size && self.cfg.strategy == Strategy::Block {
             let violation = build_violation(
@@ -389,6 +388,8 @@ impl OutputLengthGuardPluginCore {
         }
 
         let mut modified = false;
+        let mut total_chars_seen: usize = 0;
+        let mut items_modified_count: usize = 0;
         let mut out: Vec<Py<PyAny>> = Vec::with_capacity(list.len());
 
         for item in list.iter() {
@@ -409,6 +410,8 @@ impl OutputLengthGuardPluginCore {
                 match handle_text(py, &text, &self.cfg)? {
                     TextResult::Violation(v) => return Ok(Err(v)),
                     TextResult::Modified(new_text) => {
+                        total_chars_seen += text.len();
+                        items_modified_count += 1;
                         let new_item = copy_dict_replace_keys(
                             py,
                             item_dict,
@@ -436,6 +439,8 @@ impl OutputLengthGuardPluginCore {
                 match handle_text(py, &text, &self.cfg)? {
                     TextResult::Violation(v) => return Ok(Err(v)),
                     TextResult::Modified(new_text) => {
+                        total_chars_seen += text.len();
+                        items_modified_count += 1;
                         let new_resource = copy_dict_replace_keys(
                             py,
                             resource_dict,
@@ -454,7 +459,7 @@ impl OutputLengthGuardPluginCore {
             out.push(item.unbind());
         }
 
-        Ok(Ok((out, modified)))
+        Ok(Ok((out, modified, total_chars_seen, items_modified_count)))
     }
 }
 
