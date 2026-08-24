@@ -7,7 +7,8 @@ Testing spans two repositories. `cpex-plugins` owns unit tests and plugin-framew
 ### Unit Tests (cpex-plugins)
 
 **Location**: Within each plugin's own directory
-- Python: `plugins/rust/python-package/<slug>/tests/` (current hybrid) or `plugins/python/<slug>/tests/` (pure Python)
+- Pure Python: `plugins/python/<slug>/tests/`
+- Rust package binding tests: `plugins/rust/python-package/<slug>/tests/`
 - Rust: inline `mod tests` within source files (e.g., `src/lib.rs`)
 
 **Scope**:
@@ -25,19 +26,24 @@ Testing spans two repositories. `cpex-plugins` owns unit tests and plugin-framew
 
 **Run Locally**:
 ```bash
+# Pure Python
+cd plugins/python/<slug>
+make test-all  # Runs unit and plugin-framework integration tests
+
+# Rust with Python packaging
 cd plugins/rust/python-package/<slug>
 make test-all  # Runs both Rust and Python unit tests
 ```
 
 ### Plugin-Framework Integration Tests (cpex-plugins)
 
-**Location**: `cpex-plugins/tests/` (plugin-specific `tests/` directories)
+**Location**: `plugins/tests/<slug>/` for pure-Python plugins; the plugin-local `tests/` directory for Rust plugins
 
 **Scope**:
-- PyO3 entry points and Python ↔ Rust interface
+- Python plugin entry points, including the PyO3 interface for Rust plugins
 - Plugin loading by the Python plugin framework
 - Hook dispatch through the framework layer
-- Coverage of PyO3 paths (run as part of Rust coverage)
+- Coverage of PyO3 paths for Rust plugins (run as part of Rust coverage)
 
 **Purpose**:
 - Validate that the Rust implementation is correctly exposed through PyO3 bindings
@@ -46,9 +52,11 @@ make test-all  # Runs both Rust and Python unit tests
 
 **Run Locally**:
 ```bash
-cd plugins/rust/python-package/<slug>
+cd plugins/python/<slug>  # Or plugins/rust/python-package/<slug>
 make test-integration  # Runs plugin-framework integration tests
 ```
+
+The shared `plugins/tests/conftest.py` discovers selected package directories from both managed roots, checking `plugins/python/` first and then `plugins/rust/python-package/`. This Python-first lookup selects the realized package location for a slug; it does not provide a Python fallback implementation for a Rust plugin.
 
 ### Gateway Integration Tests (mcp-context-forge)
 
@@ -110,11 +118,11 @@ python3 tools/plugin_catalog.py validate .
 
 They verify:
 
-- managed plugin location under `plugins/rust/python-package/`
+- managed plugin location under `plugins/rust/python-package/` or `plugins/python/`
 - plugin manifests do not exist outside the managed root
 - required files and package/module naming
-- workspace membership in the top-level `Cargo.toml`
-- version consistency between `Cargo.toml` and `plugin-manifest.yaml`
+- root uv-workspace membership for every plugin and top-level Cargo-workspace membership for Rust crates
+- version consistency between the language-specific source (`Cargo.toml` or `pyproject.toml`) and `plugin-manifest.yaml`
 - manifest `kind` consistency (`module.object`) with `[project.entry-points."cpex.plugins"]` targets (`module:object`)
 - repository metadata consistency
 - changed-plugin detection for CI
@@ -123,7 +131,7 @@ They verify:
 
 ### 2. Plugin Unit Tests
 
-Each plugin has its own Rust and Python unit test suite.
+Rust plugins have Rust and Python binding unit tests. Pure-Python plugins have a Python unit test suite.
 
 ```bash
 cd plugins/rust/python-package/rate_limiter
@@ -145,7 +153,7 @@ make plugin-test PLUGIN=rate_limiter
 
 ### 3. Plugin-Framework Integration Tests
 
-Each plugin also has integration tests between the plugin and the Python plugin framework. These live in the plugin's `tests/` directory alongside unit tests and test the PyO3 interface — ensuring the Rust implementation is correctly exposed through Python bindings and that the framework can discover, load, and invoke the plugin.
+Each plugin also has integration tests between the plugin and the Python plugin framework. Pure-Python integration tests live under `plugins/tests/<slug>/`; Rust integration tests live in the plugin's `tests/` directory alongside binding tests. They ensure the framework can discover, load, and invoke each plugin, and cover the PyO3 interface for Rust implementations.
 
 ```bash
 cd plugins/rust/python-package/rate_limiter
@@ -166,9 +174,9 @@ cargo install cargo-llvm-cov --version 0.8.4 --locked
 cargo install cargo-nextest --version 0.9.133 --locked
 mkdir -p coverage
 CARGO_PACKAGES="$(python3 tools/plugin_catalog.py ci-selection-field . all '' '' cargo_packages)"
-PLUGINS="$(python3 tools/plugin_catalog.py ci-selection-field . all '' '' plugins)"
+RUST_PLUGINS="$(python3 tools/plugin_catalog.py ci-selection-field . all '' '' rust_plugins)"
 mapfile -t cargo_packages < <(python3 -c 'import json, os; [print(package) for package in json.loads(os.environ["CARGO_PACKAGES"])]')
-mapfile -t plugins < <(python3 -c 'import json, os; [print(plugin) for plugin in json.loads(os.environ["PLUGINS"])]')
+mapfile -t rust_plugins < <(python3 -c 'import json, os; [print(plugin) for plugin in json.loads(os.environ["RUST_PLUGINS"])]')
 cargo_args=()
 for package in "${cargo_packages[@]}"; do
   cargo_args+=("-p" "${package}")
@@ -180,14 +188,14 @@ export CARGO_TARGET_DIR="${CARGO_LLVM_COV_TARGET_DIR}/llvm-cov-target"
 export CARGO_LLVM_COV_BUILD_DIR="${CARGO_TARGET_DIR}"
 export LLVM_PROFILE_FILE="${CARGO_TARGET_DIR}/cpex-plugins-%p-%10m.profraw"
 mkdir -p "${CARGO_TARGET_DIR}"
-for plugin in "${plugins[@]}"; do
+for plugin in "${rust_plugins[@]}"; do
   (cd "plugins/rust/python-package/${plugin}" && make sync && uv run maturin develop)
 done
-for plugin in "${plugins[@]}"; do
+for plugin in "${rust_plugins[@]}"; do
   (cd "plugins/rust/python-package/${plugin}" && make test-integration)
 done
 env -u CARGO_TARGET_DIR -u CARGO_LLVM_COV_BUILD_DIR -u CARGO_LLVM_COV_TARGET_DIR -u LLVM_PROFILE_FILE cargo llvm-cov report "${cargo_args[@]}" --cobertura --output-path coverage/cobertura.xml
-python3 tools/plugin_catalog.py coverage-check . coverage/cobertura.xml 90.00 "${PLUGINS}"
+python3 tools/plugin_catalog.py coverage-check . coverage/cobertura.xml 90.00 "${RUST_PLUGINS}"
 ```
 
 Rust unit tests use `cargo nextest run`. Coverage uses `cargo llvm-cov nextest --no-report` for the Rust test phase, then runs pytest before generating the final report so PyO3 paths stay covered. CI uses the `ci` nextest profile, which disables fail-fast and prints failure output immediately and again at the end. Nextest does not run Rust doctests; this repo currently has no Rust doctest code blocks, so there is no separate doctest step.
@@ -213,10 +221,10 @@ make plugin-mutants PLUGIN=retry_with_backoff
 
 1. **Develop Plugin in cpex-plugins**:
    ```bash
-   cd cpex-plugins/plugins/rust/python-package/<slug>
+   cd cpex-plugins/plugins/python/<slug>  # Or plugins/rust/python-package/<slug>
    # Implement plugin logic
-   # Write unit tests in tests/
-   # Write plugin-framework integration tests in tests/
+   # Write unit tests in the plugin-local tests/
+   # Write pure-Python integration tests in cpex-plugins/plugins/tests/<slug>/
    make test-all          # Run unit tests
    make test-integration  # Run plugin-framework integration tests
    ```
@@ -293,6 +301,7 @@ make plugin-mutants PLUGIN=retry_with_backoff
 - Runs plugin unit tests
 - Runs plugin-framework integration tests (`make test-integration`)
 - Builds and packages plugins
+- Uses separate `ci-python-package.yaml` and `ci-rust-python-package.yaml` workflows fed by language-specific catalog selections
 - On `main`, creates release tags for plugin version bumps only after required checks are green
 - Invokes the release workflow for PyPI publishing after tag creation
 
@@ -324,18 +333,20 @@ make plugin-mutants PLUGIN=retry_with_backoff
 
 ## CI Behavior
 
-Repo contract tests run in their own CI workflow. The Rust plugin CI workflow uses the same plugin catalog to select affected plugin build, integration, and coverage jobs.
+Repo contract tests run in their own CI workflow. Separate pure-Python and Rust plugin CI workflows use the same dual-root catalog to select affected jobs; Rust-only integration and coverage behavior remains in the Rust workflow.
 
 Per-plugin build/test jobs are then scoped by the plugin catalog:
 
 - plugin-only changes run only the affected plugin jobs
 - shared workflow, workspace, root orchestration, docs, test, and tool changes run all managed plugin jobs
 
-For pull requests with plugin version bumps, release validation builds the
-target package with publishing disabled. On `main`, Rust plugin CI creates the
-release tag after required checks are green, then calls release CI with PyPI
-publishing enabled. Release CI validates the tag and plugin metadata before any
-artifact is published.
+For pull requests with plugin version bumps, each language-specific CI workflow
+invokes its matching release workflow to build and test the target package with
+publishing disabled. On `main`, each language-specific CI workflow creates tags
+only after its required checks pass, then invokes its matching release workflow
+with PyPI publishing enabled. Rust CI retains additional security, mutation,
+coverage, and documentation gates. The matching release workflow validates the
+tag and plugin metadata before any artifact is published.
 
 ## Testing Best Practices
 
@@ -367,8 +378,8 @@ artifact is published.
 
 ```bash
 # In cpex-plugins
-cd plugins/rust/python-package/<slug>
-make test-all              # Run unit tests (Rust + Python)
+cd plugins/python/<slug>   # Or plugins/rust/python-package/<slug>
+make test-all              # Run language-appropriate unit tests
 make test-integration      # Run plugin-framework integration tests
 
 # In mcp-context-forge
