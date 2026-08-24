@@ -412,6 +412,93 @@ mod tests {
     }
 
     #[test]
+    fn from_py_dict_accepts_min_chars_zero() {
+        // Kills: replace < with == / > / <= on the n < 0 guard (line 180)
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            let d = PyDict::new(py);
+            d.set_item("min_chars", 0i64).unwrap();
+            let cfg = OutputLengthGuardConfig::from_py_dict(&d).unwrap();
+            assert_eq!(cfg.min_chars, 0);
+        });
+    }
+
+    #[test]
+    fn from_py_dict_rejects_negative_min_chars() {
+        // Companion: confirms the < 0 guard fires
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            let d = PyDict::new(py);
+            d.set_item("min_chars", -1i64).unwrap();
+            assert!(OutputLengthGuardConfig::from_py_dict(&d).is_err());
+        });
+    }
+
+    #[test]
+    fn from_py_dict_accepts_min_tokens_zero() {
+        // Kills: replace < with == / > / <= on the n < 0 guard (line 194)
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            let d = PyDict::new(py);
+            d.set_item("min_tokens", 0i64).unwrap();
+            let cfg = OutputLengthGuardConfig::from_py_dict(&d).unwrap();
+            assert_eq!(cfg.min_tokens, 0);
+        });
+    }
+
+    #[test]
+    fn from_py_dict_rejects_negative_min_tokens() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            let d = PyDict::new(py);
+            d.set_item("min_tokens", -1i64).unwrap();
+            assert!(OutputLengthGuardConfig::from_py_dict(&d).is_err());
+        });
+    }
+
+    #[test]
+    fn from_py_dict_accepts_min_chars_equal_to_max_chars() {
+        // Kills: replace > with >= in min_chars > max check (line 269)
+        // min == max is a valid degenerate window (block everything outside exactly N chars)
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            let d = PyDict::new(py);
+            d.set_item("min_chars", 100i64).unwrap();
+            d.set_item("max_chars", 100i64).unwrap();
+            let cfg = OutputLengthGuardConfig::from_py_dict(&d).unwrap();
+            assert_eq!(cfg.min_chars, 100);
+            assert_eq!(cfg.max_chars, Some(100));
+        });
+    }
+
+    #[test]
+    fn from_py_dict_accepts_min_tokens_equal_to_max_tokens() {
+        // Kills: replace > with == / >= in min_tokens > max check (line 277)
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            let d = PyDict::new(py);
+            d.set_item("min_tokens", 5i64).unwrap();
+            d.set_item("max_tokens", 5i64).unwrap();
+            let cfg = OutputLengthGuardConfig::from_py_dict(&d).unwrap();
+            assert_eq!(cfg.min_tokens, 5);
+            assert_eq!(cfg.max_tokens, Some(5));
+        });
+    }
+
+    #[test]
+    fn from_py_dict_rejects_min_tokens_greater_than_max_tokens() {
+        // Companion: confirms the > guard fires for strictly greater
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            let d = PyDict::new(py);
+            d.set_item("min_tokens", 10i64).unwrap();
+            d.set_item("max_tokens", 5i64).unwrap();
+            let err = OutputLengthGuardConfig::from_py_dict(&d).unwrap_err();
+            assert!(err.to_string().contains("min_tokens"));
+        });
+    }
+
+    #[test]
     fn from_py_dict_rejects_invalid_max_text_length() {
         pyo3::Python::initialize();
         pyo3::Python::attach(|py| {

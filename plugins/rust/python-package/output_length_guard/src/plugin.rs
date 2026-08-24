@@ -1209,4 +1209,297 @@ class Payload:
             assert!(!modified.is_none());
         });
     }
+
+    // ── handle_string_list counter accuracy ──────────────────────────────
+    // Kill: replace += with *= on total_chars_truncated / items_modified (lines 218-219)
+    // We verify metrics are accurate by asserting the modified_payload is produced
+    // (metrics path depends on correct counter values being > 0)
+    #[test]
+    fn string_list_two_items_truncated_both_modified() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let core = make_core(Some(3), "truncate").unwrap();
+            // Both strings exceed max_chars=3
+            let list = PyList::new(py, ["hello", "world"]).unwrap();
+            let payload = make_payload(py, "t", list.as_any().clone()).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            let result = result.bind(py);
+            let modified = result.getattr("modified_payload").unwrap();
+            assert!(!modified.is_none(), "both strings should be truncated");
+            // Verify each item in the result list is within max_chars
+            let result_obj = modified.getattr("result").unwrap();
+            let result_list = result_obj.cast::<PyList>().unwrap();
+            for item in result_list.iter() {
+                let s: String = item.extract().unwrap();
+                assert!(s.chars().count() <= 3, "item '{}' exceeds max_chars", s);
+            }
+        });
+    }
+
+    // ── process_mcp_items_result structure size guard boundary ────────────
+    // Kill: replace > with == / < / >= in size check (line 369)
+    #[test]
+    fn mcp_content_dict_at_exactly_max_structure_size_is_not_blocked() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let d = PyDict::new(py);
+            d.set_item("max_chars", py.None()).unwrap(); // no char limit
+            d.set_item("max_structure_size", 3usize).unwrap();
+            d.set_item("strategy", "block").unwrap();
+            d.set_item("limit_mode", "character").unwrap();
+            let core = OutputLengthGuardPluginCore::new(d.as_any()).unwrap();
+            // Exactly 3 items == max_structure_size: must NOT block
+            let item_a = PyDict::new(py);
+            item_a.set_item("type", "text").unwrap();
+            item_a.set_item("text", "a").unwrap();
+            let item_b = PyDict::new(py);
+            item_b.set_item("type", "text").unwrap();
+            item_b.set_item("text", "b").unwrap();
+            let item_c = PyDict::new(py);
+            item_c.set_item("type", "text").unwrap();
+            item_c.set_item("text", "c").unwrap();
+            let content = PyList::new(py, [item_a, item_b, item_c]).unwrap();
+            let result_dict = PyDict::new(py);
+            result_dict.set_item("content", content).unwrap();
+            let payload = make_payload(py, "t", result_dict.as_any().clone()).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            let cp: bool = result
+                .bind(py)
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(cp, "exactly max_structure_size items must not block");
+        });
+    }
+
+    // Kill: replace == with != in resource item type check (line 433)
+    #[test]
+    fn mcp_content_dict_resource_item_text_is_truncated() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let core = make_core(Some(5), "truncate").unwrap();
+            let resource = PyDict::new(py);
+            resource.set_item("text", "hello world foo bar").unwrap();
+            let item = PyDict::new(py);
+            item.set_item("type", "resource").unwrap();
+            item.set_item("resource", resource).unwrap();
+            let content = PyList::new(py, [item]).unwrap();
+            let result_dict = PyDict::new(py);
+            result_dict.set_item("content", content).unwrap();
+            let payload = make_payload(py, "t", result_dict.as_any().clone()).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            let result = result.bind(py);
+            let modified = result.getattr("modified_payload").unwrap();
+            assert!(!modified.is_none(), "resource text should be truncated");
+        });
+    }
+
+    // Kill: replace += with -= / *= on resource item counters (lines 442-443)
+    #[test]
+    fn mcp_content_dict_resource_item_counter_is_nonzero_after_truncation() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let core = make_core(Some(3), "truncate").unwrap();
+            let resource = PyDict::new(py);
+            resource.set_item("text", "toolongtext").unwrap();
+            let item = PyDict::new(py);
+            item.set_item("type", "resource").unwrap();
+            item.set_item("resource", resource).unwrap();
+            let content = PyList::new(py, [item]).unwrap();
+            let result_dict = PyDict::new(py);
+            result_dict.set_item("content", content).unwrap();
+            let payload = make_payload(py, "t", result_dict.as_any().clone()).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            // modified_payload must be present (counter > 0 required to trigger the modified branch)
+            let modified = result.bind(py).getattr("modified_payload").unwrap();
+            assert!(
+                !modified.is_none(),
+                "resource item truncation must produce modified_payload"
+            );
+        });
+    }
+
+    // ── handle_text: !below_min && !above_max short-circuit ──────────────
+    // Kill: delete ! in `if !below_min && !above_max` (line 483)
+    #[test]
+    fn handle_text_within_bounds_does_not_modify_payload() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            // max_chars=100, no min — "hello" is well within bounds
+            let core = make_core(Some(100), "block").unwrap();
+            let text = "hello".into_pyobject(py).unwrap().into_any();
+            let payload = make_payload(py, "t", text).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            let result = result.bind(py);
+            // continue_processing must be true and no modification
+            let cp: bool = result
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(cp);
+            assert!(result.getattr("modified_payload").unwrap().is_none());
+        });
+    }
+
+    // Kill: replace && with || in `above_max && cfg.limit_mode == LimitMode::Token` (line 489)
+    #[test]
+    fn handle_text_char_mode_violation_code_is_output_length_not_token() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let core = make_core(Some(5), "block").unwrap(); // character mode, block
+            let text = "this is a long string"
+                .into_pyobject(py)
+                .unwrap()
+                .into_any();
+            let payload = make_payload(py, "t", text).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            let result = result.bind(py);
+            let violation = result.getattr("violation").unwrap();
+            assert!(!violation.is_none());
+            let code: String = violation.getattr("code").unwrap().extract().unwrap();
+            // character mode must emit OUTPUT_LENGTH_VIOLATION, not OUTPUT_TOKEN_VIOLATION
+            assert_eq!(code, "OUTPUT_LENGTH_VIOLATION");
+        });
+    }
+
+    // Kill: replace == with != in the token check (line 489)
+    #[test]
+    fn handle_text_token_mode_violation_code_is_output_token_violation() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let d = PyDict::new(py);
+            d.set_item("max_tokens", 1usize).unwrap(); // 1 token * 4 = 4 chars
+            d.set_item("limit_mode", "token").unwrap();
+            d.set_item("strategy", "block").unwrap();
+            d.set_item("max_chars", py.None()).unwrap();
+            let core = OutputLengthGuardPluginCore::new(d.as_any()).unwrap();
+            let text = "abcdefghij".into_pyobject(py).unwrap().into_any(); // 10 chars = 2+ tokens
+            let payload = make_payload(py, "t", text).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            let result = result.bind(py);
+            let violation = result.getattr("violation").unwrap();
+            assert!(!violation.is_none());
+            let code: String = violation.getattr("code").unwrap().extract().unwrap();
+            assert_eq!(code, "OUTPUT_TOKEN_VIOLATION");
+        });
+    }
+
+    // ── find_struct_key: !val.is_none() guard (line 762) ─────────────────
+    // Kill: delete ! in `!val.is_none()`
+    // A None-valued structuredContent key must NOT be treated as present
+    #[test]
+    fn mcp_content_dict_null_structured_content_treated_as_absent() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let core = make_core(Some(5), "truncate").unwrap();
+            let item = PyDict::new(py);
+            item.set_item("type", "text").unwrap();
+            item.set_item("text", "hello world foo").unwrap();
+            let content = PyList::new(py, [item]).unwrap();
+            let result_dict = PyDict::new(py);
+            result_dict.set_item("content", content).unwrap();
+            result_dict
+                .set_item("structuredContent", py.None())
+                .unwrap();
+            let payload = make_payload(py, "t", result_dict.as_any().clone()).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            // Even with structuredContent=None, content text must be truncated
+            let modified = result.bind(py).getattr("modified_payload").unwrap();
+            assert!(
+                !modified.is_none(),
+                "content text must be truncated even when structuredContent is null"
+            );
+        });
+    }
+
+    // ── build_text_meta: !within_bounds branch (line 814) ────────────────
+    // Kill: delete ! in `if !within_bounds` and replace != with == (line 815)
+    #[test]
+    fn truncated_string_metadata_contains_truncated_true_and_new_length() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let core = make_core(Some(5), "truncate").unwrap();
+            let text = "hello world".into_pyobject(py).unwrap().into_any();
+            let payload = make_payload(py, "t", text).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            let result = result.bind(py);
+            let meta = result.getattr("metadata").unwrap();
+            // metadata must include within_bounds=false, truncated=true, new_length
+            let within_bounds: bool = meta.get_item("within_bounds").unwrap().extract().unwrap();
+            assert!(!within_bounds);
+            let truncated: bool = meta.get_item("truncated").unwrap().extract().unwrap();
+            assert!(truncated, "truncated must be true when text was shortened");
+            // new_length is byte length of the truncated result; the original had 11 chars
+            // so it must be strictly less than the original (11 bytes for ASCII)
+            let new_length: usize = meta.get_item("new_length").unwrap().extract().unwrap();
+            assert!(
+                new_length < 11,
+                "new_length must be less than original length"
+            );
+        });
+    }
+
+    #[test]
+    fn within_bounds_string_metadata_does_not_contain_new_length() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let core = make_core(Some(100), "truncate").unwrap();
+            let text = "hi".into_pyobject(py).unwrap().into_any();
+            let payload = make_payload(py, "t", text).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            let result = result.bind(py);
+            let meta = result.getattr("metadata").unwrap();
+            let within_bounds: bool = meta.get_item("within_bounds").unwrap().extract().unwrap();
+            assert!(within_bounds);
+            // within_bounds=true: key "truncated" must NOT be present in the dict.
+            let meta_dict = meta.cast::<PyDict>().unwrap();
+            let has_truncated = meta_dict.get_item("truncated").unwrap().is_some();
+            assert!(
+                !has_truncated,
+                "within_bounds path must not set 'truncated'"
+            );
+        });
+    }
 }

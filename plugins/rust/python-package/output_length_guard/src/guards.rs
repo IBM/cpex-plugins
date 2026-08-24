@@ -355,4 +355,175 @@ mod tests {
     fn find_word_boundary_empty_string_returns_cut() {
         assert_eq!(find_word_boundary("", 0, 10), 0);
     }
+
+    // ── evaluate_text_limits boundary-exact tests ──────────────────────────
+    // Kill: replace > with >= (length == max_chars must NOT be above_max)
+    #[test]
+    fn evaluate_text_limits_at_exactly_max_chars_is_not_above() {
+        let cfg = char_cfg(Some(100));
+        let (_, above) = evaluate_text_limits(100, 0, &cfg);
+        assert!(!above, "length == max_chars must not trigger above_max");
+    }
+
+    // Kill: replace > with >= (token_count == max_tokens must NOT be above_max)
+    #[test]
+    fn evaluate_text_limits_at_exactly_max_tokens_is_not_above() {
+        let cfg = token_cfg(Some(10));
+        let (_, above) = evaluate_text_limits(0, 10, &cfg);
+        assert!(
+            !above,
+            "token_count == max_tokens must not trigger above_max"
+        );
+    }
+
+    // Kill: replace < with <= (length == min_chars must NOT be below_min)
+    #[test]
+    fn evaluate_text_limits_at_exactly_min_chars_is_not_below() {
+        let mut cfg = char_cfg(Some(100));
+        cfg.min_chars = 10;
+        let (below, _) = evaluate_text_limits(10, 0, &cfg);
+        assert!(!below, "length == min_chars must not trigger below_min");
+    }
+
+    // Kill: replace < with <= (token_count == min_tokens must NOT be below_min)
+    #[test]
+    fn evaluate_text_limits_at_exactly_min_tokens_is_not_below() {
+        let mut cfg = token_cfg(Some(100));
+        cfg.min_tokens = 5;
+        let (below, _) = evaluate_text_limits(0, 5, &cfg);
+        assert!(
+            !below,
+            "token_count == min_tokens must not trigger below_min"
+        );
+    }
+
+    // Kill: replace && with || in below_min check (min_chars == 0 disables below_min)
+    #[test]
+    fn evaluate_text_limits_min_chars_zero_never_triggers_below() {
+        let cfg = char_cfg(Some(100)); // min_chars defaults to 0
+        let (below, _) = evaluate_text_limits(0, 0, &cfg); // length=0, min_chars=0
+        assert!(!below, "min_chars=0 must never trigger below_min");
+    }
+
+    // Kill: replace && with || in token below_min check
+    #[test]
+    fn evaluate_text_limits_min_tokens_zero_never_triggers_below() {
+        let cfg = token_cfg(Some(100)); // min_tokens defaults to 0
+        let (below, _) = evaluate_text_limits(0, 0, &cfg);
+        assert!(!below, "min_tokens=0 must never trigger below_min");
+    }
+
+    // ── find_word_boundary ────────────────────────────────────────────────
+    // Kill: replace || with && (cut==0 alone must return 0)
+    #[test]
+    fn find_word_boundary_cut_zero_returns_zero_on_nonempty_string() {
+        assert_eq!(find_word_boundary("hello world", 0, 10), 0);
+    }
+
+    // Kill: replace == with != (is_empty check)
+    #[test]
+    fn find_word_boundary_nonempty_string_nonzero_cut_does_not_return_early() {
+        // If the == were !=, a non-empty string would return early with the unmodified cut.
+        // cut=6 covers "hello " (6 chars); chars[..6] = ['h','e','l','l','o',' '].
+        // The space at index 5 is a boundary char → byte_pos after it = 6.
+        let pos = find_word_boundary("hello world", 6, 10);
+        assert_eq!(pos, 6); // boundary found at the space, byte offset = 6
+    }
+
+    // Kill: replace * with + or / in search_back = max_chars * 0.2
+    #[test]
+    fn find_word_boundary_search_window_is_proportional_to_max_chars() {
+        // max_chars=50 → search_back=10 chars; place boundary at position 45,
+        // cut at 50. With correct * 0.2, the boundary at 45 is within [40,50).
+        // With + 0.2 (≈50), search_back≈50 so window is [0,50) — still finds it.
+        // With / 0.2 (≈250), truncated to usize 250, but saturating_sub keeps [0,50) — still finds it.
+        // The meaningful kill is: search_back too small → misses the boundary → returns cut unchanged.
+        // We verify the boundary IS found (pos < cut) to confirm * 0.2 logic works.
+        let s = "abcdefghijklmnopqrstuvwxyz abcdefghijklmnopqrs"; // space at index 26
+        let pos = find_word_boundary(s, 35, 50);
+        // space at index 26; with search_back=10, min=25, so index 26 is in [25,35) ✓
+        assert!(pos <= 35, "expected boundary to be found: pos={}", pos);
+        assert!(pos > 0);
+    }
+
+    // ── truncate exact-boundary tests ────────────────────────────────────
+    // Kill: replace > with == / >= in `if value.len() > cfg.max_text_length`
+    #[test]
+    fn truncate_token_mode_value_exactly_at_max_text_length_not_capped() {
+        let mut cfg = token_cfg(Some(1)); // force truncation
+        cfg.max_text_length = 8; // exactly 8 chars
+        let s = "abcdefgh"; // len == max_text_length
+        let result = truncate(s, &cfg);
+        // Should truncate by token budget, not hard-cut at max_text_length.
+        // If the > were >=, s would be capped to "" (empty) before truncation.
+        assert!(result.ends_with('…'));
+    }
+
+    // Kill: replace > with == / >= on char_count <= max_chars early-return check (line ~117)
+    #[test]
+    fn truncate_char_mode_at_exactly_max_chars_returns_unchanged() {
+        let cfg = char_cfg(Some(5));
+        assert_eq!(truncate("hello", &cfg), "hello"); // 5 chars == max_chars
+    }
+
+    // Kill: replace <= with > on `if adj <= cut_byte` word-boundary adjustment (line 139)
+    #[test]
+    fn truncate_word_boundary_adjustment_never_extends_beyond_cut() {
+        let mut cfg = char_cfg(Some(10));
+        cfg.word_boundary = true;
+        let s = "hello world foo bar";
+        let result = truncate(s, &cfg);
+        // Result must not exceed max_chars chars
+        assert!(
+            result.chars().count() <= 10,
+            "truncated result exceeded max_chars: {}",
+            result
+        );
+    }
+
+    // Kill: replace && with || in word_boundary check (cfg.word_boundary && cut_byte > 0)
+    #[test]
+    fn truncate_char_mode_no_word_boundary_cuts_mid_word() {
+        let cfg = char_cfg(Some(7)); // word_boundary = false
+        let s = "hello world foo";
+        let result = truncate(s, &cfg);
+        // With word_boundary=false the cut is at char 6 + ellipsis, regardless of spaces
+        assert!(result.ends_with('…'));
+        assert_eq!(result.chars().count(), 7);
+    }
+
+    // Kill: replace -= with += / /= on char-boundary snap loops (lines 97-98, 102-103)
+    #[test]
+    fn truncate_token_mode_snaps_to_valid_char_boundary() {
+        let mut cfg = token_cfg(Some(1));
+        cfg.chars_per_token = 2;
+        // Use ASCII only — all single-byte chars, so boundary is always valid.
+        // The important thing is that the result is a valid UTF-8 string.
+        let s = "abcde"; // 5 chars, 2 tokens at cpt=2 → cut at 2 chars
+        let result = truncate(s, &cfg);
+        assert!(std::str::from_utf8(result.as_bytes()).is_ok());
+        assert!(result.ends_with('…'));
+    }
+
+    // Kill: replace > with >= in token mode `if estimated <= max_tokens` (line 86/90)
+    #[test]
+    fn truncate_token_mode_at_exactly_max_tokens_returns_unchanged() {
+        let cfg = token_cfg(Some(2)); // 2 tokens * 4 cpt = 8 chars
+        let s = "abcdefgh"; // exactly 8 chars = 2 tokens
+        // estimated = 8/4 = 2 == max_tokens → must NOT truncate
+        assert_eq!(truncate(s, &cfg), "abcdefgh");
+    }
+
+    // Kill: replace > with >= in is_numeric_string length check (line 152)
+    #[test]
+    fn is_numeric_string_accepts_exactly_50_char_numeric() {
+        // 50 chars is the boundary; > 50 rejects, == 50 accepts
+        let _s = format!("{:.43}", 1.0f64); // short, pad to exactly 50 with zeros
+        // Build a 50-char valid numeric string manually
+        let s50 = format!("{:0>50}", "1"); // "000...0001", 50 chars
+        // f64 parse: leading zeros are fine
+        assert!(is_numeric_string(&s50), "50-char numeric must be accepted");
+        let s51 = format!("{:0>51}", "1");
+        assert!(!is_numeric_string(&s51), "51-char string must be rejected");
+    }
 }

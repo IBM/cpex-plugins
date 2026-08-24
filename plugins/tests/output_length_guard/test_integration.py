@@ -230,8 +230,8 @@ async def test_no_raw_content_in_metrics() -> None:
     """Verify metrics carry no raw text content."""
     plugin = OutputLengthGuardPlugin(_make_config(max_chars=10))
     ext = Extensions(request=RequestExtension(trace_id="t1"))
-    secret = "SENSITIVE_DATA_" * 10
-    payload = ToolPostInvokePayload(name="t", result=secret)
+    oversized_text = "SENSITIVE_DATA_" * 10
+    payload = ToolPostInvokePayload(name="t", result=oversized_text)
     result = await plugin.tool_post_invoke(payload, _make_context(), ext)
     if result.metadata:
         flat = str(result.metadata)

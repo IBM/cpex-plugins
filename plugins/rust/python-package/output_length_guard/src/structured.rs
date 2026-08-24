@@ -599,4 +599,199 @@ mod tests {
             }
         });
     }
+
+    // ── recursion depth boundary ──────────────────────────────────────────
+    // Kill: replace > with >= (depth == max_recursion_depth must NOT fire)
+    #[test]
+    fn process_depth_at_exactly_limit_does_not_block() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            let mut cfg = truncate_char_cfg(1000);
+            cfg.max_recursion_depth = 5;
+            cfg.strategy = Strategy::Block;
+            // Pass a plain string (not a dict/list) so no recursive calls are made.
+            // At depth=5, max=5: 5 > 5 is false → must NOT violate.
+            let s = "hello".into_pyobject(py).unwrap().into_any();
+            match process_structured_data(py, &s, &cfg, "", 5).unwrap() {
+                ProcessResult::Ok { .. } => {}
+                ProcessResult::Violation { code, .. } => {
+                    panic!("depth == limit must not block, got code={}", code)
+                }
+            }
+        });
+    }
+
+    // ── process_string token calculation ─────────────────────────────────
+    // Kill: replace / with % or * in token_count calculation (line 105)
+    #[test]
+    fn process_string_token_mode_truncates_by_estimated_tokens() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            let mut cfg = OutputLengthGuardConfig {
+                max_tokens: Some(2),
+                limit_mode: LimitMode::Token,
+                strategy: Strategy::Block,
+                chars_per_token: 4,
+                ellipsis: "…".to_string(),
+                ..Default::default()
+            };
+            cfg.max_chars = None;
+            // "abcdefghijklmno" = 15 chars → estimated tokens = 15/4 = 3 > 2 → violation
+            let s = "abcdefghijklmno".into_pyobject(py).unwrap().into_any();
+            match process_structured_data(py, &s, &cfg, "", 0).unwrap() {
+                ProcessResult::Violation { code, .. } => assert_eq!(code, "OUTPUT_TOKEN_VIOLATION"),
+                ProcessResult::Ok { .. } => panic!("expected token violation"),
+            }
+        });
+    }
+
+    // Kill: delete ! in `if !below_min && !above_max` (line 108)
+    #[test]
+    fn process_string_within_both_limits_passes_through_unmodified() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            let mut cfg = truncate_char_cfg(100);
+            cfg.min_chars = 2;
+            // "hello" = 5 chars, between min=2 and max=100 → must pass through unchanged
+            let s = "hello".into_pyobject(py).unwrap().into_any();
+            match process_structured_data(py, &s, &cfg, "", 0).unwrap() {
+                ProcessResult::Ok { modified, value } => {
+                    assert!(!modified);
+                    assert_eq!(value.bind(py).extract::<String>().unwrap(), "hello");
+                }
+                ProcessResult::Violation { .. } => panic!("string within bounds must not violate"),
+            }
+        });
+    }
+
+    // ── list/dict size boundary (> vs >=) ────────────────────────────────
+    // Kill: replace > with >= in process_list size check (line 205)
+    #[test]
+    fn process_list_at_exactly_max_structure_size_is_not_oversized() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            let mut cfg = truncate_char_cfg(1000);
+            cfg.max_structure_size = 3;
+            cfg.strategy = Strategy::Block;
+            // Exactly 3 items == max_structure_size: must NOT trigger violation
+            let list = PyList::new(py, ["a", "b", "c"]).unwrap();
+            match process_structured_data(py, list.as_any(), &cfg, "", 0).unwrap() {
+                ProcessResult::Ok { .. } => {}
+                ProcessResult::Violation { code, .. } => {
+                    panic!("list.len() == max must not block, got code={}", code)
+                }
+            }
+        });
+    }
+
+    // Kill: replace > with >= in process_dict size check (line 277)
+    #[test]
+    fn process_dict_at_exactly_max_structure_size_is_not_oversized() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            let mut cfg = truncate_char_cfg(1000);
+            cfg.max_structure_size = 2;
+            cfg.strategy = Strategy::Block;
+            let d = PyDict::new(py);
+            d.set_item("a", "v1").unwrap();
+            d.set_item("b", "v2").unwrap();
+            // Exactly 2 keys == max_structure_size: must NOT trigger violation
+            match process_structured_data(py, d.as_any(), &cfg, "", 0).unwrap() {
+                ProcessResult::Ok { .. } => {}
+                ProcessResult::Violation { code, .. } => {
+                    panic!("dict.len() == max must not block, got code={}", code)
+                }
+            }
+        });
+    }
+
+    // ── list/dict depth increments (+ 1 vs * 1 mutation) ─────────────────
+    // Kill: replace + with * in `depth + 1` recursive calls (lines 250, 323)
+    #[test]
+    fn process_list_recurses_correctly_into_nested_string() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            let cfg = block_char_cfg(3);
+            // Nested: list containing a string that exceeds the limit
+            let list = PyList::new(py, ["toolongstring"]).unwrap();
+            match process_structured_data(py, list.as_any(), &cfg, "", 0).unwrap() {
+                ProcessResult::Violation { code, .. } => {
+                    assert_eq!(code, "OUTPUT_LENGTH_VIOLATION")
+                }
+                ProcessResult::Ok { .. } => panic!("expected violation from nested string"),
+            }
+        });
+    }
+
+    #[test]
+    fn process_dict_recurses_correctly_into_nested_string() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            let cfg = block_char_cfg(3);
+            let d = PyDict::new(py);
+            d.set_item("k", "toolongstring").unwrap();
+            match process_structured_data(py, d.as_any(), &cfg, "", 0).unwrap() {
+                ProcessResult::Violation { code, .. } => {
+                    assert_eq!(code, "OUTPUT_LENGTH_VIOLATION")
+                }
+                ProcessResult::Ok { .. } => panic!("expected violation from nested string"),
+            }
+        });
+    }
+
+    // ── generate_text_representation ─────────────────────────────────────
+    // Kill: replace == with != in `if dict.len() == 1` (line 352)
+    #[test]
+    fn generate_text_representation_single_key_dict_unwraps_value() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            let d = PyDict::new(py);
+            d.set_item("key", "hello").unwrap();
+            let result = generate_text_representation(d.as_any(), 0).unwrap();
+            assert_eq!(result, "hello");
+        });
+    }
+
+    // Kill: replace == with != (multi-key dict must NOT unwrap)
+    #[test]
+    fn generate_text_representation_multi_key_dict_json_serialises() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            let d = PyDict::new(py);
+            d.set_item("a", "v1").unwrap();
+            d.set_item("b", "v2").unwrap();
+            let result = generate_text_representation(d.as_any(), 0).unwrap();
+            // Multi-key: serialised as JSON, not unwrapped
+            assert!(result.contains("v1") && result.contains("v2"));
+        });
+    }
+
+    // Kill: replace < with == / > / <= in `depth < 10` unwrap guard (line 353)
+    #[test]
+    fn generate_text_representation_stops_unwrapping_at_depth_10() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            // At depth=10, a single-key dict must NOT be unwrapped (depth < 10 is false)
+            let d = PyDict::new(py);
+            d.set_item("key", "hello").unwrap();
+            let result = generate_text_representation(d.as_any(), 10).unwrap();
+            // Must be JSON, not the raw "hello" string
+            assert!(result.contains("key") || result.contains("hello"));
+            // More importantly: it must NOT equal the bare unwrapped value when depth==10
+            assert_ne!(result, "hello", "must not unwrap at depth==10");
+        });
+    }
+
+    // Kill: replace + with - in `depth + 1` recursive call (line 356)
+    #[test]
+    fn generate_text_representation_depth_9_still_unwraps() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            // At depth=9, unwrapping is still allowed (9 < 10)
+            let d = PyDict::new(py);
+            d.set_item("k", "leaf").unwrap();
+            let result = generate_text_representation(d.as_any(), 9).unwrap();
+            assert_eq!(result, "leaf");
+        });
+    }
 }
