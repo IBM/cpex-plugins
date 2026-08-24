@@ -19,7 +19,7 @@ check-all:
 	uv run mypy cpex_ica_metering_exporter tests
 
 build:
-	uv build
+	uv build --project . --out-dir ./dist
 
 install:
 	uv pip install -e .
