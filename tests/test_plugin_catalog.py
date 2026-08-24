@@ -129,6 +129,21 @@ class PluginCatalogTests(unittest.TestCase):
         )
         return "\n".join(run_lines) + "\n"
 
+    def _assert_workflow_needs_outputs_declared(
+        self,
+        workflow: str,
+        producer_job: str,
+    ) -> None:
+        job_section = self._extract_workflow_job_section(workflow, producer_job)
+        outputs_section = job_section.split("    outputs:\n", maxsplit=1)[1].split(
+            "    steps:\n", maxsplit=1
+        )[0]
+        declared = set(re.findall(r"^      ([a-z0-9_-]+):", outputs_section, re.MULTILINE))
+        referenced = set(
+            re.findall(rf"needs\.{re.escape(producer_job)}\.outputs\.([a-z0-9_-]+)", workflow)
+        )
+        self.assertEqual(referenced - declared, set())
+
     def _source_tree_has_extension(self, package_dir: Path, module_name: str) -> bool:
         return any(package_dir.glob(f"{module_name}*.so")) or any(
             package_dir.glob(f"{module_name}*.pyd")
@@ -554,6 +569,7 @@ class PluginCatalogTests(unittest.TestCase):
             {entry["slug"] for entry in payload["plugins"]},
             {
                 "encoded_exfil_detection",
+                "ica_metering_exporter",
                 "pii_filter",
                 "rate_limiter",
                 "retry_with_backoff",
@@ -567,6 +583,7 @@ class PluginCatalogTests(unittest.TestCase):
             {slug: entry["module_name"] for slug, entry in by_slug.items()},
             {
                 "encoded_exfil_detection": "cpex_encoded_exfil_detection",
+                "ica_metering_exporter": "cpex_ica_metering_exporter",
                 "pii_filter": "cpex_pii_filter",
                 "rate_limiter": "cpex_rate_limiter",
                 "retry_with_backoff": "cpex_retry_with_backoff",
@@ -579,6 +596,7 @@ class PluginCatalogTests(unittest.TestCase):
             {slug: entry["kind"] for slug, entry in by_slug.items()},
             {
                 "encoded_exfil_detection": "cpex_encoded_exfil_detection.encoded_exfil_detection.EncodedExfilDetectorPlugin",
+                "ica_metering_exporter": "cpex_ica_metering_exporter.plugin.IcaMeteringExporterPlugin",
                 "pii_filter": "cpex_pii_filter.pii_filter.PIIFilterPlugin",
                 "rate_limiter": "cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
                 "retry_with_backoff": "cpex_retry_with_backoff.retry_with_backoff.RetryWithBackoffPlugin",
@@ -2456,6 +2474,9 @@ class PluginCatalogTests(unittest.TestCase):
             shutil.copytree(REPO_ROOT / "plugins", root / "plugins")
             shutil.copytree(REPO_ROOT / "crates", root / "crates")
             (root / "Cargo.toml").write_text((REPO_ROOT / "Cargo.toml").read_text())
+            (root / "pyproject.toml").write_text(
+                (REPO_ROOT / "pyproject.toml").read_text()
+            )
             subprocess.run(
                 ["git", "add", "."],
                 cwd=root,
@@ -2605,7 +2626,7 @@ class PluginCatalogTests(unittest.TestCase):
             })
 
     def test_ci_selection_field_prints_json_and_bool_scalars(self) -> None:
-        expected_plugins = [
+        expected_rust_plugins = [
             "encoded_exfil_detection",
             "pii_filter",
             "rate_limiter",
@@ -2613,6 +2634,11 @@ class PluginCatalogTests(unittest.TestCase):
             "secrets_detection",
             "sql_sanitizer",
             "url_reputation",
+        ]
+        expected_plugins = [
+            "encoded_exfil_detection",
+            "ica_metering_exporter",
+            *expected_rust_plugins[1:],
         ]
         result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "plugins")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -2624,15 +2650,15 @@ class PluginCatalogTests(unittest.TestCase):
 
         result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "plugin_count")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "7")
+        self.assertEqual(result.stdout.strip(), "8")
 
         result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "cargo_packages")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout), expected_plugins)
+        self.assertEqual(json.loads(result.stdout), expected_rust_plugins)
 
         result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "mutation_cargo_packages")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout), expected_plugins)
+        self.assertEqual(json.loads(result.stdout), expected_rust_plugins)
 
         result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "mutation_jobs")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -2640,7 +2666,7 @@ class PluginCatalogTests(unittest.TestCase):
             json.loads(result.stdout),
             [
                 {"cargo_package": plugin, "in_diff": False, "test_packages": []}
-                for plugin in expected_plugins
+                for plugin in expected_rust_plugins
             ],
         )
 
@@ -2657,12 +2683,12 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "false")
 
         expected_split_fields = {
-            "rust_plugins": json.dumps(expected_plugins),
-            "python_plugins": "[]",
+            "rust_plugins": json.dumps(expected_rust_plugins),
+            "python_plugins": '["ica_metering_exporter"]',
             "has_rust_plugins": "true",
-            "has_python_plugins": "false",
+            "has_python_plugins": "true",
             "rust_plugin_count": "7",
-            "python_plugin_count": "0",
+            "python_plugin_count": "1",
             "rust_release_validation_tags": "[]",
             "python_release_validation_tags": "[]",
             "has_rust_release_validation_tags": "false",
@@ -2773,6 +2799,11 @@ class PluginCatalogTests(unittest.TestCase):
             ".github/workflows/ci-plugin-catalog.yaml",
             ".github/workflows/ci-rust-python-package.yaml",
             ".github/workflows/release-rust-python-package.yaml",
+            ".github/workflows/ci-python-package.yaml",
+            ".github/workflows/release-python-package.yaml",
+            "plugins/python/**",
+            "tools/validate_ci_selection.py",
+            "pyproject.toml",
         }
         actual_paths = {
             match.group(1)
@@ -2900,7 +2931,7 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn('- "Makefile"', workflow)
         self.assertNotIn("pulls?state=open&head=", workflow)
         self.assertNotIn("dedupe:", workflow)
-        self.assertIn("if: needs.validate-and-detect.outputs.has_plugins == 'true'", workflow)
+        self.assertIn("if: needs.validate-and-detect.outputs.has_rust_plugins == 'true'", workflow)
         self.assertNotIn("tests/test_plugin_catalog.py", workflow)
         self.assertNotIn("tests/test_install_built_wheel.py", workflow)
         self.assertIn("python3 tools/plugin_catalog.py ci-selection . diff", workflow)
@@ -2937,6 +2968,185 @@ class PluginCatalogTests(unittest.TestCase):
             workflow,
             r"defaults:\n\s+run:\n\s+shell: bash\n\s+working-directory: .*\$\{\{",
         )
+
+    def test_ci_workflows_route_complete_language_split_contracts(self) -> None:
+        rust_workflow = (
+            REPO_ROOT / ".github" / "workflows" / "ci-rust-python-package.yaml"
+        ).read_text()
+        python_workflow = (
+            REPO_ROOT / ".github" / "workflows" / "ci-python-package.yaml"
+        ).read_text()
+
+        self._assert_workflow_needs_outputs_declared(
+            rust_workflow, "validate-and-detect"
+        )
+        self._assert_workflow_needs_outputs_declared(
+            python_workflow, "validate-and-detect"
+        )
+        for field in (
+            "rust_plugins",
+            "has_rust_plugins",
+            "rust_plugin_count",
+            "rust_release_validation_tags",
+            "has_rust_release_validation_tags",
+        ):
+            self.assertIn(f"echo \"{field}=", rust_workflow)
+            self.assertIn(
+                f"{field}: ${{{{ steps.detect.outputs.{field} }}}}", rust_workflow
+            )
+        for field in (
+            "python_plugins",
+            "has_python_plugins",
+            "python_plugin_count",
+            "python_release_validation_tags",
+            "has_python_release_validation_tags",
+        ):
+            self.assertIn(f"echo \"{field}=", python_workflow)
+            self.assertIn(
+                f"{field}: ${{{{ steps.detect.outputs.{field} }}}}", python_workflow
+            )
+
+        self.assertNotIn('- "plugins/python/**"', rust_workflow)
+        self.assertIn("fromJson(needs.validate-and-detect.outputs.rust_plugins)", rust_workflow)
+        self.assertIn("fromJson(needs.validate-and-detect.outputs.python_plugins)", python_workflow)
+        self.assertIn(
+            "working-directory: plugins/python/${{ matrix.plugin }}", python_workflow
+        )
+
+    def test_python_ci_release_validation_and_tag_creation_match_contract(self) -> None:
+        workflow = (
+            REPO_ROOT / ".github" / "workflows" / "ci-python-package.yaml"
+        ).read_text()
+        expected_paths = {
+            "Makefile",
+            "pyproject.toml",
+            "uv.lock",
+            "plugins/python/**",
+            "plugins/tests/**",
+            "tools/**",
+            "tests/**",
+            ".github/workflows/ci-python-package.yaml",
+            ".github/workflows/release-python-package.yaml",
+        }
+        for path in expected_paths:
+            self.assertEqual(workflow.count(f'- "{path}"'), 2)
+
+        release_validation = self._extract_workflow_job_section(
+            workflow, "release-validation"
+        )
+        create_tags = self._extract_workflow_job_section(
+            workflow, "create-release-tags"
+        )
+        self.assertIn("uses: ./.github/workflows/release-python-package.yaml", release_validation)
+        self.assertIn("has_python_release_validation_tags == 'true'", release_validation)
+        self.assertIn(
+            "fromJson(needs.validate-and-detect.outputs.python_release_validation_tags)",
+            release_validation,
+        )
+        self.assertIn("repository: testpypi", release_validation)
+        self.assertIn("publish_enabled: false", release_validation)
+        for dependency in ("validate-and-detect", "build-test", "release-validation"):
+            self.assertIn(f"      - {dependency}", create_tags)
+        for rust_only_job in (
+            "security-policy",
+            "mutation-testing",
+            "coverage",
+            "documentation",
+        ):
+            self.assertNotIn(rust_only_job, create_tags)
+        self.assertIn("always()", create_tags)
+        self.assertIn("github.event_name == 'push'", create_tags)
+        self.assertIn("github.ref == 'refs/heads/main'", create_tags)
+        self.assertIn("has_python_release_validation_tags == 'true'", create_tags)
+        self.assertIn("needs.build-test.result == 'success'", create_tags)
+        self.assertIn("needs.release-validation.result == 'skipped'", create_tags)
+        self.assertIn('git tag "${tag}" "${GITHUB_SHA}"', create_tags)
+        self.assertIn('git push origin "refs/tags/${tag}"', create_tags)
+        self.assertIn("gh workflow run release-python-package.yaml", create_tags)
+
+    def test_release_workflows_guard_every_post_resolve_job(self) -> None:
+        workflows = {
+            "rust": (
+                REPO_ROOT
+                / ".github"
+                / "workflows"
+                / "release-rust-python-package.yaml"
+            ).read_text(),
+            "python": (
+                REPO_ROOT / ".github" / "workflows" / "release-python-package.yaml"
+            ).read_text(),
+        }
+        jobs = {
+            "rust": ("preflight", "build-wheel", "build-sdist", "publish"),
+            "python": ("build", "test-built-wheel", "test-built-sdist", "publish"),
+        }
+        for language, workflow in workflows.items():
+            with self.subTest(language=language):
+                self._assert_workflow_needs_outputs_declared(workflow, "resolve")
+                resolve_section = self._extract_workflow_job_section(workflow, "resolve")
+                self.assertIn("skip: ${{ steps.resolve.outputs.skip }}", resolve_section)
+                self.assertIn(f'"${{language}}" != "{language}"', resolve_section)
+                self.assertIn('echo "skip=true"', resolve_section)
+                self.assertIn('echo "skip=false"', resolve_section)
+                for job_name in jobs[language]:
+                    job_section = self._extract_workflow_job_section(workflow, job_name)
+                    self.assertIn("needs.resolve.outputs.skip != 'true'", job_section)
+
+    def test_python_release_artifact_handoff_and_publish_topology(self) -> None:
+        workflow = (
+            REPO_ROOT / ".github" / "workflows" / "release-python-package.yaml"
+        ).read_text()
+        build = self._extract_workflow_job_section(workflow, "build")
+        wheel = self._extract_workflow_job_section(workflow, "test-built-wheel")
+        sdist = self._extract_workflow_job_section(workflow, "test-built-sdist")
+        publish = self._extract_workflow_job_section(workflow, "publish")
+
+        self.assertIn("push:\n    tags:\n      - \"*-v*\"", workflow)
+        self.assertIn("workflow_call:", workflow)
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("run: uv build --out-dir dist", build)
+        self.assertIn("name: python-dist", build)
+        self.assertIn("path: ${{ needs.resolve.outputs.plugin_path }}/dist/", build)
+        self.assertIn("if-no-files-found: error", build)
+        for section, artifact_glob in (
+            (wheel, "dist/*.whl"),
+            (sdist, "dist/*.tar.gz"),
+        ):
+            self.assertIn("needs: [resolve, build]", section)
+            self.assertIn("ref: ${{ needs.resolve.outputs.checkout_ref }}", section)
+            self.assertIn(
+                "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1",
+                section,
+            )
+            self.assertIn("name: python-dist", section)
+            self.assertIn("path: ${{ needs.resolve.outputs.plugin_path }}/dist", section)
+            self.assertIn(
+                "working-directory: ${{ needs.resolve.outputs.plugin_path }}", section
+            )
+            self.assertIn(f'"${{venv_python}}" -m pip install {artifact_glob}', section)
+        self.assertIn(
+            "needs: [resolve, build, test-built-wheel, test-built-sdist]", publish
+        )
+        self.assertIn(
+            "needs.resolve.outputs.skip != 'true' && needs.resolve.outputs.publish_enabled == 'true'",
+            publish,
+        )
+        self.assertIn(
+            "needs.resolve.outputs.publish_env != 'pypi' || needs.resolve.outputs.tag_on_main == 'true'",
+            publish,
+        )
+
+    def test_plugin_maintenance_runs_rust_and_python_plugin_lists(self) -> None:
+        workflow = (
+            REPO_ROOT / ".github" / "workflows" / "plugin-maintenance.yaml"
+        ).read_text()
+        self.assertIn("rust_plugins=(", workflow)
+        self.assertIn("python_plugins=(", workflow)
+        self.assertIn("ica_metering_exporter", workflow)
+        self.assertIn('pushd "plugins/rust/python-package/${plugin}"', workflow)
+        self.assertIn('pushd "plugins/python/${plugin}"', workflow)
+        self.assertNotIn("sql_sanitizer` plugin lock file", workflow)
+        self.assertIn("All 8 managed plugins built and tested", workflow)
 
     def test_catalog_workflow_runs_catalog_suite(self) -> None:
         workflow = (
@@ -3032,14 +3242,20 @@ class PluginCatalogTests(unittest.TestCase):
             "ci-selection . diff \"${{ github.event.pull_request.base.sha }}\" \"${{ github.event.pull_request.head.sha }}\"",
             detect_run,
         )
-        self.assertIn("plugin_count: ${{ steps.detect.outputs.plugin_count }}", workflow)
+        self.assertIn("rust_plugin_count: ${{ steps.detect.outputs.rust_plugin_count }}", workflow)
         self.assertNotIn("single_cargo_package", workflow)
         self.assertIn("cargo_packages: ${{ steps.detect.outputs.cargo_packages }}", workflow)
         self.assertIn("mutation_cargo_packages: ${{ steps.detect.outputs.mutation_cargo_packages }}", workflow)
         self.assertIn("mutation_jobs: ${{ steps.detect.outputs.mutation_jobs }}", workflow)
         self.assertIn("has_mutation_cargo_packages: ${{ steps.detect.outputs.has_mutation_cargo_packages }}", workflow)
-        self.assertIn("release_validation_tags: ${{ steps.detect.outputs.release_validation_tags }}", workflow)
-        self.assertIn("has_release_validation_tags: ${{ steps.detect.outputs.has_release_validation_tags }}", workflow)
+        self.assertIn(
+            "rust_release_validation_tags: ${{ steps.detect.outputs.rust_release_validation_tags }}",
+            workflow,
+        )
+        self.assertIn(
+            "has_rust_release_validation_tags: ${{ steps.detect.outputs.has_rust_release_validation_tags }}",
+            workflow,
+        )
         self.assertIn("security-policy:", workflow)
         self.assertIn("mutation-testing:", workflow)
         self.assertIn("coverage:", workflow)
@@ -3047,10 +3263,10 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertNotIn("benchmark-build-verification:", workflow)
         self.assertIn("if: needs.validate-and-detect.outputs.has_plugins == 'true'", security_section)
         self.assertIn("if: github.event_name == 'pull_request' && needs.validate-and-detect.outputs.has_mutation_cargo_packages == 'true'", mutants_section)
-        self.assertIn("if: needs.validate-and-detect.outputs.has_plugins == 'true'", coverage_section)
+        self.assertIn("if: needs.validate-and-detect.outputs.has_rust_plugins == 'true'", coverage_section)
         self.assertIn("if: needs.validate-and-detect.outputs.has_plugins == 'true'", documentation_section)
-        self.assertIn("if: github.event_name == 'pull_request' && needs.validate-and-detect.outputs.has_release_validation_tags == 'true'", release_validation_section)
-        self.assertIn("tag: ${{ fromJson(needs.validate-and-detect.outputs.release_validation_tags) }}", release_validation_section)
+        self.assertIn("if: github.event_name == 'pull_request' && needs.validate-and-detect.outputs.has_rust_release_validation_tags == 'true'", release_validation_section)
+        self.assertIn("tag: ${{ fromJson(needs.validate-and-detect.outputs.rust_release_validation_tags) }}", release_validation_section)
         self.assertIn("github.event_name == 'push'", create_tags_section)
         self.assertIn("github.ref == 'refs/heads/main'", create_tags_section)
         self.assertIn("always()", create_tags_section)
@@ -3118,7 +3334,7 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("PYO3_PYTHON: python", mutants_section)
         self.assertIn("python -m pip install uv==0.9.30 maturin==1.12.6", coverage_section)
         self.assertIn("CARGO_PACKAGES: ${{ needs.validate-and-detect.outputs.cargo_packages }}", coverage_section)
-        self.assertIn("PLUGINS: ${{ needs.validate-and-detect.outputs.plugins }}", coverage_section)
+        self.assertIn("PLUGINS: ${{ needs.validate-and-detect.outputs.rust_plugins }}", coverage_section)
         self.assertIn('os.environ["CARGO_PACKAGES"]', coverage_run)
         self.assertIn('os.environ["PLUGINS"]', coverage_run)
         self.assertIn('cargo_args+=("-p" "${package}")', coverage_run)
@@ -3196,8 +3412,8 @@ class PluginCatalogTests(unittest.TestCase):
                 if "=" in line
             )
             self.assertEqual(outputs["has_plugins"], "true")
-            self.assertEqual(outputs["plugin_count"], "7")
-            expected_plugins = [
+            self.assertEqual(outputs["plugin_count"], "8")
+            expected_rust_plugins = [
                 "encoded_exfil_detection",
                 "pii_filter",
                 "rate_limiter",
@@ -3206,14 +3422,21 @@ class PluginCatalogTests(unittest.TestCase):
                 "sql_sanitizer",
                 "url_reputation",
             ]
+            expected_plugins = [
+                "encoded_exfil_detection",
+                "ica_metering_exporter",
+                *expected_rust_plugins[1:],
+            ]
             self.assertEqual(json.loads(outputs["plugins"]), expected_plugins)
-            self.assertEqual(json.loads(outputs["cargo_packages"]), expected_plugins)
-            self.assertEqual(json.loads(outputs["mutation_cargo_packages"]), expected_plugins)
+            self.assertEqual(json.loads(outputs["cargo_packages"]), expected_rust_plugins)
+            self.assertEqual(
+                json.loads(outputs["mutation_cargo_packages"]), expected_rust_plugins
+            )
             self.assertEqual(
                 json.loads(outputs["mutation_jobs"]),
                 [
                     {"cargo_package": plugin, "in_diff": False, "test_packages": []}
-                    for plugin in expected_plugins
+                    for plugin in expected_rust_plugins
                 ],
             )
             self.assertEqual(outputs["has_mutation_cargo_packages"], "true")
@@ -3685,7 +3908,7 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertNotIn("allow_non_main_pypi", workflow)
         self.assertNotIn("ALLOW_NON_MAIN_PYPI", workflow)
         self.assertIn(
-            "if: ${{ needs.resolve.outputs.publish_enabled == 'true' && (needs.resolve.outputs.publish_env != 'pypi' || needs.resolve.outputs.tag_on_main == 'true') }}",
+            "if: ${{ needs.resolve.outputs.skip != 'true' && needs.resolve.outputs.publish_enabled == 'true' && (needs.resolve.outputs.publish_env != 'pypi' || needs.resolve.outputs.tag_on_main == 'true') }}",
             workflow,
         )
         self.assertNotIn("matrix.", preflight_section)
@@ -4316,16 +4539,16 @@ class PluginCatalogTests(unittest.TestCase):
             self.assertEqual(payload["path"], "plugins/python/python_demo")
 
     def test_ci_selection_reports_language_splits_and_counts(self) -> None:
-        # Given the pre-Python-plugin repository and a mixed fixture repository.
+        # Given the repository and a mixed fixture repository.
         result = run_catalog("ci-selection", str(REPO_ROOT), "all", "", "")
         self.assertEqual(result.returncode, 0, result.stderr)
         repository_payload = json.loads(result.stdout)
 
-        # Then all-mode characterizes the required 7 Rust / 0 Python baseline.
+        # Then all-mode characterizes the required 7 Rust / 1 Python split.
         self.assertEqual(repository_payload["rust_plugin_count"], 7)
-        self.assertEqual(repository_payload["python_plugin_count"], 0)
+        self.assertEqual(repository_payload["python_plugin_count"], 1)
         self.assertTrue(repository_payload["has_rust_plugins"])
-        self.assertFalse(repository_payload["has_python_plugins"])
+        self.assertTrue(repository_payload["has_python_plugins"])
 
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
