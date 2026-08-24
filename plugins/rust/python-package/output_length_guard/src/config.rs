@@ -12,7 +12,7 @@ pub const MIN_MAX_TEXT_LENGTH: usize = 1_000;
 pub const MAX_MAX_TEXT_LENGTH: usize = 10_000_000;
 pub const DEFAULT_MAX_TEXT_LENGTH: usize = 1_000_000;
 
-pub const MIN_MAX_STRUCTURE_SIZE: usize = 10;
+pub const MIN_MAX_STRUCTURE_SIZE: usize = 1;
 pub const MAX_MAX_STRUCTURE_SIZE: usize = 100_000;
 pub const DEFAULT_MAX_STRUCTURE_SIZE: usize = 10_000;
 
@@ -426,7 +426,7 @@ mod tests {
         pyo3::Python::initialize();
         pyo3::Python::attach(|py| {
             let d = PyDict::new(py);
-            d.set_item("max_structure_size", 5).unwrap(); // below 10 min
+            d.set_item("max_structure_size", 0).unwrap(); // below 1 min (0 is not valid)
             assert!(OutputLengthGuardConfig::from_py_dict(&d).is_err());
         });
     }

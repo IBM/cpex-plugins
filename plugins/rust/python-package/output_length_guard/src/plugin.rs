@@ -366,6 +366,28 @@ impl OutputLengthGuardPluginCore {
         list: &Bound<'_, PyList>,
         _trace_id: Option<&str>,
     ) -> PyResult<Result<(Vec<Py<PyAny>>, bool), Py<PyAny>>> {
+        // Security: reject lists that exceed max_structure_size
+        if list.len() > self.cfg.max_structure_size && self.cfg.strategy == Strategy::Block {
+            let violation = build_violation(
+                py,
+                "Structure size exceeds security limit",
+                &format!(
+                    "Content list has {} items, exceeding limit of {}",
+                    list.len(),
+                    self.cfg.max_structure_size
+                ),
+                "STRUCTURE_SIZE_VIOLATION",
+                &[
+                    ("size".to_string(), serde_json::json!(list.len())),
+                    (
+                        "max_size".to_string(),
+                        serde_json::json!(self.cfg.max_structure_size),
+                    ),
+                ],
+            )?;
+            return Ok(Err(violation));
+        }
+
         let mut modified = false;
         let mut out: Vec<Py<PyAny>> = Vec::with_capacity(list.len());
 
