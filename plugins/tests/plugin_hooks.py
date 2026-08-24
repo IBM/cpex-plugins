@@ -133,6 +133,9 @@ class GlobalContext:
     server_id: str = ""
     user: Any = None
     tenant_id: str | None = None
+    state: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    user_context: Any = None
 
 
 @dataclass
@@ -140,6 +143,19 @@ class PluginContext:
     plugin_id: str = ""
     global_context: GlobalContext = field(default_factory=GlobalContext)
     metadata: dict[str, Any] = field(default_factory=dict)
+    state: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def user_email(self) -> str | None:
+        user_context = self.global_context.user_context
+        if user_context:
+            return user_context.email
+        user = self.global_context.user
+        if isinstance(user, str):
+            return user
+        if isinstance(user, dict):
+            return user.get("email")
+        return None
 
 
 @dataclass

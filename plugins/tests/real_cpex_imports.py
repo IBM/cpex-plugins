@@ -13,7 +13,11 @@ def assert_real_cpex_imports(plugin_root: Path, import_statements: list[str]) ->
     script = "\n".join(
         [
             "import importlib",
-            "for name in ('cpex', 'cpex.framework', 'cpex.framework.models', 'cpex.framework.settings'):",
+            (
+                "for name in ('cpex', 'cpex.framework', 'cpex.framework.models', "
+                "'cpex.framework.settings', 'cpex.framework.constants', "
+                "'cpex.framework.extensions'):"
+            ),
             "    importlib.import_module(name)",
             *import_statements,
             "print('ok')",

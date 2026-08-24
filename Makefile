@@ -1,4 +1,5 @@
 DETECT_SECRETS_SPEC := git+https://github.com/ibm/detect-secrets.git@076672a9a01abdfc7ecee2e7d14f08cdccb73976
+PLUGIN_DIR := $(firstword $(wildcard plugins/python/$(PLUGIN) plugins/rust/python-package/$(PLUGIN)))
 
 .PHONY: help plugins-list plugins-validate plugin-test plugin-mutants plugin-mutants-list plugin-scaffold plugin-scaffold-help detect-secrets-scan detect-secrets-audit detect-secrets-check
 
@@ -26,7 +27,9 @@ detect-secrets-check:  ## Verify no unaudited secrets (CI equivalent)
 
 plugin-test:
 	@test -n "$(PLUGIN)" || (echo "Set PLUGIN=<slug>" && exit 1)
-	@cd plugins/rust/python-package/$(PLUGIN) && make sync && make ci
+	@case "$(PLUGIN)" in (*[!a-z0-9_]*|'') echo "Unknown plugin $(PLUGIN)"; exit 1;; esac
+	@test -n "$(PLUGIN_DIR)" || (echo "Unknown plugin $(PLUGIN)" && exit 1)
+	@cd $(PLUGIN_DIR) && make sync && make ci
 
 plugin-mutants:
 	@test -n "$(PLUGIN)" || (echo "Set PLUGIN=<slug>" && exit 1)
