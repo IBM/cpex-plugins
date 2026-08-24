@@ -1878,8 +1878,8 @@ class PluginCatalogTests(unittest.TestCase):
                 "mutation_cargo_packages": [],
                 "has_mutation_cargo_packages": False,
                 "mutation_jobs": [],
-            "release_validation_tags": [],
-            "has_release_validation_tags": False,
+                "release_validation_tags": [],
+                "has_release_validation_tags": False,
             })
 
     def test_ci_selection_treats_shared_tool_changes_as_all_plugins(self) -> None:
@@ -1921,8 +1921,8 @@ class PluginCatalogTests(unittest.TestCase):
                 "mutation_cargo_packages": [],
                 "has_mutation_cargo_packages": False,
                 "mutation_jobs": [],
-            "release_validation_tags": [],
-            "has_release_validation_tags": False,
+                "release_validation_tags": [],
+                "has_release_validation_tags": False,
             })
 
     def test_ci_selection_treats_tooling_config_changes_as_all_plugins(self) -> None:
@@ -1966,8 +1966,8 @@ class PluginCatalogTests(unittest.TestCase):
                         "mutation_cargo_packages": [],
                         "has_mutation_cargo_packages": False,
                         "mutation_jobs": [],
-                    "release_validation_tags": [],
-                    "has_release_validation_tags": False,
+                        "release_validation_tags": [],
+                        "has_release_validation_tags": False,
                     })
 
     def test_ci_selection_skips_mutation_for_unrelated_tooling_config(self) -> None:
@@ -2043,8 +2043,8 @@ class PluginCatalogTests(unittest.TestCase):
                 "mutation_cargo_packages": [],
                 "has_mutation_cargo_packages": False,
                 "mutation_jobs": [],
-            "release_validation_tags": [],
-            "has_release_validation_tags": False,
+                "release_validation_tags": [],
+                "has_release_validation_tags": False,
             })
 
     def test_ci_selection_treats_root_python_workspace_change_as_all_plugins(self) -> None:
@@ -2172,8 +2172,8 @@ class PluginCatalogTests(unittest.TestCase):
                 "mutation_cargo_packages": [],
                 "has_mutation_cargo_packages": False,
                 "mutation_jobs": [],
-            "release_validation_tags": [],
-            "has_release_validation_tags": False,
+                "release_validation_tags": [],
+                "has_release_validation_tags": False,
             })
 
     def test_changed_returns_plugin_for_plugin_integration_test_change(self) -> None:
@@ -2216,8 +2216,8 @@ class PluginCatalogTests(unittest.TestCase):
                 "mutation_cargo_packages": [],
                 "has_mutation_cargo_packages": False,
                 "mutation_jobs": [],
-            "release_validation_tags": [],
-            "has_release_validation_tags": False,
+                "release_validation_tags": [],
+                "has_release_validation_tags": False,
             })
 
     def test_ci_selection_treats_shared_plugin_tests_change_as_all_plugins(self) -> None:
@@ -2260,8 +2260,8 @@ class PluginCatalogTests(unittest.TestCase):
                 "mutation_cargo_packages": [],
                 "has_mutation_cargo_packages": False,
                 "mutation_jobs": [],
-            "release_validation_tags": [],
-            "has_release_validation_tags": False,
+                "release_validation_tags": [],
+                "has_release_validation_tags": False,
             })
 
     def test_ci_selection_treats_shared_crate_changes_as_all_plugins(self) -> None:
@@ -2574,8 +2574,8 @@ class PluginCatalogTests(unittest.TestCase):
                 "mutation_cargo_packages": [],
                 "has_mutation_cargo_packages": False,
                 "mutation_jobs": [],
-            "release_validation_tags": [],
-            "has_release_validation_tags": False,
+                "release_validation_tags": [],
+                "has_release_validation_tags": False,
             })
 
     def test_ci_selection_reports_mutation_package_for_single_rust_diff(self) -> None:
@@ -3140,13 +3140,57 @@ class PluginCatalogTests(unittest.TestCase):
         workflow = (
             REPO_ROOT / ".github" / "workflows" / "plugin-maintenance.yaml"
         ).read_text()
-        self.assertIn("rust_plugins=(", workflow)
-        self.assertIn("python_plugins=(", workflow)
-        self.assertIn("ica_metering_exporter", workflow)
-        self.assertIn('pushd "plugins/rust/python-package/${plugin}"', workflow)
-        self.assertIn('pushd "plugins/python/${plugin}"', workflow)
-        self.assertNotIn("sql_sanitizer` plugin lock file", workflow)
-        self.assertIn("All 8 managed plugins built and tested", workflow)
+        run = self._extract_workflow_step_run(
+            workflow,
+            "update-and-test",
+            step_name="Test all plugins",
+        )
+        arrays = {
+            name: re.search(
+                rf"(?m)^{name}=\(\n(?P<body>(?:  [a-z0-9_]+\n)+)\)$",
+                run,
+            )
+            for name in ("rust_plugins", "python_plugins")
+        }
+        for name, match in arrays.items():
+            self.assertIsNotNone(match, f"expected shell array {name!r}")
+
+        rust_plugins = re.findall(r"(?m)^  ([a-z0-9_]+)$", arrays["rust_plugins"].group("body"))
+        python_plugins = re.findall(
+            r"(?m)^  ([a-z0-9_]+)$",
+            arrays["python_plugins"].group("body"),
+        )
+        self.assertEqual(
+            rust_plugins,
+            [
+                "encoded_exfil_detection",
+                "pii_filter",
+                "rate_limiter",
+                "retry_with_backoff",
+                "secrets_detection",
+                "sql_sanitizer",
+                "url_reputation",
+            ],
+        )
+        self.assertEqual(python_plugins, ["ica_metering_exporter"])
+
+        rust_loop = re.search(
+            r'(?ms)^for plugin in "\$\{rust_plugins\[@\]\}"; do\n(?P<body>.+?)^done$',
+            run,
+        )
+        python_loop = re.search(
+            r'(?ms)^for plugin in "\$\{python_plugins\[@\]\}"; do\n(?P<body>.+?)^done$',
+            run,
+        )
+        self.assertIsNotNone(rust_loop, "expected rust_plugins loop")
+        self.assertIsNotNone(python_loop, "expected python_plugins loop")
+        self.assertIn('pushd "plugins/rust/python-package/${plugin}"', rust_loop.group("body"))
+        self.assertNotIn('pushd "plugins/python/${plugin}"', rust_loop.group("body"))
+        self.assertIn('pushd "plugins/python/${plugin}"', python_loop.group("body"))
+        self.assertNotIn(
+            'pushd "plugins/rust/python-package/${plugin}"',
+            python_loop.group("body"),
+        )
 
     def test_catalog_workflow_runs_catalog_suite(self) -> None:
         workflow = (
@@ -4298,8 +4342,10 @@ class PluginCatalogTests(unittest.TestCase):
                 True,
             ),
             "dynamic": (
-                '[project]\nname = "cpex-python-demo"\nversion = "0.2.0"\n'
-                'dynamic = ["version"]\n',
+                (
+                    '[project]\nname = "cpex-python-demo"\nversion = "0.2.0"\n'
+                    'dynamic = ["version"]\n'
+                ),
                 True,
             ),
             "package name": (
@@ -4312,25 +4358,26 @@ class PluginCatalogTests(unittest.TestCase):
             ),
         }
         for expected_error, (project_table, include_entry_point) in cases.items():
-            with self.subTest(expected_error=expected_error):
+            with self.subTest(
+                expected_error=expected_error
+            ), tempfile.TemporaryDirectory() as tmpdir:
                 # Given a Python fixture with one invalid project metadata field.
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    root = Path(tmpdir)
-                    plugin_dir = self._create_python_plugin(root, "python_demo")
-                    suffix = ""
-                    if include_entry_point:
-                        suffix = (
-                            '\n[project.entry-points."cpex.plugins"]\n'
-                            'python_demo = "cpex_python_demo.plugin:PythonDemoPlugin"\n'
-                        )
-                    (plugin_dir / "pyproject.toml").write_text(project_table + suffix)
+                root = Path(tmpdir)
+                plugin_dir = self._create_python_plugin(root, "python_demo")
+                suffix = ""
+                if include_entry_point:
+                    suffix = (
+                        '\n[project.entry-points."cpex.plugins"]\n'
+                        'python_demo = "cpex_python_demo.plugin:PythonDemoPlugin"\n'
+                    )
+                (plugin_dir / "pyproject.toml").write_text(project_table + suffix)
 
-                    # When validation runs.
-                    result = run_catalog("validate", str(root))
+                # When validation runs.
+                result = run_catalog("validate", str(root))
 
-                    # Then malformed Python project metadata is rejected.
-                    self.assertNotEqual(result.returncode, 0)
-                    self.assertIn(expected_error, result.stderr.lower())
+                # Then malformed Python project metadata is rejected.
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected_error, result.stderr.lower())
 
     def test_python_validator_rejects_manifest_version_mismatch(self) -> None:
         # Given a Python plugin whose manifest is 0.1.0 but project version is 0.2.0.
@@ -4387,51 +4434,52 @@ class PluginCatalogTests(unittest.TestCase):
             "plugins/tests/unknown_plugin/test_plugin.py": ["python_demo", "rust_demo"],
         }
         for changed_path, expected in cases.items():
-            with self.subTest(changed_path=changed_path):
+            with self.subTest(
+                changed_path=changed_path
+            ), tempfile.TemporaryDirectory() as tmpdir:
                 # Given a committed mixed-language plugin repository.
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    root = Path(tmpdir)
-                    rust_path = "plugins/rust/python-package/rust_demo"
-                    (root / "Cargo.toml").write_text(
-                        f'[workspace]\nmembers = ["{rust_path}"]\n'
-                        '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n'
-                    )
-                    self._create_plugin(root, "rust_demo")
-                    self._create_python_plugin(root, "python_demo")
-                    subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True)
-                    subprocess.run(["git", "config", "user.name", "Test User"], cwd=root, check=True)
-                    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
-                    subprocess.run(["git", "add", "."], cwd=root, check=True)
-                    subprocess.run(
-                        ["git", "commit", "--no-verify", "-m", "seed layout"],
-                        cwd=root,
-                        check=True,
-                        capture_output=True,
-                    )
-                    base = subprocess.run(
-                        ["git", "rev-parse", "HEAD"],
-                        cwd=root,
-                        check=True,
-                        capture_output=True,
-                        text=True,
-                    ).stdout.strip()
-                    changed_file = root / changed_path
-                    changed_file.parent.mkdir(parents=True, exist_ok=True)
-                    changed_file.write_text("# changed\n")
-                    subprocess.run(["git", "add", "."], cwd=root, check=True)
-                    subprocess.run(
-                        ["git", "commit", "--no-verify", "-m", "change route"],
-                        cwd=root,
-                        check=True,
-                        capture_output=True,
-                    )
+                root = Path(tmpdir)
+                rust_path = "plugins/rust/python-package/rust_demo"
+                (root / "Cargo.toml").write_text(
+                    f'[workspace]\nmembers = ["{rust_path}"]\n'
+                    '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n'
+                )
+                self._create_plugin(root, "rust_demo")
+                self._create_python_plugin(root, "python_demo")
+                subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True)
+                subprocess.run(["git", "config", "user.name", "Test User"], cwd=root, check=True)
+                subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
+                subprocess.run(["git", "add", "."], cwd=root, check=True)
+                subprocess.run(
+                    ["git", "commit", "--no-verify", "-m", "seed layout"],
+                    cwd=root,
+                    check=True,
+                    capture_output=True,
+                )
+                base = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=root,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+                changed_file = root / changed_path
+                changed_file.parent.mkdir(parents=True, exist_ok=True)
+                changed_file.write_text("# changed\n")
+                subprocess.run(["git", "add", "."], cwd=root, check=True)
+                subprocess.run(
+                    ["git", "commit", "--no-verify", "-m", "change route"],
+                    cwd=root,
+                    check=True,
+                    capture_output=True,
+                )
 
-                    # When diff selection runs.
-                    result = run_catalog("ci-selection", str(root), "diff", base, "HEAD")
+                # When diff selection runs.
+                result = run_catalog("ci-selection", str(root), "diff", base, "HEAD")
 
-                    # Then direct paths are scoped and unknown integration slugs select all.
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual(json.loads(result.stdout)["plugins"], expected)
+                # Then direct paths are scoped and unknown integration slugs select all.
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout)["plugins"], expected)
 
     def test_mixed_framework_bridge_change_emits_only_rust_mutation_packages(self) -> None:
         # Given a mixed repository where the Rust plugin depends on framework_bridge.
