@@ -15,6 +15,8 @@ import re
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "tools" / "plugin_catalog.py"
+CI_SELECTION_VALIDATOR = REPO_ROOT / "tools" / "validate_ci_selection.py"
+JsonValue = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
 
 
 def run_catalog(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -28,6 +30,13 @@ def run_catalog(*args: str, cwd: Path | None = None) -> subprocess.CompletedProc
 
 
 class PluginCatalogTests(unittest.TestCase):
+    def _assert_payload_contains(
+        self,
+        payload: dict[str, JsonValue],
+        expected: dict[str, JsonValue],
+    ) -> None:
+        self.assertEqual({key: payload[key] for key in expected}, expected)
+
     def _extract_workflow_job_section(self, workflow: str, job_name: str) -> str:
         lines = workflow.splitlines()
         in_jobs = False
@@ -150,6 +159,43 @@ class PluginCatalogTests(unittest.TestCase):
         (package_dir / "__init__.py").write_text("")
         (package_dir / "plugin-manifest.yaml").write_text(
             f'description: "{slug}"\nauthor: "ContextForge Team"\nversion: "0.0.1"\nkind: "{manifest_kind}"\navailable_hooks:\n  - "tool_pre_invoke"\n'
+        )
+        return plugin_dir
+
+    def _create_python_plugin(
+        self,
+        root: Path,
+        slug: str,
+        *,
+        version: str = "0.2.0",
+        add_workspace_member: bool = True,
+    ) -> Path:
+        rust_root = root / "plugins" / "rust" / "python-package"
+        rust_root.mkdir(parents=True, exist_ok=True)
+        if not (root / "Cargo.toml").exists():
+            (root / "Cargo.toml").write_text("[workspace]\nmembers = []\n")
+
+        plugin_dir = root / "plugins" / "python" / slug
+        package_dir = plugin_dir / f"cpex_{slug}"
+        class_name = f"{slug.title().replace('_', '')}Plugin"
+        manifest_kind = f"cpex_{slug}.plugin.{class_name}"
+        package_dir.mkdir(parents=True)
+        (plugin_dir / "pyproject.toml").write_text(
+            f'[project]\nname = "cpex-{slug.replace("_", "-")}"\nversion = "{version}"\n\n'
+            '[project.entry-points."cpex.plugins"]\n'
+            f'{slug} = "cpex_{slug}.plugin:{class_name}"\n'
+        )
+        (plugin_dir / "Makefile").write_text("all:\n\t@true\n")
+        (plugin_dir / "README.md").write_text(f"# {slug}\n")
+        (package_dir / "__init__.py").write_text("")
+        (package_dir / "plugin-manifest.yaml").write_text(
+            f'description: "{slug}"\nauthor: "ContextForge Team"\nversion: "{version}"\n'
+            f'kind: "{manifest_kind}"\navailable_hooks:\n  - "tool_pre_invoke"\n'
+        )
+        members = [f"plugins/python/{slug}"] if add_workspace_member else []
+        rendered_members = ", ".join(json.dumps(member) for member in members)
+        (root / "pyproject.toml").write_text(
+            f"[tool.uv.workspace]\nmembers = [{rendered_members}]\n"
         )
         return plugin_dir
 
@@ -1656,6 +1702,10 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "cpex_pii_filter.pii_filter.PIIFilterPlugin")
 
+        result = run_catalog("release-info-field", str(REPO_ROOT), tag, "language")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "rust")
+
     def test_ci_selection_returns_has_plugins_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -1685,20 +1735,17 @@ class PluginCatalogTests(unittest.TestCase):
             result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = json.loads(result.stdout)
-            self.assertEqual(
-                payload,
-                {
-                    "plugins": ["pii_filter", "rate_limiter"],
-                    "has_plugins": True,
-                    "plugin_count": 2,
-                    "cargo_packages": ["pii_filter", "rate_limiter"],
-                    "mutation_cargo_packages": [],
-                    "has_mutation_cargo_packages": False,
-                    "mutation_jobs": [],
-                    "release_validation_tags": [],
-                    "has_release_validation_tags": False,
-                },
-            )
+            self._assert_payload_contains(payload, {
+                "plugins": ["pii_filter", "rate_limiter"],
+                "has_plugins": True,
+                "plugin_count": 2,
+                "cargo_packages": ["pii_filter", "rate_limiter"],
+                "mutation_cargo_packages": [],
+                "has_mutation_cargo_packages": False,
+                "mutation_jobs": [],
+                "release_validation_tags": [],
+                "has_release_validation_tags": False,
+            })
 
     def test_ci_selection_detects_plugin_version_bump_for_release_validation(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1805,20 +1852,17 @@ class PluginCatalogTests(unittest.TestCase):
             result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = json.loads(result.stdout)
-            self.assertEqual(
-                payload,
-                {
-                    "plugins": [],
-                    "has_plugins": False,
-                    "plugin_count": 0,
-                    "cargo_packages": [],
-                    "mutation_cargo_packages": [],
-                    "has_mutation_cargo_packages": False,
-                    "mutation_jobs": [],
-                "release_validation_tags": [],
-                "has_release_validation_tags": False,
-                },
-            )
+            self._assert_payload_contains(payload, {
+                "plugins": [],
+                "has_plugins": False,
+                "plugin_count": 0,
+                "cargo_packages": [],
+                "mutation_cargo_packages": [],
+                "has_mutation_cargo_packages": False,
+                "mutation_jobs": [],
+            "release_validation_tags": [],
+            "has_release_validation_tags": False,
+            })
 
     def test_ci_selection_treats_shared_tool_changes_as_all_plugins(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1851,20 +1895,17 @@ class PluginCatalogTests(unittest.TestCase):
             result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = json.loads(result.stdout)
-            self.assertEqual(
-                payload,
-                {
-                    "plugins": ["pii_filter", "rate_limiter"],
-                    "has_plugins": True,
-                    "plugin_count": 2,
-                    "cargo_packages": ["pii_filter", "rate_limiter"],
-                    "mutation_cargo_packages": [],
-                    "has_mutation_cargo_packages": False,
-                    "mutation_jobs": [],
-                "release_validation_tags": [],
-                "has_release_validation_tags": False,
-                },
-            )
+            self._assert_payload_contains(payload, {
+                "plugins": ["pii_filter", "rate_limiter"],
+                "has_plugins": True,
+                "plugin_count": 2,
+                "cargo_packages": ["pii_filter", "rate_limiter"],
+                "mutation_cargo_packages": [],
+                "has_mutation_cargo_packages": False,
+                "mutation_jobs": [],
+            "release_validation_tags": [],
+            "has_release_validation_tags": False,
+            })
 
     def test_ci_selection_treats_tooling_config_changes_as_all_plugins(self) -> None:
         for config_path in (".cargo/mutants.toml", ".config/nextest.toml"):
@@ -1899,20 +1940,17 @@ class PluginCatalogTests(unittest.TestCase):
                     result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
                     self.assertEqual(result.returncode, 0, result.stderr)
                     payload = json.loads(result.stdout)
-                    self.assertEqual(
-                        payload,
-                        {
-                            "plugins": ["pii_filter", "rate_limiter"],
-                            "has_plugins": True,
-                            "plugin_count": 2,
-                            "cargo_packages": ["pii_filter", "rate_limiter"],
-                            "mutation_cargo_packages": [],
-                            "has_mutation_cargo_packages": False,
-                            "mutation_jobs": [],
-                        "release_validation_tags": [],
-                        "has_release_validation_tags": False,
-                        },
-                    )
+                    self._assert_payload_contains(payload, {
+                        "plugins": ["pii_filter", "rate_limiter"],
+                        "has_plugins": True,
+                        "plugin_count": 2,
+                        "cargo_packages": ["pii_filter", "rate_limiter"],
+                        "mutation_cargo_packages": [],
+                        "has_mutation_cargo_packages": False,
+                        "mutation_jobs": [],
+                    "release_validation_tags": [],
+                    "has_release_validation_tags": False,
+                    })
 
     def test_ci_selection_skips_mutation_for_unrelated_tooling_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1979,20 +2017,17 @@ class PluginCatalogTests(unittest.TestCase):
             result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = json.loads(result.stdout)
-            self.assertEqual(
-                payload,
-                {
-                    "plugins": ["pii_filter", "rate_limiter"],
-                    "has_plugins": True,
-                    "plugin_count": 2,
-                    "cargo_packages": ["pii_filter", "rate_limiter"],
-                    "mutation_cargo_packages": [],
-                    "has_mutation_cargo_packages": False,
-                    "mutation_jobs": [],
-                "release_validation_tags": [],
-                "has_release_validation_tags": False,
-                },
-            )
+            self._assert_payload_contains(payload, {
+                "plugins": ["pii_filter", "rate_limiter"],
+                "has_plugins": True,
+                "plugin_count": 2,
+                "cargo_packages": ["pii_filter", "rate_limiter"],
+                "mutation_cargo_packages": [],
+                "has_mutation_cargo_packages": False,
+                "mutation_jobs": [],
+            "release_validation_tags": [],
+            "has_release_validation_tags": False,
+            })
 
     def test_ci_selection_treats_root_python_workspace_change_as_all_plugins(self) -> None:
         for config_path in ("pyproject.toml", "uv.lock"):
@@ -2111,20 +2146,17 @@ class PluginCatalogTests(unittest.TestCase):
             result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = json.loads(result.stdout)
-            self.assertEqual(
-                payload,
-                {
-                    "plugins": ["pii_filter", "rate_limiter"],
-                    "has_plugins": True,
-                    "plugin_count": 2,
-                    "cargo_packages": ["pii_filter", "rate_limiter"],
-                    "mutation_cargo_packages": [],
-                    "has_mutation_cargo_packages": False,
-                    "mutation_jobs": [],
-                "release_validation_tags": [],
-                "has_release_validation_tags": False,
-                },
-            )
+            self._assert_payload_contains(payload, {
+                "plugins": ["pii_filter", "rate_limiter"],
+                "has_plugins": True,
+                "plugin_count": 2,
+                "cargo_packages": ["pii_filter", "rate_limiter"],
+                "mutation_cargo_packages": [],
+                "has_mutation_cargo_packages": False,
+                "mutation_jobs": [],
+            "release_validation_tags": [],
+            "has_release_validation_tags": False,
+            })
 
     def test_changed_returns_plugin_for_plugin_integration_test_change(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2158,20 +2190,17 @@ class PluginCatalogTests(unittest.TestCase):
             result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = json.loads(result.stdout)
-            self.assertEqual(
-                payload,
-                {
-                    "plugins": ["pii_filter"],
-                    "has_plugins": True,
-                    "plugin_count": 1,
-                    "cargo_packages": ["pii_filter"],
-                    "mutation_cargo_packages": [],
-                    "has_mutation_cargo_packages": False,
-                    "mutation_jobs": [],
-                "release_validation_tags": [],
-                "has_release_validation_tags": False,
-                },
-            )
+            self._assert_payload_contains(payload, {
+                "plugins": ["pii_filter"],
+                "has_plugins": True,
+                "plugin_count": 1,
+                "cargo_packages": ["pii_filter"],
+                "mutation_cargo_packages": [],
+                "has_mutation_cargo_packages": False,
+                "mutation_jobs": [],
+            "release_validation_tags": [],
+            "has_release_validation_tags": False,
+            })
 
     def test_ci_selection_treats_shared_plugin_tests_change_as_all_plugins(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2205,20 +2234,17 @@ class PluginCatalogTests(unittest.TestCase):
             result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = json.loads(result.stdout)
-            self.assertEqual(
-                payload,
-                {
-                    "plugins": ["pii_filter", "rate_limiter"],
-                    "has_plugins": True,
-                    "plugin_count": 2,
-                    "cargo_packages": ["pii_filter", "rate_limiter"],
-                    "mutation_cargo_packages": [],
-                    "has_mutation_cargo_packages": False,
-                    "mutation_jobs": [],
-                "release_validation_tags": [],
-                "has_release_validation_tags": False,
-                },
-            )
+            self._assert_payload_contains(payload, {
+                "plugins": ["pii_filter", "rate_limiter"],
+                "has_plugins": True,
+                "plugin_count": 2,
+                "cargo_packages": ["pii_filter", "rate_limiter"],
+                "mutation_cargo_packages": [],
+                "has_mutation_cargo_packages": False,
+                "mutation_jobs": [],
+            "release_validation_tags": [],
+            "has_release_validation_tags": False,
+            })
 
     def test_ci_selection_treats_shared_crate_changes_as_all_plugins(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2256,26 +2282,23 @@ class PluginCatalogTests(unittest.TestCase):
             result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = json.loads(result.stdout)
-            self.assertEqual(
-                payload,
-                {
-                    "plugins": ["pii_filter", "rate_limiter"],
-                    "has_plugins": True,
-                    "plugin_count": 2,
-                    "cargo_packages": ["pii_filter", "rate_limiter"],
-                    "mutation_cargo_packages": ["cpex_framework_bridge"],
-                    "has_mutation_cargo_packages": True,
-                    "mutation_jobs": [
-                        {
-                            "cargo_package": "cpex_framework_bridge",
-                            "in_diff": True,
-                            "test_packages": ["rate_limiter"],
-                        }
-                    ],
-                    "release_validation_tags": [],
-                    "has_release_validation_tags": False,
-                },
-            )
+            self._assert_payload_contains(payload, {
+                "plugins": ["pii_filter", "rate_limiter"],
+                "has_plugins": True,
+                "plugin_count": 2,
+                "cargo_packages": ["pii_filter", "rate_limiter"],
+                "mutation_cargo_packages": ["cpex_framework_bridge"],
+                "has_mutation_cargo_packages": True,
+                "mutation_jobs": [
+                    {
+                        "cargo_package": "cpex_framework_bridge",
+                        "in_diff": True,
+                        "test_packages": ["rate_limiter"],
+                    }
+                ],
+                "release_validation_tags": [],
+                "has_release_validation_tags": False,
+            })
 
     def test_ci_selection_ignores_tooling_config_for_shared_crate_mutation_jobs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2522,20 +2545,17 @@ class PluginCatalogTests(unittest.TestCase):
             result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = json.loads(result.stdout)
-            self.assertEqual(
-                payload,
-                {
-                    "plugins": ["rate_limiter"],
-                    "has_plugins": True,
-                    "plugin_count": 1,
-                    "cargo_packages": ["rate_limiter"],
-                    "mutation_cargo_packages": [],
-                    "has_mutation_cargo_packages": False,
-                    "mutation_jobs": [],
-                "release_validation_tags": [],
-                "has_release_validation_tags": False,
-                },
-            )
+            self._assert_payload_contains(payload, {
+                "plugins": ["rate_limiter"],
+                "has_plugins": True,
+                "plugin_count": 1,
+                "cargo_packages": ["rate_limiter"],
+                "mutation_cargo_packages": [],
+                "has_mutation_cargo_packages": False,
+                "mutation_jobs": [],
+            "release_validation_tags": [],
+            "has_release_validation_tags": False,
+            })
 
     def test_ci_selection_reports_mutation_package_for_single_rust_diff(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2570,22 +2590,19 @@ class PluginCatalogTests(unittest.TestCase):
             result = run_catalog("ci-selection", str(root), "diff", base_sha, "HEAD")
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = json.loads(result.stdout)
-            self.assertEqual(
-                payload,
-                {
-                    "plugins": ["rate_limiter"],
-                    "has_plugins": True,
-                    "plugin_count": 1,
-                    "cargo_packages": ["rate_limiter"],
-                    "mutation_cargo_packages": ["rate_limiter"],
-                    "has_mutation_cargo_packages": True,
-                    "mutation_jobs": [
-                        {"cargo_package": "rate_limiter", "in_diff": True, "test_packages": []}
-                    ],
-                    "release_validation_tags": [],
-                    "has_release_validation_tags": False,
-                },
-            )
+            self._assert_payload_contains(payload, {
+                "plugins": ["rate_limiter"],
+                "has_plugins": True,
+                "plugin_count": 1,
+                "cargo_packages": ["rate_limiter"],
+                "mutation_cargo_packages": ["rate_limiter"],
+                "has_mutation_cargo_packages": True,
+                "mutation_jobs": [
+                    {"cargo_package": "rate_limiter", "in_diff": True, "test_packages": []}
+                ],
+                "release_validation_tags": [],
+                "has_release_validation_tags": False,
+            })
 
     def test_ci_selection_field_prints_json_and_bool_scalars(self) -> None:
         expected_plugins = [
@@ -2638,6 +2655,26 @@ class PluginCatalogTests(unittest.TestCase):
         result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "has_release_validation_tags")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "false")
+
+        expected_split_fields = {
+            "rust_plugins": json.dumps(expected_plugins),
+            "python_plugins": "[]",
+            "has_rust_plugins": "true",
+            "has_python_plugins": "false",
+            "rust_plugin_count": "7",
+            "python_plugin_count": "0",
+            "rust_release_validation_tags": "[]",
+            "python_release_validation_tags": "[]",
+            "has_rust_release_validation_tags": "false",
+            "has_python_release_validation_tags": "false",
+        }
+        for field, expected in expected_split_fields.items():
+            with self.subTest(field=field):
+                result = run_catalog(
+                    "ci-selection-field", str(REPO_ROOT), "all", "", "", field
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), expected)
 
     def test_ci_selection_field_supports_diff_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -3979,6 +4016,445 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("pub use scanner::{detect_and_redact, scan_container};", lib_rs)
         self.assertIn("use secrets_detection_rust::detect_and_redact;", bench_rs)
         self.assertNotIn("use secrets_detection_rust::scanner::detect_and_redact;", bench_rs)
+
+    def test_python_plugin_discovery_reports_typed_language_records(self) -> None:
+        # Given a repository containing one Rust and one pure-Python plugin.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            rust_path = "plugins/rust/python-package/rust_demo"
+            (root / "Cargo.toml").write_text(
+                f'[workspace]\nmembers = ["{rust_path}"]\n'
+                '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n'
+            )
+            self._create_plugin(root, "rust_demo")
+            self._create_python_plugin(root, "python_demo")
+
+            # When the real catalog lists managed plugins.
+            result = run_catalog("list", str(root))
+
+            # Then both roots are discovered with language-specific Cargo metadata.
+            self.assertEqual(result.returncode, 0, result.stderr)
+            records = {record["slug"]: record for record in json.loads(result.stdout)["plugins"]}
+            self.assertEqual(records["rust_demo"]["language"], "rust")
+            self.assertEqual(records["rust_demo"]["cargo_package_name"], "rust_demo")
+            self.assertEqual(records["python_demo"]["language"], "python")
+            self.assertIsNone(records["python_demo"]["cargo_package_name"])
+
+    def test_python_plugin_validates_without_cargo_workspace_membership(self) -> None:
+        # Given a valid Python plugin that is only a root uv workspace member.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self._create_python_plugin(root, "python_demo")
+
+            # When catalog validation runs.
+            result = run_catalog("validate", str(root))
+
+            # Then the absent Cargo workspace membership is accepted.
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_python_validator_rejects_cargo_workspace_membership(self) -> None:
+        # Given a Python plugin incorrectly added to the Cargo workspace.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self._create_python_plugin(root, "python_demo")
+            (root / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["plugins/python/python_demo"]\n'
+            )
+
+            # When validation runs.
+            result = run_catalog("validate", str(root))
+
+            # Then language ownership prevents Cargo from claiming the Python plugin.
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("must not be cargo workspace members", result.stderr.lower())
+
+    def test_python_validator_rejects_invalid_project_metadata(self) -> None:
+        cases = {
+            "static project.version": (
+                '[project]\nname = "cpex-python-demo"\n',
+                True,
+            ),
+            "dynamic": (
+                '[project]\nname = "cpex-python-demo"\nversion = "0.2.0"\n'
+                'dynamic = ["version"]\n',
+                True,
+            ),
+            "package name": (
+                '[project]\nname = "wrong-name"\nversion = "0.2.0"\n',
+                False,
+            ),
+            "entry-points": (
+                '[project]\nname = "cpex-python-demo"\nversion = "0.2.0"\n',
+                False,
+            ),
+        }
+        for expected_error, (project_table, include_entry_point) in cases.items():
+            with self.subTest(expected_error=expected_error):
+                # Given a Python fixture with one invalid project metadata field.
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    root = Path(tmpdir)
+                    plugin_dir = self._create_python_plugin(root, "python_demo")
+                    suffix = ""
+                    if include_entry_point:
+                        suffix = (
+                            '\n[project.entry-points."cpex.plugins"]\n'
+                            'python_demo = "cpex_python_demo.plugin:PythonDemoPlugin"\n'
+                        )
+                    (plugin_dir / "pyproject.toml").write_text(project_table + suffix)
+
+                    # When validation runs.
+                    result = run_catalog("validate", str(root))
+
+                    # Then malformed Python project metadata is rejected.
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(expected_error, result.stderr.lower())
+
+    def test_python_validator_rejects_manifest_version_mismatch(self) -> None:
+        # Given a Python plugin whose manifest is 0.1.0 but project version is 0.2.0.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            plugin_dir = self._create_python_plugin(root, "python_demo", version="0.2.0")
+            manifest = plugin_dir / "cpex_python_demo" / "plugin-manifest.yaml"
+            manifest.write_text(manifest.read_text().replace('version: "0.2.0"', 'version: "0.1.0"'))
+
+            # When validation runs.
+            result = run_catalog("validate", str(root))
+
+            # Then the cross-file version mismatch is rejected.
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("version mismatch", result.stderr.lower())
+
+    def test_python_validator_rejects_noncanonical_manifest_kind(self) -> None:
+        # Given a Python plugin manifest using module:object instead of module.object.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            plugin_dir = self._create_python_plugin(root, "python_demo")
+            manifest = plugin_dir / "cpex_python_demo" / "plugin-manifest.yaml"
+            manifest.write_text(
+                manifest.read_text().replace(
+                    "cpex_python_demo.plugin.PythonDemoPlugin",
+                    "cpex_python_demo.plugin:PythonDemoPlugin",
+                )
+            )
+
+            # When validation runs.
+            result = run_catalog("validate", str(root))
+
+            # Then the established canonical kind rule is preserved.
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("module.object", result.stderr.lower())
+
+    def test_python_validator_requires_root_uv_workspace_membership(self) -> None:
+        # Given a Python plugin omitted from root [tool.uv.workspace].members.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self._create_python_plugin(root, "python_demo", add_workspace_member=False)
+
+            # When validation runs.
+            result = run_catalog("validate", str(root))
+
+            # Then the missing uv workspace member is rejected.
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("uv workspace", result.stderr.lower())
+
+    def test_mixed_change_routing_handles_both_plugin_roots_and_safe_test_fallback(self) -> None:
+        cases = {
+            "plugins/python/python_demo/README.md": ["python_demo"],
+            "plugins/tests/python_demo/test_plugin.py": ["python_demo"],
+            "plugins/tests/unknown_plugin/test_plugin.py": ["python_demo", "rust_demo"],
+        }
+        for changed_path, expected in cases.items():
+            with self.subTest(changed_path=changed_path):
+                # Given a committed mixed-language plugin repository.
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    root = Path(tmpdir)
+                    rust_path = "plugins/rust/python-package/rust_demo"
+                    (root / "Cargo.toml").write_text(
+                        f'[workspace]\nmembers = ["{rust_path}"]\n'
+                        '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n'
+                    )
+                    self._create_plugin(root, "rust_demo")
+                    self._create_python_plugin(root, "python_demo")
+                    subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True)
+                    subprocess.run(["git", "config", "user.name", "Test User"], cwd=root, check=True)
+                    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
+                    subprocess.run(["git", "add", "."], cwd=root, check=True)
+                    subprocess.run(
+                        ["git", "commit", "--no-verify", "-m", "seed layout"],
+                        cwd=root,
+                        check=True,
+                        capture_output=True,
+                    )
+                    base = subprocess.run(
+                        ["git", "rev-parse", "HEAD"],
+                        cwd=root,
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    ).stdout.strip()
+                    changed_file = root / changed_path
+                    changed_file.parent.mkdir(parents=True, exist_ok=True)
+                    changed_file.write_text("# changed\n")
+                    subprocess.run(["git", "add", "."], cwd=root, check=True)
+                    subprocess.run(
+                        ["git", "commit", "--no-verify", "-m", "change route"],
+                        cwd=root,
+                        check=True,
+                        capture_output=True,
+                    )
+
+                    # When diff selection runs.
+                    result = run_catalog("ci-selection", str(root), "diff", base, "HEAD")
+
+                    # Then direct paths are scoped and unknown integration slugs select all.
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(json.loads(result.stdout)["plugins"], expected)
+
+    def test_mixed_framework_bridge_change_emits_only_rust_mutation_packages(self) -> None:
+        # Given a mixed repository where the Rust plugin depends on framework_bridge.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            rust_path = "plugins/rust/python-package/rust_demo"
+            (root / "Cargo.toml").write_text(
+                f'[workspace]\nmembers = ["{rust_path}"]\n'
+                '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n'
+            )
+            rust_plugin = self._create_plugin(root, "rust_demo")
+            (rust_plugin / "Cargo.toml").write_text(
+                '[package]\nname = "rust_demo"\nversion = "0.0.1"\n'
+                'repository = "https://github.com/IBM/cpex-plugins"\n\n'
+                '[dependencies]\ncpex_framework_bridge = { workspace = true }\n'
+            )
+            self._create_python_plugin(root, "python_demo")
+            bridge = root / "crates" / "framework_bridge" / "src" / "lib.rs"
+            bridge.parent.mkdir(parents=True)
+            bridge.write_text("// seed\n")
+            subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test User"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(
+                ["git", "commit", "--no-verify", "-m", "seed layout"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
+            ).stdout.strip()
+            bridge.write_text("// changed\n")
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(
+                ["git", "commit", "--no-verify", "-m", "bridge change"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+
+            # When mutation selection processes the shared Rust crate change.
+            result = run_catalog("ci-selection", str(root), "diff", base, "HEAD")
+
+            # Then Python records never reach Cargo dependency or mutation payloads.
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["cargo_packages"], ["rust_demo"])
+            self.assertEqual(payload["mutation_jobs"][0]["test_packages"], ["rust_demo"])
+
+    def test_python_version_bump_emits_python_release_validation_tag(self) -> None:
+        # Given a committed Python plugin bumped from 0.1.0 to 0.2.0.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            plugin = self._create_python_plugin(root, "python_demo", version="0.1.0")
+            subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test User"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(
+                ["git", "commit", "--no-verify", "-m", "seed layout"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
+            ).stdout.strip()
+            pyproject = plugin / "pyproject.toml"
+            pyproject.write_text(pyproject.read_text().replace('version = "0.1.0"', 'version = "0.2.0"'))
+            manifest = plugin / "cpex_python_demo" / "plugin-manifest.yaml"
+            manifest.write_text(manifest.read_text().replace('version: "0.1.0"', 'version: "0.2.0"'))
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(
+                ["git", "commit", "--no-verify", "-m", "bump version"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+
+            # When diff selection computes release validation tags.
+            result = run_catalog("ci-selection", str(root), "diff", base, "HEAD")
+
+            # Then the Python pyproject version drives both aggregate and split tags.
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["release_validation_tags"], ["python-demo-v0.2.0"])
+            self.assertEqual(payload["python_release_validation_tags"], ["python-demo-v0.2.0"])
+            self.assertTrue(payload["has_python_release_validation_tags"])
+
+    def test_python_release_info_reports_language_and_path(self) -> None:
+        # Given a valid Python plugin.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self._create_python_plugin(root, "python_demo")
+
+            # When release info resolves its canonical tag.
+            result = run_catalog("release-info", str(root), "python-demo-v0.2.0")
+
+            # Then release metadata identifies the Python catalog source.
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["language"], "python")
+            self.assertEqual(payload["path"], "plugins/python/python_demo")
+
+    def test_ci_selection_reports_language_splits_and_counts(self) -> None:
+        # Given the pre-Python-plugin repository and a mixed fixture repository.
+        result = run_catalog("ci-selection", str(REPO_ROOT), "all", "", "")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        repository_payload = json.loads(result.stdout)
+
+        # Then all-mode characterizes the required 7 Rust / 0 Python baseline.
+        self.assertEqual(repository_payload["rust_plugin_count"], 7)
+        self.assertEqual(repository_payload["python_plugin_count"], 0)
+        self.assertTrue(repository_payload["has_rust_plugins"])
+        self.assertFalse(repository_payload["has_python_plugins"])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            rust_path = "plugins/rust/python-package/rust_demo"
+            (root / "Cargo.toml").write_text(
+                f'[workspace]\nmembers = ["{rust_path}"]\n'
+                '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n'
+            )
+            self._create_plugin(root, "rust_demo")
+            self._create_python_plugin(root, "python_demo")
+
+            # When mixed all-mode selection runs.
+            result = run_catalog("ci-selection", str(root), "all", "", "")
+
+            # Then aggregate compatibility fields and language splits agree.
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["plugins"], ["python_demo", "rust_demo"])
+            self.assertEqual(payload["rust_plugins"], ["rust_demo"])
+            self.assertEqual(payload["python_plugins"], ["python_demo"])
+            self.assertEqual(payload["rust_plugin_count"], 1)
+            self.assertEqual(payload["python_plugin_count"], 1)
+            self.assertEqual(payload["cargo_packages"], ["rust_demo"])
+            self.assertEqual(payload["mutation_cargo_packages"], ["rust_demo"])
+            self.assertEqual(payload["mutation_jobs"][0]["cargo_package"], "rust_demo")
+
+    def test_ci_selection_validator_reemits_every_split_field(self) -> None:
+        # Given a complete valid payload containing aggregate and split fields.
+        payload = {
+            "plugins": ["python_demo", "rust_demo"],
+            "rust_plugins": ["rust_demo"],
+            "python_plugins": ["python_demo"],
+            "has_plugins": True,
+            "has_rust_plugins": True,
+            "has_python_plugins": True,
+            "plugin_count": 2,
+            "rust_plugin_count": 1,
+            "python_plugin_count": 1,
+            "cargo_packages": ["rust_demo"],
+            "mutation_cargo_packages": [],
+            "has_mutation_cargo_packages": False,
+            "mutation_jobs": [],
+            "release_validation_tags": ["python-demo-v0.2.0"],
+            "rust_release_validation_tags": [],
+            "python_release_validation_tags": ["python-demo-v0.2.0"],
+            "has_release_validation_tags": True,
+            "has_rust_release_validation_tags": False,
+            "has_python_release_validation_tags": True,
+        }
+
+        # When the real validator parses and normalizes it.
+        result = subprocess.run(
+            ["python3", str(CI_SELECTION_VALIDATOR)],
+            input=json.dumps(payload),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        # Then every field survives strict validation unchanged.
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), payload)
+
+    def test_ci_selection_validator_rejects_missing_malformed_and_mismatched_split_fields(self) -> None:
+        valid_payload = {
+            "plugins": ["python_demo"],
+            "rust_plugins": [],
+            "python_plugins": ["python_demo"],
+            "has_plugins": True,
+            "has_rust_plugins": False,
+            "has_python_plugins": True,
+            "plugin_count": 1,
+            "rust_plugin_count": 0,
+            "python_plugin_count": 1,
+            "cargo_packages": [],
+            "mutation_cargo_packages": [],
+            "has_mutation_cargo_packages": False,
+            "mutation_jobs": [],
+            "release_validation_tags": [],
+            "rust_release_validation_tags": [],
+            "python_release_validation_tags": [],
+            "has_release_validation_tags": False,
+            "has_rust_release_validation_tags": False,
+            "has_python_release_validation_tags": False,
+        }
+        malformed_payloads = {
+            "missing": {key: value for key, value in valid_payload.items() if key != "python_plugins"},
+            "wrong type": {**valid_payload, "has_python_plugins": "true"},
+            "malformed slug": {**valid_payload, "python_plugins": ["python-demo"]},
+            "count mismatch": {**valid_payload, "python_plugin_count": 2},
+        }
+        for case, payload in malformed_payloads.items():
+            with self.subTest(case=case):
+                # When malformed input crosses the validator boundary.
+                result = subprocess.run(
+                    ["python3", str(CI_SELECTION_VALIDATOR)],
+                    input=json.dumps(payload),
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+
+                # Then it is rejected rather than normalized into misleading success.
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_coverage_default_expected_plugins_remains_rust_only(self) -> None:
+        # Given mixed discovery and a Rust-only coverage report.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            rust_path = "plugins/rust/python-package/rust_demo"
+            (root / "Cargo.toml").write_text(
+                f'[workspace]\nmembers = ["{rust_path}"]\n'
+                '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n'
+            )
+            self._create_plugin(root, "rust_demo")
+            self._create_python_plugin(root, "python_demo")
+            report = root / "coverage.xml"
+            report.write_text(
+                '<coverage><packages><package><classes>'
+                '<class filename="plugins/rust/python-package/rust_demo/src/lib.rs">'
+                '<lines><line number="1" hits="1"/></lines></class>'
+                '</classes></package></packages></coverage>'
+            )
+
+            # When coverage-check uses its discovered default expectation.
+            result = run_catalog("coverage-check", str(root), str(report), "100")
+
+            # Then a pure-Python plugin is not required in Rust coverage XML.
+            self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

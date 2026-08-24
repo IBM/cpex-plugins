@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plugin discovery and validation for managed Rust Python-package plugins."""
+"""Plugin discovery and validation for managed CPEX plugins."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from pathlib import Path
 
 
 MANAGED_ROOT = Path("plugins/rust/python-package")
+PYTHON_MANAGED_ROOT = Path("plugins/python")
 REPOSITORY_URL = "https://github.com/IBM/cpex-plugins"
 SHARED_PATH_PREFIXES = (
     "Makefile",
@@ -131,8 +132,9 @@ class CatalogError(Exception):
 class PluginRecord:
     slug: str
     path: str
+    language: str
     package_name: str
-    cargo_package_name: str
+    cargo_package_name: str | None
     module_name: str
     kind: str
     version: str
@@ -275,6 +277,12 @@ def discover_plugins(root: Path) -> list[PluginRecord]:
         plugins.append(
             validate_plugin_dir(root, plugin_dir, workspace_members, workspace_package)
         )
+    python_root = root / PYTHON_MANAGED_ROOT
+    if python_root.exists():
+        for plugin_dir in sorted(path for path in python_root.iterdir() if path.is_dir()):
+            plugins.append(
+                validate_plugin_dir(root, plugin_dir, workspace_members, workspace_package)
+            )
     _validate_workspace_members(workspace_members, plugins)
     _validate_workspace_dependency_ownership(root, plugins)
     return plugins
@@ -283,11 +291,20 @@ def discover_plugins(root: Path) -> list[PluginRecord]:
 def _validate_workspace_members(
     workspace_members: set[str], plugins: list[PluginRecord]
 ) -> None:
-    expected_members = {plugin.path for plugin in plugins}
+    expected_members = {plugin.path for plugin in plugins if plugin.language == "rust"}
     if not expected_members.issubset(workspace_members):
         missing = sorted(expected_members - workspace_members)
         raise CatalogError(
             f"Workspace members must include all discovered managed plugins: missing {missing}"
+        )
+    python_members = sorted(
+        plugin.path
+        for plugin in plugins
+        if plugin.language == "python" and plugin.path in workspace_members
+    )
+    if python_members:
+        raise CatalogError(
+            f"Pure-Python plugins must not be Cargo workspace members: {python_members}"
         )
 
 
@@ -324,7 +341,9 @@ def _workspace_package_metadata(root: Path) -> dict:
 def _validate_workspace_dependency_ownership(
     root: Path, plugins: list[PluginRecord]
 ) -> None:
-    plugin_records = {plugin.slug: plugin for plugin in plugins}
+    plugin_records = {
+        plugin.slug: plugin for plugin in plugins if plugin.language == "rust"
+    }
     if set(plugin_records) != set(REQUIRED_PLUGIN_WORKSPACE_DEPENDENCIES):
         return
 
@@ -375,85 +394,122 @@ def validate_plugin_dir(
     expected_module_name = _expected_module_name(slug)
     module_dir = plugin_dir / expected_module_name
     manifest_path = module_dir / "plugin-manifest.yaml"
+    relative_plugin_path = plugin_dir.relative_to(root).as_posix()
+    language = (
+        "python"
+        if relative_plugin_path.startswith(f"{PYTHON_MANAGED_ROOT.as_posix()}/")
+        else "rust"
+    )
 
-    required_paths = (
+    required_paths = [
         plugin_dir / "pyproject.toml",
-        plugin_dir / "Cargo.toml",
         plugin_dir / "Makefile",
         plugin_dir / "README.md",
         module_dir / "__init__.py",
         manifest_path,
-    )
+    ]
+    if language == "rust":
+        required_paths.append(plugin_dir / "Cargo.toml")
     for required in required_paths:
         if not required.exists():
             raise CatalogError(f"{plugin_dir}: missing required path {required.relative_to(root)}")
 
     pyproject = _parse_pyproject(plugin_dir / "pyproject.toml")
-    cargo = _parse_cargo(plugin_dir / "Cargo.toml")
 
     project = pyproject.get("project", {})
     if not isinstance(project, dict):
         raise CatalogError(f"{plugin_dir}: pyproject.toml [project] must be a table")
-    tool = pyproject.get("tool", {})
-    maturin = tool.get("maturin", {}) if isinstance(tool, dict) else {}
-    if not isinstance(maturin, dict):
-        raise CatalogError(f"{plugin_dir}: pyproject.toml tool.maturin must be a table")
-    package = cargo.get("package", {})
-    if not isinstance(package, dict):
-        raise CatalogError(f"{plugin_dir}: Cargo.toml [package] must be a table")
-    relative_plugin_path = plugin_dir.relative_to(root).as_posix()
-
-    if relative_plugin_path not in workspace_members:
-        raise CatalogError(
-            f"{plugin_dir}: plugin is missing from the top-level Cargo workspace"
-        )
-
     package_name = project.get("name")
     if package_name != expected_package_name:
         raise CatalogError(
             f"{plugin_dir}: package name must be {expected_package_name}, got {package_name}"
         )
 
-    dynamic = project.get("dynamic", [])
-    if not isinstance(dynamic, list) or any(not isinstance(item, str) for item in dynamic):
-        raise CatalogError(
-            f"{plugin_dir}: pyproject.toml must declare dynamic version sourced from Cargo.toml"
+    if language == "python":
+        dynamic = project.get("dynamic", [])
+        if not isinstance(dynamic, list) or any(
+            not isinstance(item, str) for item in dynamic
+        ):
+            raise CatalogError(f"{plugin_dir}: pyproject.toml project.dynamic must be a string list")
+        if "version" in dynamic:
+            raise CatalogError(
+                f"{plugin_dir}: pure-Python plugin version must be static, not dynamic"
+            )
+        version = project.get("version")
+        if not isinstance(version, str) or not version:
+            raise CatalogError(
+                f"{plugin_dir}: pyproject.toml must define a non-empty static project.version"
+            )
+        root_pyproject = _parse_pyproject(root / "pyproject.toml")
+        root_tool = root_pyproject.get("tool", {})
+        root_uv = root_tool.get("uv", {}) if isinstance(root_tool, dict) else {}
+        root_workspace = root_uv.get("workspace", {}) if isinstance(root_uv, dict) else {}
+        uv_members = (
+            root_workspace.get("members") if isinstance(root_workspace, dict) else None
         )
-    if "version" not in dynamic or "version" in project:
-        raise CatalogError(
-            f"{plugin_dir}: pyproject.toml must declare dynamic version sourced from Cargo.toml"
-        )
-
-    module_name = maturin.get("module-name")
-    expected_maturin_module_name = _expected_maturin_module_name(slug)
-    if module_name != expected_maturin_module_name:
-        raise CatalogError(
-            f"{plugin_dir}: tool.maturin.module-name must be {expected_maturin_module_name}, got {module_name}"
-        )
-
-    python_source = maturin.get("python-source")
-    if python_source != ".":
-        raise CatalogError(
-            f"{plugin_dir}: tool.maturin.python-source must be '.', got {python_source}"
-        )
-
-    repository = package.get("repository")
-    if isinstance(repository, dict) and repository.get("workspace") is True:
-        repository = workspace_package.get("repository")
-    if repository != REPOSITORY_URL:
-        raise CatalogError(
-            f"{plugin_dir}: repository metadata must point to {REPOSITORY_URL}, got {repository}"
-        )
-
-    version = package.get("version")
-    if not isinstance(version, str) or not version:
-        raise CatalogError(f"{plugin_dir}: Cargo.toml must define a non-empty package.version")
-
-    cargo_package_name = package.get("name")
-    if cargo_package_name != slug:
-        raise CatalogError(
-            f"{plugin_dir}: Cargo.toml [package].name must be {slug}, got {cargo_package_name}"
-        )
+        if not isinstance(uv_members, list) or any(
+            not isinstance(member, str) for member in uv_members
+        ):
+            raise CatalogError(
+                "Root pyproject.toml must define [tool.uv.workspace].members as a string list"
+            )
+        if relative_plugin_path not in uv_members:
+            raise CatalogError(
+                f"{plugin_dir}: plugin is missing from the root uv workspace"
+            )
+        cargo_package_name = None
+    else:
+        cargo = _parse_cargo(plugin_dir / "Cargo.toml")
+        tool = pyproject.get("tool", {})
+        maturin = tool.get("maturin", {}) if isinstance(tool, dict) else {}
+        if not isinstance(maturin, dict):
+            raise CatalogError(f"{plugin_dir}: pyproject.toml tool.maturin must be a table")
+        package = cargo.get("package", {})
+        if not isinstance(package, dict):
+            raise CatalogError(f"{plugin_dir}: Cargo.toml [package] must be a table")
+        if relative_plugin_path not in workspace_members:
+            raise CatalogError(
+                f"{plugin_dir}: plugin is missing from the top-level Cargo workspace"
+            )
+        dynamic = project.get("dynamic", [])
+        if not isinstance(dynamic, list) or any(
+            not isinstance(item, str) for item in dynamic
+        ):
+            raise CatalogError(
+                f"{plugin_dir}: pyproject.toml must declare dynamic version sourced from Cargo.toml"
+            )
+        if "version" not in dynamic or "version" in project:
+            raise CatalogError(
+                f"{plugin_dir}: pyproject.toml must declare dynamic version sourced from Cargo.toml"
+            )
+        module_name = maturin.get("module-name")
+        expected_maturin_module_name = _expected_maturin_module_name(slug)
+        if module_name != expected_maturin_module_name:
+            raise CatalogError(
+                f"{plugin_dir}: tool.maturin.module-name must be {expected_maturin_module_name}, got {module_name}"
+            )
+        python_source = maturin.get("python-source")
+        if python_source != ".":
+            raise CatalogError(
+                f"{plugin_dir}: tool.maturin.python-source must be '.', got {python_source}"
+            )
+        repository = package.get("repository")
+        if isinstance(repository, dict) and repository.get("workspace") is True:
+            repository = workspace_package.get("repository")
+        if repository != REPOSITORY_URL:
+            raise CatalogError(
+                f"{plugin_dir}: repository metadata must point to {REPOSITORY_URL}, got {repository}"
+            )
+        version = package.get("version")
+        if not isinstance(version, str) or not version:
+            raise CatalogError(
+                f"{plugin_dir}: Cargo.toml must define a non-empty package.version"
+            )
+        cargo_package_name = package.get("name")
+        if cargo_package_name != slug:
+            raise CatalogError(
+                f"{plugin_dir}: Cargo.toml [package].name must be {slug}, got {cargo_package_name}"
+            )
 
     manifest_version = _manifest_version(manifest_path)
     if manifest_version != version:
@@ -475,6 +531,7 @@ def validate_plugin_dir(
     return PluginRecord(
         slug=slug,
         path=relative_plugin_path,
+        language=language,
         package_name=expected_package_name,
         cargo_package_name=cargo_package_name,
         module_name=expected_module_name,
@@ -522,6 +579,18 @@ def _cargo_version_from_text(text: str) -> str | None:
     return version if isinstance(version, str) else None
 
 
+def _project_version_from_text(text: str) -> str | None:
+    try:
+        payload = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return None
+    project = payload.get("project", {})
+    if not isinstance(project, dict):
+        return None
+    version = project.get("version")
+    return version if isinstance(version, str) else None
+
+
 def changed_plugins(root: Path, base: str, head: str) -> list[str]:
     plugins = discover_plugins(root)
     return _changed_plugins_for_records(root, plugins, _git_changed_paths(root, base, head))
@@ -542,13 +611,19 @@ def _changed_plugins_for_records(
         return sorted(plugin_lookup)
 
     changed: set[str] = set()
-    managed_prefix = f"{MANAGED_ROOT.as_posix()}/"
+    managed_prefixes = (
+        f"{MANAGED_ROOT.as_posix()}/",
+        f"{PYTHON_MANAGED_ROOT.as_posix()}/",
+    )
     integration_prefix = "plugins/tests/"
     has_lockfile_change = "Cargo.lock" in changed_path_set
     for path in normalized_changed_paths:
         if path == "Cargo.lock":
             continue
-        if not path.startswith(managed_prefix):
+        matching_prefix = next(
+            (prefix for prefix in managed_prefixes if path.startswith(prefix)), None
+        )
+        if matching_prefix is None:
             if not path.startswith(integration_prefix):
                 continue
             relative = path[len(integration_prefix):]
@@ -556,7 +631,7 @@ def _changed_plugins_for_records(
             if slug not in plugin_lookup:
                 return sorted(plugin_lookup)
         else:
-            relative = path[len(managed_prefix):]
+            relative = path[len(matching_prefix):]
         slug = relative.split("/", maxsplit=1)[0]
         if slug in plugin_lookup:
             changed.add(slug)
@@ -566,6 +641,8 @@ def _changed_plugins_for_records(
 
 
 def _plugin_depends_on_crate(root: Path, record: PluginRecord, crate_name: str) -> bool:
+    if record.language != "rust":
+        return False
     manifest_path = root / record.path / "Cargo.toml"
     with manifest_path.open("rb") as handle:
         manifest = tomllib.load(handle)
@@ -575,7 +652,9 @@ def _plugin_depends_on_crate(root: Path, record: PluginRecord, crate_name: str) 
 def _mutation_jobs_for_records(
     root: Path, plugins: list[PluginRecord], changed_paths: list[str]
 ) -> list[dict[str, object]]:
-    plugin_lookup = {record.slug: record for record in plugins}
+    plugin_lookup = {
+        record.slug: record for record in plugins if record.language == "rust"
+    }
     jobs: dict[str, dict[str, object]] = {}
     managed_prefix = f"{MANAGED_ROOT.as_posix()}/"
 
@@ -592,7 +671,11 @@ def _mutation_jobs_for_records(
         if path.startswith("crates/framework_bridge/"):
             test_packages: list[str] = []
             for record in plugins:
-                if _plugin_depends_on_crate(root, record, "cpex_framework_bridge"):
+                if (
+                    record.language == "rust"
+                    and record.cargo_package_name is not None
+                    and _plugin_depends_on_crate(root, record, "cpex_framework_bridge")
+                ):
                     test_packages.append(record.cargo_package_name)
             add_job("cpex_framework_bridge", in_diff=True, test_packages=sorted(test_packages))
             continue
@@ -601,7 +684,9 @@ def _mutation_jobs_for_records(
         relative = path[len(managed_prefix):]
         slug = relative.split("/", maxsplit=1)[0]
         if slug in plugin_lookup:
-            add_job(plugin_lookup[slug].cargo_package_name, in_diff=True)
+            cargo_package_name = plugin_lookup[slug].cargo_package_name
+            if cargo_package_name is not None:
+                add_job(cargo_package_name, in_diff=True)
 
     return [jobs[key] for key in sorted(jobs)]
 
@@ -611,14 +696,22 @@ def _release_validation_tags_for_records(
 ) -> list[str]:
     tags: list[str] = []
     for plugin in plugins:
-        cargo_path = f"{plugin.path}/Cargo.toml"
-        if cargo_path not in changed_paths:
+        version_path = (
+            f"{plugin.path}/Cargo.toml"
+            if plugin.language == "rust"
+            else f"{plugin.path}/pyproject.toml"
+        )
+        if version_path not in changed_paths:
             continue
-        old_text = _git_file_text(root, base, cargo_path)
+        old_text = _git_file_text(root, base, version_path)
         if old_text is None:
             tags.append(f"{plugin.slug.replace('_', '-')}-v{plugin.version}")
             continue
-        old_version = _cargo_version_from_text(old_text)
+        old_version = (
+            _cargo_version_from_text(old_text)
+            if plugin.language == "rust"
+            else _project_version_from_text(old_text)
+        )
         if old_version is not None and old_version != plugin.version:
             tags.append(f"{plugin.slug.replace('_', '-')}-v{plugin.version}")
     return sorted(tags)
@@ -636,6 +729,8 @@ def ci_selection(root: Path, mode: str, base: str | None = None, head: str | Non
                 "test_packages": [],
             }
             for slug in selected
+            if plugin_lookup[slug].language == "rust"
+            and plugin_lookup[slug].cargo_package_name is not None
         ]
         release_validation_tags: list[str] = []
     else:
@@ -647,18 +742,48 @@ def ci_selection(root: Path, mode: str, base: str | None = None, head: str | Non
         release_validation_tags = _release_validation_tags_for_records(
             root, plugins, changed_paths, base
         )
-    cargo_packages = [plugin_lookup[slug].cargo_package_name for slug in selected]
+    rust_plugins = [slug for slug in selected if plugin_lookup[slug].language == "rust"]
+    python_plugins = [
+        slug for slug in selected if plugin_lookup[slug].language == "python"
+    ]
+    cargo_packages = [
+        plugin_lookup[slug].cargo_package_name
+        for slug in rust_plugins
+        if plugin_lookup[slug].cargo_package_name is not None
+    ]
     mutation_cargo_packages = [str(job["cargo_package"]) for job in mutation_jobs]
+    rust_release_validation_tags = [
+        tag
+        for tag in release_validation_tags
+        if plugin_lookup[tag.rsplit("-v", maxsplit=1)[0].replace("-", "_")].language
+        == "rust"
+    ]
+    python_release_validation_tags = [
+        tag
+        for tag in release_validation_tags
+        if plugin_lookup[tag.rsplit("-v", maxsplit=1)[0].replace("-", "_")].language
+        == "python"
+    ]
     return {
         "plugins": selected,
+        "rust_plugins": rust_plugins,
+        "python_plugins": python_plugins,
         "has_plugins": bool(selected),
+        "has_rust_plugins": bool(rust_plugins),
+        "has_python_plugins": bool(python_plugins),
         "plugin_count": len(selected),
+        "rust_plugin_count": len(rust_plugins),
+        "python_plugin_count": len(python_plugins),
         "cargo_packages": cargo_packages,
         "mutation_cargo_packages": mutation_cargo_packages,
         "has_mutation_cargo_packages": bool(mutation_cargo_packages),
         "mutation_jobs": mutation_jobs,
         "release_validation_tags": release_validation_tags,
+        "rust_release_validation_tags": rust_release_validation_tags,
+        "python_release_validation_tags": python_release_validation_tags,
         "has_release_validation_tags": bool(release_validation_tags),
+        "has_rust_release_validation_tags": bool(rust_release_validation_tags),
+        "has_python_release_validation_tags": bool(python_release_validation_tags),
     }
 
 
@@ -678,7 +803,11 @@ def coverage_check(
     except ET.ParseError as exc:
         raise CatalogError(f"Invalid coverage XML in {report_path}: {exc}") from exc
 
-    known_plugins = {plugin.slug for plugin in discover_plugins(root)}
+    known_plugins = {
+        plugin.slug
+        for plugin in discover_plugins(root)
+        if plugin.language == "rust"
+    }
     expected_plugin_set = set(expected_plugins) if expected_plugins is not None else known_plugins
     unknown_expected = sorted(expected_plugin_set - known_plugins)
     if unknown_expected:
@@ -771,7 +900,7 @@ def release_info(root: Path, tag: str) -> PluginRecord:
         )
     if plugin.version != version:
         raise CatalogError(
-            f"Release tag version {version} does not match Cargo/plugin manifest version {plugin.version} for {slug}"
+            f"Release tag version {version} does not match catalog plugin version {plugin.version} for {slug}"
         )
     return plugin
 
@@ -877,6 +1006,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=(
             "slug",
             "path",
+            "language",
             "package_name",
             "cargo_package_name",
             "module_name",
@@ -901,14 +1031,24 @@ def build_parser() -> argparse.ArgumentParser:
         "field",
         choices=(
             "plugins",
+            "rust_plugins",
+            "python_plugins",
             "has_plugins",
+            "has_rust_plugins",
+            "has_python_plugins",
             "plugin_count",
+            "rust_plugin_count",
+            "python_plugin_count",
             "cargo_packages",
             "mutation_cargo_packages",
             "has_mutation_cargo_packages",
             "mutation_jobs",
             "release_validation_tags",
+            "rust_release_validation_tags",
+            "python_release_validation_tags",
             "has_release_validation_tags",
+            "has_rust_release_validation_tags",
+            "has_python_release_validation_tags",
         ),
     )
 
