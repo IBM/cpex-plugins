@@ -645,6 +645,74 @@ mod tests {
         });
     }
 
+    // Kill: replace / with % in token_count = length / cpt.
+    // length=9, cpt=4, max_tokens=1:
+    //   / → 9/4=2 > 1 → violation ✓
+    //   % → 9%4=1 > 1 → false → no violation ✗ (mutant survives without this test)
+    #[test]
+    fn process_string_token_mode_modulo_mutant_is_killed() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            let cfg = OutputLengthGuardConfig {
+                max_tokens: Some(1),
+                limit_mode: LimitMode::Token,
+                strategy: Strategy::Block,
+                chars_per_token: 4,
+                max_chars: None,
+                ellipsis: "…".to_string(),
+                ..Default::default()
+            };
+            // length=9: 9/4=2 > 1 → violation; 9%4=1 is not > 1 → would pass through
+            let s = "abcdefghi".into_pyobject(py).unwrap().into_any(); // 9 chars
+            match process_structured_data(py, &s, &cfg, "", 0).unwrap() {
+                ProcessResult::Violation { code, .. } => {
+                    assert_eq!(
+                        code, "OUTPUT_TOKEN_VIOLATION",
+                        "9/4=2 > max_tokens=1 must violate"
+                    )
+                }
+                ProcessResult::Ok { .. } => {
+                    panic!(
+                        "expected token violation: 9/4=2 > max_tokens=1; % mutant gives 9%4=1 which would pass"
+                    )
+                }
+            }
+        });
+    }
+
+    // Kill: replace / with * in token_count = length / cpt.
+    // length=4, cpt=4, max_tokens=1:
+    //   / → 4/4=1 > 1 → false → no violation ✓
+    //   * → 4*4=16 > 1 → violation ✗ (mutant would block)
+    #[test]
+    fn process_string_token_mode_multiply_mutant_is_killed() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            let cfg = OutputLengthGuardConfig {
+                max_tokens: Some(1),
+                limit_mode: LimitMode::Token,
+                strategy: Strategy::Block,
+                chars_per_token: 4,
+                max_chars: None,
+                ellipsis: "…".to_string(),
+                ..Default::default()
+            };
+            // length=4: 4/4=1, NOT > 1 → no violation; 4*4=16 > 1 → would block
+            let s = "abcd".into_pyobject(py).unwrap().into_any(); // exactly 1 token
+            match process_structured_data(py, &s, &cfg, "", 0).unwrap() {
+                ProcessResult::Ok { modified, .. } => {
+                    assert!(
+                        !modified,
+                        "4 chars = 1 token = max_tokens: must not block or modify"
+                    );
+                }
+                ProcessResult::Violation { .. } => {
+                    panic!("4/4=1 is not > max_tokens=1; * mutant gives 4*4=16 which would block");
+                }
+            }
+        });
+    }
+
     // Kill: delete ! in `if !below_min && !above_max` (line 108)
     #[test]
     fn process_string_within_both_limits_passes_through_unmodified() {
@@ -792,6 +860,120 @@ mod tests {
             d.set_item("k", "leaf").unwrap();
             let result = generate_text_representation(d.as_any(), 9).unwrap();
             assert_eq!(result, "leaf");
+        });
+    }
+
+    // ── process_list depth+1 vs depth*1 (structured.rs:250) ─────────────────
+    // Kill: replace + with * in `depth + 1` inside process_list recursive call.
+    // With depth*1, the depth never increments, so max_recursion_depth is never reached.
+    // Strategy: set max_recursion_depth=1, build list-inside-list (depth 0 → 1 → must hit 2).
+    // With correct depth+1: outer call at depth=0, list processes items at depth=1.
+    //   Items at depth=1 are strings → process_string at depth=1. But depth check is
+    //   `if depth > max_recursion_depth` at the TOP of process_structured_data.
+    //   depth=1 > max=1 → false (doesn't fire). We need depth=2 to trigger.
+    // Use max_recursion_depth=1, and a list containing another list containing a string.
+    // Outer list: depth=0 → items processed at depth=1.
+    // Inner list: depth=1 → items processed at depth=2. depth=2 > max=1 → fires!
+    // With depth*1: items always processed at depth=0 (or depth*1=depth=0 since initial depth=0).
+    //   Actually depth*1 = depth. So if initial depth=0: 0*1=0, never increments.
+    //   Items in inner list would be processed at depth=0, so no depth violation.
+    #[test]
+    fn process_list_depth_increments_catch_deeply_nested_list() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            let mut cfg = block_char_cfg(10000); // no char limit
+            cfg.max_recursion_depth = 1;
+            // Build: [["short_string"]] — depth 0 → list → depth 1 → list → depth 2 > 1 → violation
+            let inner_list = PyList::new(py, ["short_string"]).unwrap();
+            let outer_list = PyList::new(py, [inner_list]).unwrap();
+            // With correct depth+1: outer processes items at depth=1; inner list at depth=1
+            // processes strings at depth=2; depth=2 > max=1 → STRUCTURE_DEPTH_VIOLATION.
+            // With depth*1 (depth never increments): always at depth=0, never fires.
+            match process_structured_data(py, outer_list.as_any(), &cfg, "", 0).unwrap() {
+                ProcessResult::Violation { code, .. } => {
+                    assert_eq!(
+                        code, "STRUCTURE_DEPTH_VIOLATION",
+                        "expected depth violation from nested list, got: {}",
+                        code
+                    );
+                }
+                ProcessResult::Ok { .. } => {
+                    panic!("nested list beyond max_recursion_depth must produce a depth violation")
+                }
+            }
+        });
+    }
+
+    // ── process_dict depth+1 vs depth*1 (structured.rs:323) ─────────────────
+    // Same as above but using nested dicts.
+    #[test]
+    fn process_dict_depth_increments_catch_deeply_nested_dict() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            let mut cfg = block_char_cfg(10000);
+            cfg.max_recursion_depth = 1;
+            // Build: {"outer": {"inner": "value"}} — depth 0 → dict → depth 1 → dict → depth 2 > 1 → violation
+            let inner_dict = PyDict::new(py);
+            inner_dict.set_item("inner", "value").unwrap();
+            let outer_dict = PyDict::new(py);
+            outer_dict.set_item("outer", inner_dict).unwrap();
+            match process_structured_data(py, outer_dict.as_any(), &cfg, "", 0).unwrap() {
+                ProcessResult::Violation { code, .. } => {
+                    assert_eq!(
+                        code, "STRUCTURE_DEPTH_VIOLATION",
+                        "expected depth violation from nested dict, got: {}",
+                        code
+                    );
+                }
+                ProcessResult::Ok { .. } => {
+                    panic!("nested dict beyond max_recursion_depth must produce a depth violation")
+                }
+            }
+        });
+    }
+
+    // ── generate_text_representation depth+1 vs depth*1 (structured.rs:356) ──
+    // Kill: replace + with * in the recursive `generate_text_representation(&val, depth + 1)`.
+    // With depth*1: depth = 0 always (since 0*1=0). A chain of 11 single-key dicts would
+    // never hit the depth<10 limit → infinite recursion or incorrect result.
+    // We verify correct behaviour by using exactly 11 levels of nesting:
+    //   d1 = {"k": d2}, d2 = {"k": d3}, ..., d10 = {"k": d11}, d11 = {"k": "leaf"}
+    // With correct depth+1: unwrapping stops at depth=10 → json_dumps → contains "k"/"leaf".
+    // With depth*1: never increments, so all 11 levels are traversed → returns "leaf".
+    // BUT we verify from depth=0 that the FIRST single-key dict IS unwrapped (depth=0 < 10).
+    // What matters is what happens at depth=10 inside the chain. The test at depth=10 already
+    // covers that. For the +1 vs *1 mutation we need the RECURSIVE call to hit the limit.
+    // Test: build chain of 10 nested dicts (depth 0-9 each unwrap), leaf at d10.
+    // With +1: d0 calls d1 at depth=1, d1 calls d2 at depth=2, ..., d9 calls d10 at depth=10.
+    //   At depth=10: 10 < 10 is false → json_dumps(d10) → contains "k".
+    // With *1: d0 calls d1 at depth=0*1=0 (stays 0 each time) → "leaf" returned forever.
+    // So at depth=0 with a 10-level chain: correct (+1) → JSON; mutant (*1) → "leaf".
+    #[test]
+    fn generate_text_representation_chain_of_10_stops_at_depth_limit() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            // Build a chain of 11 nested single-key dicts: each has key "k" pointing to the next.
+            // The innermost (11th) is {"k": "leaf"}.
+            // At depth=0, 10 dicts can be unwrapped (depths 0-9 are < 10).
+            // The 11th dict is reached at depth=10 → depth < 10 is false → json_dumps → not "leaf".
+            let mut current: pyo3::Py<pyo3::PyAny> = {
+                let d = PyDict::new(py);
+                d.set_item("k", "leaf").unwrap();
+                d.into_any().unbind()
+            };
+            for _ in 0..10 {
+                let d = PyDict::new(py);
+                d.set_item("k", current.bind(py)).unwrap();
+                current = d.into_any().unbind();
+            }
+            // current is the outermost dict (10 wrappers + 1 leaf = 11 levels total)
+            let result = generate_text_representation(current.bind(py), 0).unwrap();
+            // With correct +1: the 11th dict (at depth=10) is json_dumps'd → NOT "leaf".
+            // With *1 mutation: always at depth=0, unwraps all → returns "leaf".
+            assert_ne!(
+                result, "leaf",
+                "chain of 11 single-key dicts must not return bare 'leaf' (depth limit must fire at depth=10)"
+            );
         });
     }
 }

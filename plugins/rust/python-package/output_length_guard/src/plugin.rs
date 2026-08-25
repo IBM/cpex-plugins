@@ -1502,4 +1502,393 @@ class Payload:
             );
         });
     }
+
+    // ── new_text_str (plugin.rs:802): replace with String::new() or "xyzzy" ──
+    // The function is called to produce the `new_text` string used in build_text_meta.
+    // build_text_meta sets new_length = new_text.len(). If the mutant returns "",
+    // new_length == 0; if it returns "xyzzy", new_length == 5 (always).
+    // We kill both by asserting new_length > 0 AND new_length != 5.
+    #[test]
+    fn truncated_plain_string_new_length_is_positive_and_not_xyzzy() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let core = make_core(Some(8), "truncate").unwrap();
+            // "hello world" = 11 chars > 8 → truncated. Truncated result has 7 chars
+            // (max_chars - ell_chars = 8 - 1 = 7) + "…" = 8 chars ≈ >5 bytes.
+            let text = "hello world".into_pyobject(py).unwrap().into_any();
+            let payload = make_payload(py, "t", text).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            let result = result.bind(py);
+            let meta = result.getattr("metadata").unwrap();
+            let new_length: usize = meta.get_item("new_length").unwrap().extract().unwrap();
+            assert!(new_length > 0, "new_length must be > 0, got {}", new_length);
+            // Kill "xyzzy" mutant: the actual truncated "hello w…" is 10 bytes, not 5.
+            assert_ne!(new_length, 5, "new_length must not be 5 (xyzzy length)");
+        });
+    }
+
+    // ── handle_string_list += counters (lines 218-219): += vs *= ─────────────
+    // With *=, total_chars_truncated and items_modified stay at 0 forever.
+    // push_metrics_kwargs is a no-op without trace_id, so we need to use a trace_id
+    // and verify the emitted metadata reflects non-zero chars_seen / truncated_count.
+    // We use a helper to inject an extensions object carrying a trace_id.
+    fn make_extensions<'py>(py: Python<'py>, trace_id: &str) -> PyResult<Bound<'py, PyAny>> {
+        let module = PyModule::from_code(
+            py,
+            pyo3::ffi::c_str!(
+                "class Req:\n    def __init__(self, t):\n        self.trace_id = t\n\
+                 class Ext:\n    def __init__(self, t):\n        self.request = Req(t)\n"
+            ),
+            pyo3::ffi::c_str!("ext2.py"),
+            pyo3::ffi::c_str!("ext2"),
+        )?;
+        module.getattr("Ext")?.call1((trace_id,))
+    }
+
+    #[test]
+    fn string_list_with_trace_id_metrics_have_nonzero_chars_seen() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let core = make_core(Some(3), "truncate").unwrap();
+            // "hello" = 5 chars > 3 → truncated. total_chars_seen += 5 → must be 5, not 0.
+            let list = PyList::new(py, ["hello"]).unwrap();
+            let payload = make_payload(py, "t", list.as_any().clone()).unwrap();
+            let ctx = PyDict::new(py);
+            let ext = make_extensions(py, "trace-abc").unwrap();
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), Some(&ext))
+                .unwrap();
+            let result = result.bind(py);
+            // metadata should be the metrics dict {output_length_guard: {...}}
+            let meta = result.getattr("metadata").unwrap();
+            // The metrics dict is keyed by PLUGIN_KEY = "output_length_guard"
+            let inner = meta.get_item("output_length_guard").unwrap();
+            assert!(
+                !inner.is_none(),
+                "output_length_guard metrics must be present"
+            );
+            let chars_seen: usize = inner.get_item("chars_seen").unwrap().extract().unwrap();
+            assert!(chars_seen > 0, "chars_seen must be > 0, got {}", chars_seen);
+            let truncated_count: usize = inner
+                .get_item("truncated_count")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(
+                truncated_count > 0,
+                "truncated_count must be > 0, got {}",
+                truncated_count
+            );
+        });
+    }
+
+    // ── process_mcp_items_result += counters (lines 413-414): text items ─────
+    #[test]
+    fn mcp_content_dict_with_trace_id_metrics_have_nonzero_chars_seen() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let core = make_core(Some(3), "truncate").unwrap();
+            let item = PyDict::new(py);
+            item.set_item("type", "text").unwrap();
+            item.set_item("text", "hello world").unwrap(); // 11 chars > 3
+            let content = PyList::new(py, [item]).unwrap();
+            let result_dict = PyDict::new(py);
+            result_dict.set_item("content", content).unwrap();
+            let payload = make_payload(py, "t", result_dict.as_any().clone()).unwrap();
+            let ctx = PyDict::new(py);
+            let ext = make_extensions(py, "trace-def").unwrap();
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), Some(&ext))
+                .unwrap();
+            let result = result.bind(py);
+            let meta = result.getattr("metadata").unwrap();
+            let inner = meta.get_item("output_length_guard").unwrap();
+            assert!(
+                !inner.is_none(),
+                "output_length_guard metrics must be present"
+            );
+            let chars_seen: usize = inner.get_item("chars_seen").unwrap().extract().unwrap();
+            assert!(chars_seen > 0, "chars_seen must be > 0, got {}", chars_seen);
+        });
+    }
+
+    // ── process_mcp_items_result += counters (lines 442-443): resource items ──
+    #[test]
+    fn mcp_resource_item_with_trace_id_metrics_have_nonzero_chars_seen() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let core = make_core(Some(3), "truncate").unwrap();
+            let resource = PyDict::new(py);
+            resource.set_item("text", "toolongtext").unwrap(); // 11 chars > 3
+            let item = PyDict::new(py);
+            item.set_item("type", "resource").unwrap();
+            item.set_item("resource", resource).unwrap();
+            let content = PyList::new(py, [item]).unwrap();
+            let result_dict = PyDict::new(py);
+            result_dict.set_item("content", content).unwrap();
+            let payload = make_payload(py, "t", result_dict.as_any().clone()).unwrap();
+            let ctx = PyDict::new(py);
+            let ext = make_extensions(py, "trace-ghi").unwrap();
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), Some(&ext))
+                .unwrap();
+            let result = result.bind(py);
+            let meta = result.getattr("metadata").unwrap();
+            let inner = meta.get_item("output_length_guard").unwrap();
+            assert!(
+                !inner.is_none(),
+                "output_length_guard metrics must be present for resource item"
+            );
+            let chars_seen: usize = inner.get_item("chars_seen").unwrap().extract().unwrap();
+            assert!(
+                chars_seen > 0,
+                "chars_seen must be > 0 for resource item, got {}",
+                chars_seen
+            );
+        });
+    }
+
+    // ── process_mcp_items_result > vs < on structure size (line 369) ─────────
+    // Kill: replace > with <: a list SMALLER than max_structure_size must NOT block.
+    #[test]
+    fn mcp_content_dict_under_max_structure_size_is_not_blocked() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let d = PyDict::new(py);
+            d.set_item("max_chars", py.None()).unwrap();
+            d.set_item("max_structure_size", 10usize).unwrap();
+            d.set_item("strategy", "block").unwrap();
+            d.set_item("limit_mode", "character").unwrap();
+            let core = OutputLengthGuardPluginCore::new(d.as_any()).unwrap();
+            // Only 2 items — well under the limit of 10
+            let item_a = PyDict::new(py);
+            item_a.set_item("type", "text").unwrap();
+            item_a.set_item("text", "a").unwrap();
+            let item_b = PyDict::new(py);
+            item_b.set_item("type", "text").unwrap();
+            item_b.set_item("text", "b").unwrap();
+            let content = PyList::new(py, [item_a, item_b]).unwrap();
+            let result_dict = PyDict::new(py);
+            result_dict.set_item("content", content).unwrap();
+            let payload = make_payload(py, "t", result_dict.as_any().clone()).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            let cp: bool = result
+                .bind(py)
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(
+                cp,
+                "list with 2 items < max_structure_size=10 must not block"
+            );
+        });
+    }
+
+    // ── process_mcp_items_result line 369: == with != on Strategy::Block ─────
+    // Kill: replace == with != → truncate strategy would trigger the block.
+    // Test: strategy=truncate (not Block), oversized list → must NOT block.
+    #[test]
+    fn mcp_content_dict_oversized_list_in_truncate_mode_is_not_blocked() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let d = PyDict::new(py);
+            d.set_item("max_chars", py.None()).unwrap();
+            d.set_item("max_structure_size", 2usize).unwrap();
+            // Truncate strategy — oversized list must NOT be blocked
+            d.set_item("strategy", "truncate").unwrap();
+            d.set_item("limit_mode", "character").unwrap();
+            let core = OutputLengthGuardPluginCore::new(d.as_any()).unwrap();
+            // 5 items > max_structure_size=2, but strategy=truncate → must NOT block
+            let item_a = PyDict::new(py);
+            item_a.set_item("type", "text").unwrap();
+            item_a.set_item("text", "a").unwrap();
+            let item_b = PyDict::new(py);
+            item_b.set_item("type", "text").unwrap();
+            item_b.set_item("text", "b").unwrap();
+            let item_c = PyDict::new(py);
+            item_c.set_item("type", "text").unwrap();
+            item_c.set_item("text", "c").unwrap();
+            let content = PyList::new(py, [item_a, item_b, item_c]).unwrap();
+            let result_dict = PyDict::new(py);
+            result_dict.set_item("content", content).unwrap();
+            let payload = make_payload(py, "t", result_dict.as_any().clone()).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            let cp: bool = result
+                .bind(py)
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(
+                cp,
+                "truncate strategy must not block oversized list; != mutant would block"
+            );
+        });
+    }
+
+    // ── process_mcp_items_result lines 414, 443: items_modified_count += vs *= ─
+    // truncated_count = items_modified_count. With *= mutant, items_modified_count stays 0.
+    #[test]
+    fn mcp_content_dict_text_item_trace_id_truncated_count_is_nonzero() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let core = make_core(Some(3), "truncate").unwrap();
+            let item = PyDict::new(py);
+            item.set_item("type", "text").unwrap();
+            item.set_item("text", "hello world").unwrap();
+            let content = PyList::new(py, [item]).unwrap();
+            let result_dict = PyDict::new(py);
+            result_dict.set_item("content", content).unwrap();
+            let payload = make_payload(py, "t", result_dict.as_any().clone()).unwrap();
+            let ctx = PyDict::new(py);
+            let ext = make_extensions(py, "trace-xyz").unwrap();
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), Some(&ext))
+                .unwrap();
+            let result = result.bind(py);
+            let meta = result.getattr("metadata").unwrap();
+            let inner = meta.get_item("output_length_guard").unwrap();
+            assert!(!inner.is_none());
+            let truncated_count: usize = inner
+                .get_item("truncated_count")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(
+                truncated_count > 0,
+                "truncated_count must be > 0 (items_modified_count += 1), got {}",
+                truncated_count
+            );
+        });
+    }
+
+    #[test]
+    fn mcp_resource_item_trace_id_truncated_count_is_nonzero() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let core = make_core(Some(3), "truncate").unwrap();
+            let resource = PyDict::new(py);
+            resource.set_item("text", "toolongtext").unwrap();
+            let item = PyDict::new(py);
+            item.set_item("type", "resource").unwrap();
+            item.set_item("resource", resource).unwrap();
+            let content = PyList::new(py, [item]).unwrap();
+            let result_dict = PyDict::new(py);
+            result_dict.set_item("content", content).unwrap();
+            let payload = make_payload(py, "t", result_dict.as_any().clone()).unwrap();
+            let ctx = PyDict::new(py);
+            let ext = make_extensions(py, "trace-res").unwrap();
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), Some(&ext))
+                .unwrap();
+            let result = result.bind(py);
+            let meta = result.getattr("metadata").unwrap();
+            let inner = meta.get_item("output_length_guard").unwrap();
+            assert!(!inner.is_none());
+            let truncated_count: usize = inner
+                .get_item("truncated_count")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(
+                truncated_count > 0,
+                "truncated_count must be > 0 for resource item, got {}",
+                truncated_count
+            );
+        });
+    }
+
+    // ── find_struct_key line 762: delete ! in !val.is_none() ─────────────────
+    // With ! deleted: val.is_none() → true means "present" → None-valued key treated as found.
+    // The existing test checks truncation still happens with None structuredContent.
+    // But with the mutant, None-valued structuredContent IS found → process_structured_data
+    // gets Python None → falls through as Ok{modified=false}. Then content is still processed.
+    // The real observable difference: with non-None structuredContent, verify it IS found.
+    // Also verify None structuredContent is NOT treated as present (struct_key is None).
+    #[test]
+    fn mcp_content_dict_nonnone_structured_content_sets_structured_content_processed() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let core = make_core(Some(1000), "truncate").unwrap();
+            let sc = PyDict::new(py);
+            sc.set_item("data", "value").unwrap();
+            let item = PyDict::new(py);
+            item.set_item("type", "text").unwrap();
+            item.set_item("text", "short").unwrap();
+            let content = PyList::new(py, [item]).unwrap();
+            let result_dict = PyDict::new(py);
+            result_dict.set_item("content", content).unwrap();
+            result_dict.set_item("structuredContent", &sc).unwrap();
+            let payload = make_payload(py, "t", result_dict.as_any().clone()).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            let result = result.bind(py);
+            let meta = result.getattr("metadata").unwrap();
+            let meta_dict = meta.cast::<PyDict>().unwrap();
+            let sc_processed: bool = meta_dict
+                .get_item("structured_content_processed")
+                .unwrap()
+                .map(|v| v.extract::<bool>().unwrap_or(false))
+                .unwrap_or(false);
+            assert!(sc_processed, "non-None structuredContent must be detected");
+        });
+    }
+
+    #[test]
+    fn mcp_content_dict_none_structured_content_does_not_set_structured_content_processed() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let core = make_core(Some(1000), "truncate").unwrap();
+            let item = PyDict::new(py);
+            item.set_item("type", "text").unwrap();
+            item.set_item("text", "short").unwrap();
+            let content = PyList::new(py, [item]).unwrap();
+            let result_dict = PyDict::new(py);
+            result_dict.set_item("content", content).unwrap();
+            // structuredContent = None → must NOT be treated as present
+            result_dict
+                .set_item("structuredContent", py.None())
+                .unwrap();
+            let payload = make_payload(py, "t", result_dict.as_any().clone()).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            let result = result.bind(py);
+            let meta = result.getattr("metadata").unwrap();
+            let meta_dict = meta.cast::<PyDict>().unwrap();
+            // sc_processed = (struct_key.is_some()) = false when structuredContent is None
+            let sc_processed: bool = meta_dict
+                .get_item("structured_content_processed")
+                .unwrap()
+                .map(|v| v.extract::<bool>().unwrap_or(true))
+                .unwrap_or(true);
+            assert!(
+                !sc_processed,
+                "None structuredContent must NOT be treated as present; ! deletion mutant would set sc_processed=true"
+            );
+        });
+    }
 }

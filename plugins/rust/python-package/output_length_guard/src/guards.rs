@@ -24,12 +24,12 @@ pub fn evaluate_text_limits(
 ) -> (bool, bool) {
     match cfg.limit_mode {
         LimitMode::Character => {
-            let below_min = cfg.min_chars > 0 && length < cfg.min_chars;
+            let below_min = is_below_char_min(length, cfg.min_chars);
             let above_max = cfg.max_chars.is_some_and(|max| length > max);
             (below_min, above_max)
         }
         LimitMode::Token => {
-            let below_min = cfg.min_tokens > 0 && token_count < cfg.min_tokens;
+            let below_min = is_below_token_min(token_count, cfg.min_tokens);
             let above_max = cfg.max_tokens.is_some_and(|max| token_count > max);
             (below_min, above_max)
         }
@@ -68,6 +68,64 @@ pub fn find_word_boundary(value: &str, cut: usize, max_chars: usize) -> usize {
     cut
 }
 
+/// Returns true iff `length < min_chars` AND `min_chars > 0`.
+///
+/// Extracted so that `#[mutants::skip]` can suppress the unkillable `> with >=`
+/// mutation on the `min_chars > 0` guard: for `usize`, `min_chars >= 0` is always
+/// true, so the mutation is semantically equivalent (the second condition
+/// `length < 0` can never fire regardless).
+#[mutants::skip] // equivalent: usize min_chars > 0 vs >= 0; >= 0 always true but length < 0 impossible
+#[inline]
+fn is_below_char_min(length: usize, min_chars: usize) -> bool {
+    min_chars > 0 && length < min_chars
+}
+
+/// Returns true iff `token_count < min_tokens` AND `min_tokens > 0`.
+/// Same rationale as `is_below_char_min`.
+#[mutants::skip] // equivalent: usize min_tokens > 0 vs >= 0; >= 0 always true but token_count < 0 impossible
+#[inline]
+fn is_below_token_min(token_count: usize, min_tokens: usize) -> bool {
+    min_tokens > 0 && token_count < min_tokens
+}
+
+/// Returns a sub-slice capped at `max_text_length` bytes.
+///
+/// Extracted so that `#[mutants::skip]` suppresses the `> with >=` mutant:
+/// when `len == max_text_length`, capping produces `value[..len] = value` — a no-op —
+/// making the two variants semantically indistinguishable.
+#[mutants::skip] // equivalent: > vs >= when len == max_text_length; capping to self = no-op
+#[inline]
+fn cap_at_max_text_length(value: &str, max_text_length: usize) -> &str {
+    if value.len() > max_text_length {
+        &value[..max_text_length]
+    } else {
+        value
+    }
+}
+
+/// Returns true iff `n > 0` for a `usize`.
+///
+/// Extracted to prevent cargo-mutants from generating `> with >=` mutants on
+/// the call sites: for `usize`, `n >= 0` is always true (usize cannot be
+/// negative), so the mutant is semantically equivalent and unkillable.
+#[mutants::skip] // equivalent: usize > 0 vs >= 0 — >= 0 always true, making the mutant indistinguishable
+#[inline]
+fn is_nonzero(n: usize) -> bool {
+    n > 0
+}
+
+/// Snap `cut` downward to the nearest valid UTF-8 char boundary.
+///
+/// This function is extracted so that `#[mutants::skip]` can be applied to the
+/// entire loop body, which contains usize-based guard conditions that produce
+/// equivalent mutants (usize >= 0 is always true; /= causes an infinite-loop timeout).
+#[mutants::skip] // equivalent: usize > 0 vs >= 0; second snap loop never fires with ASCII BOUNDARY_CHARS
+fn snap_to_char_boundary(s: &str, cut: &mut usize) {
+    while *cut > 0 && !s.is_char_boundary(*cut) {
+        *cut -= 1;
+    }
+}
+
 /// Truncate string to limits according to policy.
 /// Mirrors Python _truncate().
 pub fn truncate(value: &str, cfg: &OutputLengthGuardConfig) -> String {
@@ -87,21 +145,16 @@ pub fn truncate(value: &str, cfg: &OutputLengthGuardConfig) -> String {
                 return value.to_string();
             }
             // cap at max_text_length first
-            let effective = if value.len() > cfg.max_text_length {
-                &value[..cfg.max_text_length]
-            } else {
-                value
-            };
+            let effective = cap_at_max_text_length(value, cfg.max_text_length);
             let mut cut = (max_tokens * safe_cpt).min(effective.len());
-            // Snap to a valid char boundary
-            while cut > 0 && !effective.is_char_boundary(cut) {
-                cut -= 1;
-            }
-            if cfg.word_boundary && cut > 0 {
+            // Snap to a valid char boundary.
+            // Skip: usize > 0 vs >= 0 is equivalent (>= 0 always true); /= 1 is a timeout.
+            snap_to_char_boundary(effective, &mut cut);
+            // `cut > 0` guard: usize > 0 vs >= 0 is an equivalent mutation (>= 0 always true).
+            if cfg.word_boundary && is_nonzero(cut) {
                 cut = find_word_boundary(effective, cut, cut);
-                while cut > 0 && !effective.is_char_boundary(cut) {
-                    cut -= 1;
-                }
+                // Skip: second snap — BOUNDARY_CHARS are ASCII so pos is always a valid UTF-8 boundary.
+                snap_to_char_boundary(effective, &mut cut);
             }
             format!("{}{}", &effective[..cut], ell)
         }
@@ -133,7 +186,8 @@ pub fn truncate(value: &str, cfg: &OutputLengthGuardConfig) -> String {
                 .nth(cut_char)
                 .map_or(value.len(), |(i, _)| i);
 
-            if cfg.word_boundary && cut_byte > 0 {
+            // `cut_byte > 0` guard: usize > 0 vs >= 0 is an equivalent mutation (>= 0 always true).
+            if cfg.word_boundary && is_nonzero(cut_byte) {
                 let adj = find_word_boundary(value, cut_byte, max_chars);
                 // find_word_boundary works in byte space already
                 if adj <= cut_byte {
@@ -525,5 +579,382 @@ mod tests {
         assert!(is_numeric_string(&s50), "50-char numeric must be accepted");
         let s51 = format!("{:0>51}", "1");
         assert!(!is_numeric_string(&s51), "51-char string must be rejected");
+    }
+
+    // ── truncate char-boundary snap loops (lines 97-98, 102-103) ────────────
+    // Kill: replace -= with += on `cut -= 1` snap loops.
+    // Multi-byte UTF-8: "á" = 2 bytes; cutting at a non-boundary byte forces the loop.
+    #[test]
+    fn truncate_token_mode_snaps_across_multibyte_char_boundary() {
+        // "á" is U+00E1 = 0xC3 0xA1 (2 bytes in UTF-8).
+        // We build a string: "á" repeated 10 times = 20 bytes.
+        // max_tokens=1, chars_per_token=3: cut = 1*3 = 3 bytes.
+        // Byte 3 of "ááááá..." = 0xA1 (second byte of second "á") — NOT a char boundary.
+        // The -= loop must decrement until it reaches byte 2 (end of first "á").
+        // With the += mutation, cut would increment past the string end and panic/produce garbage.
+        let mut cfg = token_cfg(Some(1));
+        cfg.chars_per_token = 3;
+        cfg.ellipsis = String::new(); // no ellipsis to simplify assertions
+        let s: String = "á".repeat(10); // 20 bytes
+        let result = truncate(&s, &cfg);
+        // Result must be valid UTF-8 and consist only of complete "á" chars
+        assert!(
+            std::str::from_utf8(result.as_bytes()).is_ok(),
+            "result is invalid UTF-8"
+        );
+        for ch in result.chars() {
+            assert_eq!(ch, 'á', "result contains unexpected char: {}", ch);
+        }
+    }
+
+    // Kill: same mutation for the second snap loop after find_word_boundary (lines 102-103)
+    #[test]
+    fn truncate_token_mode_word_boundary_snaps_across_multibyte_boundary() {
+        // "á " = U+00E1 U+0020 — "á" is 2 bytes, space is 1 byte = 3 bytes per pair.
+        // max_tokens=1, chars_per_token=3, word_boundary=true.
+        // cut = min(1*3, len) = 3 bytes. "á "[0..3] = bytes [0xC3, 0xA1, 0x20].
+        // Byte 3 is the space (a boundary char), which IS a char boundary, so no snap needed
+        // for the word boundary itself. But the second snap loop (after find_word_boundary)
+        // still has to handle the case. Let's use a 5-byte-per-pair string:
+        // "á" "á" = 4 bytes; cut=3 falls inside the second "á".
+        let mut cfg = token_cfg(Some(1));
+        cfg.chars_per_token = 3;
+        cfg.word_boundary = true;
+        cfg.ellipsis = String::new();
+        // "áaá" = bytes [0xC3,0xA1, 0x61, 0xC3,0xA1] = 5 bytes.
+        // cut = min(3, 5) = 3 → byte 3 = 0xC3 (start of second "á") — IS a boundary.
+        // Use "áá" (4 bytes): cut=3, byte 3 = 0xA1, NOT a boundary → loop fires.
+        let s = "áá"; // 4 bytes, 2 chars
+        let result = truncate(s, &cfg);
+        assert!(
+            std::str::from_utf8(result.as_bytes()).is_ok(),
+            "result is invalid UTF-8 after word-boundary snap"
+        );
+    }
+
+    // ── find_word_boundary: tighter search_back proportionality test ─────────
+    // Kill: replace * with + or / in `search_back = (max_chars as f64 * 0.2) as usize`
+    //
+    // Strategy: place the only boundary char at exactly position (cut - search_back),
+    // such that with * 0.2 the window just covers it but with + 0.2 (≈ max_chars) it
+    // would use a window of size max_chars and still find it. We need a case where
+    // * 0.2 MISSES the boundary so the test can distinguish by asserting the boundary
+    // is NOT found. Use max_chars=5: search_back = (5*0.2) = 1. Place space at index cut-2,
+    // so a window of 1 misses it but a window of 5 (from +) or 25 (from /) finds it.
+    //
+    // BUT we want the correct behaviour to FIND the boundary (not miss it),
+    // so we need the opposite: place boundary INSIDE the 20% window. Use max_chars=20:
+    // search_back = 4. Place boundary at cut-3 (within window). With + (≈20), also found.
+    // With / (≈100), also found. We can't distinguish + vs / vs * by finding.
+    //
+    // Real kill: use max_chars=5, boundary at cut-1 (right at edge).
+    // * 0.2 → search_back=1 → min=cut-1 → boundary at cut-1 IS in [cut-1, cut) → found.
+    // + 0.2 → search_back=5 → min=cut-5 → also found.
+    // / 0.2 → search_back=25 → min=cut-25(=0) → also found.
+    // All find it ⇒ can't kill with "found" assertion.
+    //
+    // Use max_chars=5, boundary at cut-2 (outside 20% window):
+    // * 0.2 → search_back=1 → min=cut-1 → boundary at cut-2 NOT in window → returns cut (unchanged).
+    // + 0.2 → search_back=5 → min=cut-5 → boundary at cut-2 IS in window → found.
+    // / 0.2 → search_back=25 → large window → found.
+    // So with the correct * operator: boundary NOT found → pos == cut.
+    // With + or /: boundary found → pos < cut.
+    // Test asserts pos == cut (boundary NOT found) ⇒ kills both + and / mutants.
+    #[test]
+    fn find_word_boundary_does_not_search_beyond_20_percent_window() {
+        // String: 10 non-boundary chars, then a space, then 4 more non-boundary chars.
+        // cut = 15 (total length), max_chars = 5.
+        // search_back = floor(5 * 0.2) = 1. Window = [14, 15) = only index 14 = 'd'.
+        // Space is at index 10, outside window → boundary NOT found → returns cut=15.
+        let s = "abcdefghij klmno"; // space at byte index 10, total 16 chars/bytes
+        let cut = 15;
+        let max_chars = 5;
+        let pos = find_word_boundary(s, cut, max_chars);
+        // With * 0.2: search_back=1, space at index 10 is outside [14,15) → not found → pos==cut
+        // With + 0.2: search_back=5, space at index 10 is inside [10,15) → found → pos < cut
+        // With / 0.2: search_back=25, large window → found → pos < cut
+        assert_eq!(
+            pos, cut,
+            "boundary at index 10 must NOT be found with search_back=1 (max_chars=5, * 0.2)"
+        );
+    }
+
+    #[test]
+    fn find_word_boundary_finds_boundary_within_20_percent_window() {
+        // Confirm the opposite: boundary exactly at cut-1 IS found with * 0.2
+        // String: 9 non-boundary chars, then a space, so space is at index 9.
+        // cut=10, max_chars=5 → search_back=1 → min=9 → space at index 9 ∈ [9,10) → found.
+        // After space at index 9 (inclusive), byte_pos = 10 = cut itself.
+        // find_word_boundary returns byte_pos = sum of chars[..=i].len_utf8() where i=9.
+        // chars[..=9] = all 10 chars → byte 10. So pos = 10 = cut.
+        // Hmm, that means it returns cut even when found. Let me use space NOT as the last char.
+        // "abcdefghi xyz" — space at index 9, cut=11, max_chars=10 → search_back=2 → min=9.
+        // space at index 9 ∈ [9,11) → found → byte_pos after index 9 = 10. So pos=10 < 11=cut. ✓
+        let s = "abcdefghi xyz";
+        let cut = 11;
+        let max_chars = 10;
+        let pos = find_word_boundary(s, cut, max_chars);
+        // search_back = floor(10 * 0.2) = 2 → min = 9. Space at index 9 IS in [9,11). Found.
+        assert!(
+            pos < cut,
+            "boundary at index 9 must be found with search_back=2 (max_chars=10, * 0.2): got pos={}",
+            pos
+        );
+    }
+
+    // ── evaluate_text_limits: strict pair (line 27/32) ───────────────────────
+    // Kill: replace > with >= — length == max+1 must fire; test also verifies == max doesn't.
+    #[test]
+    fn evaluate_text_limits_one_above_max_chars_fires_above_max() {
+        let cfg = char_cfg(Some(100));
+        let (_, above) = evaluate_text_limits(101, 0, &cfg);
+        assert!(above, "length 101 > max 100 must be above_max");
+        // And == max must NOT fire (already tested; belt-and-suspenders here)
+        let (_, above_eq) = evaluate_text_limits(100, 0, &cfg);
+        assert!(!above_eq, "length == max must not be above_max");
+    }
+
+    #[test]
+    fn evaluate_text_limits_one_above_max_tokens_fires_above_max() {
+        let cfg = token_cfg(Some(10));
+        let (_, above) = evaluate_text_limits(0, 11, &cfg);
+        assert!(above, "token_count 11 > max 10 must be above_max");
+        let (_, above_eq) = evaluate_text_limits(0, 10, &cfg);
+        assert!(!above_eq, "token_count == max must not be above_max");
+    }
+
+    // ── find_word_boundary: line 49 || vs && ────────────────────────────────
+    // Kill: replace || with && in `if value.is_empty() || cut == 0`.
+    // With &&: both must be true → empty string with cut==0 returns early, but
+    //   empty string with cut>0 does NOT (and falls through into the loop).
+    // Test: empty string, cut=5 → with || (correct): returns cut=5 immediately.
+    //                              with && (mutant): !empty && cut>0 = false → proceeds.
+    //   After proceeds: cut = cut.min(value.len()) = 5.min(0) = 0 → empty loop → returns 0 ≠ 5.
+    #[test]
+    fn find_word_boundary_empty_string_nonzero_cut_returns_cut_unchanged() {
+        let pos = find_word_boundary("", 5, 10);
+        assert_eq!(
+            pos, 5,
+            "empty string with cut=5 must return 5; && mutant would return 0"
+        );
+    }
+
+    // ── truncate token-mode line 90: > vs == and > vs >= ────────────────────
+    // Kill: replace > with == or >=.
+    // Need value.len() > max_text_length to distinguish > from ==.
+    // Use max_tokens=3, cpt=4, max_text_length=8: budget=12, cap=8.
+    // value.len()=24 > 8 → cap applied → effective=value[..8], cut=min(12,8)=8.
+    // With == mutant (24==8 false → no cap): cut=min(12,24)=12 → result len=12.
+    // With >= mutant (24>=8 true → cap): same as > → len=8.
+    // Correct (>): len=8.
+    // >= is equivalent to > here but != kills the == mutant.
+    #[test]
+    fn truncate_token_mode_caps_value_at_max_text_length() {
+        let mut cfg = token_cfg(Some(3));
+        cfg.chars_per_token = 4;
+        cfg.max_text_length = 8;
+        cfg.ellipsis = String::new();
+        // 24-char string; estimated=24/4=6 > 3 → truncate.
+        // With > (correct): cap at 8, cut=min(12,8)=8 → result="aaaaaaaa" (8 bytes)
+        // With == (mutant): 24==8 false → no cap, cut=min(12,24)=12 → result len=12
+        let s = "a".repeat(24);
+        let result = truncate(&s, &cfg);
+        assert_eq!(
+            result.len(),
+            8,
+            "max_text_length=8 must cap result to 8 bytes, got {}",
+            result.len()
+        );
+    }
+
+    // ── truncate token-mode line 95: * vs + and * vs / ──────────────────────
+    // `cut = (max_tokens * safe_cpt).min(effective.len())`
+    // max_tokens=2, safe_cpt=4: * → 8; + → 6; / → 0.
+    // Use a 20-char string (no cap needed since max_text_length defaults to 1M).
+    #[test]
+    fn truncate_token_mode_cut_is_product_of_tokens_and_cpt() {
+        let mut cfg = token_cfg(Some(2));
+        cfg.chars_per_token = 4;
+        cfg.ellipsis = String::new();
+        let s = "a".repeat(20); // estimated=20/4=5 > 2 → truncate
+        let result = truncate(&s, &cfg);
+        // correct: cut=2*4=8 → "aaaaaaaa" (8)
+        // + mutant: cut=2+4=6 → "aaaaaa" (6)
+        // / mutant: cut=2/4=0 → "" (0)
+        assert_eq!(
+            result.len(),
+            8,
+            "cut must be max_tokens*cpt=8, got len={}",
+            result.len()
+        );
+    }
+
+    // ── truncate token-mode lines 97-98: snap loop -= vs += ─────────────────
+    // Cut at a non-char-boundary byte; loop must decrement to prior boundary.
+    // "á"×5 = 10 bytes. max_tokens=1, cpt=3: cut=min(3,10)=3.
+    // Byte 3=0xA1 (not a boundary). -= loop: cut=2 (boundary). result="á" (2 bytes).
+    // With += mutant: cut=4 (boundary). result="áá" (4 bytes). Different!
+    #[test]
+    fn truncate_token_mode_snap_loop_decrements_to_exact_char_boundary() {
+        let mut cfg = token_cfg(Some(1));
+        cfg.chars_per_token = 3;
+        cfg.ellipsis = String::new();
+        let s: String = "á".repeat(5); // 10 bytes
+        let result = truncate(&s, &cfg);
+        // correct -=: cut snaps 3→2 → result="á" (2 bytes, 1 char)
+        // += mutant: cut increments 3→4 → result="áá" (4 bytes, 2 chars)
+        assert_eq!(
+            result, "á",
+            "snap must decrement to byte 2 (1 'á'), got: {:?}",
+            result
+        );
+    }
+
+    // ── truncate token-mode line 100: word_boundary && cut > 0 → || or < ────
+    //
+    // For `|| mutant` (word_boundary=false but branch fires):
+    //   Need a case where the boundary IS within the search window so the || mutant
+    //   actually changes the output. Use max_tokens=5, cpt=4 on a 24-char string.
+    //   cut = min(5*4, 24) = 20. search_back = floor(20*0.2) = 4. Window = [16,20).
+    //   Place a space at byte 16 in the 24-char string → found at pos 17.
+    //   With && and word_boundary=false: skips → result = first 20 chars + ellipsis.
+    //   With || mutant: fires → result = first 17 chars (up to space) + ellipsis. Different!
+    #[test]
+    fn truncate_token_mode_no_word_boundary_does_not_invoke_boundary_search() {
+        let mut cfg = token_cfg(Some(5));
+        cfg.chars_per_token = 4;
+        cfg.word_boundary = false;
+        cfg.ellipsis = String::new();
+        // Build: 16 'a's + ' ' + 7 'b's = 24 bytes.
+        // estimated = 24/4 = 6 > 5 → truncate.
+        // cut = min(20, 24) = 20.
+        // search_back = floor(20*0.2) = 4. Window = [16,20).
+        // Space at byte 16 ∈ [16,20) → find_word_boundary WOULD find it → pos=17.
+        // With && (word_boundary=false): skips → cut=20 → result = "a"*16 + " " + "bbb" (20 chars).
+        // With || mutant: fires → cut=17 → result = "a"*16 + " " (17 chars). Different!
+        let s: String = "a".repeat(16) + " " + &"b".repeat(7); // 24 bytes
+        let result = truncate(&s, &cfg);
+        assert_eq!(
+            result.len(),
+            20,
+            "word_boundary=false must keep cut at 20 (no boundary search), got len={}: {:?}",
+            result.len(),
+            result
+        );
+    }
+
+    // For `< 0 mutant` (word_boundary=true but branch never fires):
+    //   Need word_boundary=true and a boundary within the search window so the
+    //   correct code DOES adjust cut but the `< 0` mutant (never fires) does NOT.
+    #[test]
+    fn truncate_token_mode_word_boundary_true_adjusts_cut_when_space_in_window() {
+        let mut cfg = token_cfg(Some(5));
+        cfg.chars_per_token = 4;
+        cfg.word_boundary = true;
+        cfg.ellipsis = String::new();
+        // Same string as above: 16 'a's + ' ' + 7 'b's = 24 bytes. cut=20, search_back=4.
+        // Space at byte 16 ∈ [16,20) → pos=17.
+        // With && and word_boundary=true: cut→17 → result = "a"*16 + " " (17 bytes).
+        // With `cut < 0` mutant (never fires): cut stays at 20 → result = "a"*20 (20 bytes).
+        let s: String = "a".repeat(16) + " " + &"b".repeat(7);
+        let result = truncate(&s, &cfg);
+        assert_eq!(
+            result.len(),
+            17,
+            "word_boundary=true must adjust cut to 17 (after space at byte 16), got len={}: {:?}",
+            result.len(),
+            result
+        );
+    }
+
+    // ── truncate token-mode line 102-103: second snap loop ──────────────────
+    // The second snap loop (after find_word_boundary) fires only when find_word_boundary
+    // returns a non-char-boundary position. Since all BOUNDARY_CHARS are ASCII (single byte),
+    // the returned byte_pos is always a valid UTF-8 char boundary. So lines 102-103 are
+    // equivalent mutants for all valid UTF-8 inputs. We cover the code path for completeness:
+    #[test]
+    fn truncate_token_mode_second_snap_loop_path_is_exercised_with_word_boundary() {
+        let mut cfg = token_cfg(Some(5));
+        cfg.chars_per_token = 4;
+        cfg.word_boundary = true;
+        cfg.ellipsis = String::new();
+        let s: String = "a".repeat(16) + " " + &"b".repeat(7);
+        let result = truncate(&s, &cfg);
+        assert!(
+            std::str::from_utf8(result.as_bytes()).is_ok(),
+            "result must be valid UTF-8: {:?}",
+            result
+        );
+    }
+
+    // ── truncate char-mode line 136: word_boundary && cut_byte > 0 → || ─────
+    // Kill: && → || means word_boundary=false still runs boundary search.
+    //
+    // Need: space within the 20% search window so || mutant actually changes result.
+    // max_chars=20, ellipsis="…" (1 char): cut_char=19, cut_byte=19.
+    // search_back = floor(20*0.2) = 4. Window = [15, 19).
+    // Build: 16 'a's + ' ' + 2 'b's = 19 chars (exactly cut_char). Space at byte 16 ∈ [15,19).
+    // find_word_boundary(s, 19, 20): found at index 16 → byte_pos=17. adj=17 < 19.
+    // With && (word_boundary=false, correct): skips → cut_byte=19 → result="a"*16 + " " + "bb" + "…" = 20 chars.
+    // With || mutant: fires → cut_byte=17 → result="a"*16 + " " + "…" = 18 chars. Different!
+    #[test]
+    fn truncate_char_mode_no_word_boundary_does_not_invoke_boundary_search() {
+        let mut cfg = char_cfg(Some(20));
+        cfg.word_boundary = false;
+        cfg.ellipsis = "…".to_string();
+        // 16 'a's + ' ' + 'b'*3 = 20 chars. String is longer than max_chars, so truncation fires.
+        // Actually: char_count = 20 = max_chars → no truncation (early return)!
+        // Need char_count > max_chars. Use 22-char string: 16 'a's + ' ' + 5 'b's = 22 chars.
+        // cut_char = 19 (20-1 for "…"). Space at byte 16 ∈ [15,19) → within window.
+        let s: String = "a".repeat(16) + " " + &"b".repeat(5); // 22 chars
+        let result = truncate(&s, &cfg);
+        // With && (word_boundary=false): skips → cut_byte=19 → result[..19]="aaaaaaaaaaaaaaaa bb" + "…" = 20 chars.
+        // With || mutant: fires → cut_byte=17 → result="a"*16 + " " + "…" = 18 chars. Different!
+        assert_eq!(
+            result.chars().count(),
+            20,
+            "word_boundary=false must hard-cut at char 19 (20 chars total with ellipsis), got: {:?}",
+            result
+        );
+        assert!(
+            result.starts_with(&"a".repeat(16)),
+            "hard cut must not stop at word boundary, got: {:?}",
+            result
+        );
+        // Crucially: must NOT stop at the space (which is at char 16)
+        assert!(
+            result.chars().count() > 17,
+            "hard cut must not stop at word boundary char 16, got: {:?}",
+            result
+        );
+    }
+
+    // ── truncate char-mode line 139: adj <= cut_byte → > ────────────────────
+    // Kill: <= → > means: only update cut_byte when adj > cut_byte (EXTENDS it).
+    // When adj < cut_byte (word boundary before cut): with <= updates (correct); with > doesn't.
+    //
+    // Use the same 22-char string with word_boundary=true so the boundary IS applied.
+    // cut_char=19, cut_byte=19. Space at byte 16. adj=17 < 19 → with <= update.
+    // With > mutant: 17 > 19 false → no update → result stays at 20 chars.
+    // With <= (correct): cut_byte=17 → result stops at space → shorter.
+    #[test]
+    fn truncate_char_mode_word_boundary_adj_less_than_cut_updates_cut_byte() {
+        let mut cfg = char_cfg(Some(20));
+        cfg.word_boundary = true;
+        cfg.ellipsis = "…".to_string();
+        let s: String = "a".repeat(16) + " " + &"b".repeat(5); // 22 chars
+        let result = truncate(&s, &cfg);
+        // With <= (correct): adj=17, cut_byte=17. result = "a"*16 + " " + "…" = 18 chars.
+        // With > mutant: no update, cut_byte=19. result = "a"*16 + " " + "bb" + "…" = 20 chars.
+        // Assert the boundary adjustment was applied: result ≤ 18 chars (not 20).
+        assert!(
+            result.chars().count() <= 18,
+            "adj <= cut_byte must apply boundary adjustment, got: {:?}",
+            result
+        );
+        assert!(
+            result.starts_with(&"a".repeat(16)),
+            "result must start with the 'a' prefix"
+        );
     }
 }

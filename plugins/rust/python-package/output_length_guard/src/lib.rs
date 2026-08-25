@@ -17,6 +17,7 @@ pub mod structured;
 
 pub use plugin::OutputLengthGuardPluginCore;
 
+#[mutants::skip] // logging initialisation: side-effect only, not observable in unit tests
 fn init_logging() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
