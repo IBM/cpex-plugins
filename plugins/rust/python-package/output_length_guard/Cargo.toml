@@ -23,6 +23,7 @@ stub-gen = ["dep:pyo3-stub-gen"]
 [dependencies]
 cpex_framework_bridge = { workspace = true }
 log = { workspace = true }
+mutants = { workspace = true }
 pyo3 = { workspace = true }
 pyo3-log = { workspace = true }
 pyo3-stub-gen = { workspace = true, optional = true }
