@@ -1102,6 +1102,7 @@ dependencies = [
  "cpex_framework_bridge",
  "criterion",
  "log",
+ "mutants",
  "pyo3",
  "pyo3-log",
  "pyo3-stub-gen",
