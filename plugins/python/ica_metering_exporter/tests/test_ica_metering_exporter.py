@@ -452,6 +452,24 @@ async def test_error_detection_true(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_gateway_tool_result_exports_content_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    plugin = _plugin(monkeypatch)
+    gateway_result = {
+        "content": [{"type": "text", "text": "Tool invocation failed: upstream unavailable"}],
+        "isError": True,
+        "structuredContent": None,
+        "_meta": {"tokens": {"input": 2, "output": 3}},
+    }
+
+    await plugin.tool_post_invoke(_post(result=gateway_result), _context())
+
+    details = _sent(plugin)["toolDetails"]
+    assert details["hasError"] is True
+    assert details["errorMessage"] == "Tool invocation failed: upstream unavailable"
+    assert (details["tokenInput"], details["tokenOutput"]) == (2, 3)
+
+
+@pytest.mark.asyncio
 async def test_error_detection_false(monkeypatch: pytest.MonkeyPatch) -> None:
     plugin = _plugin(monkeypatch)
     await plugin.tool_post_invoke(_post(result={"isError": False}), _context())
@@ -471,6 +489,24 @@ async def test_token_extraction_integer(monkeypatch: pytest.MonkeyPatch) -> None
     await plugin.tool_post_invoke(_post(result={"meta": {"tokens": {"input": 10, "output": 20}}}), _context())
     details = _sent(plugin)["toolDetails"]
     assert (details["tokenInput"], details["tokenOutput"]) == (10, 20)
+
+
+@pytest.mark.asyncio
+async def test_gateway_tool_result_exports_meta_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    plugin = _plugin(monkeypatch)
+    gateway_result = {
+        "content": [{"type": "text", "text": "completed"}],
+        "isError": False,
+        "structuredContent": None,
+        "_meta": {"tokens": {"input": 13, "output": 21}},
+    }
+
+    await plugin.tool_post_invoke(_post(result=gateway_result), _context())
+
+    details = _sent(plugin)["toolDetails"]
+    assert (details["tokenInput"], details["tokenOutput"]) == (13, 21)
+    assert details["hasError"] is False
+    assert details["errorMessage"] is None
 
 
 @pytest.mark.asyncio
