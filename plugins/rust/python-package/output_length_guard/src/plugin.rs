@@ -188,7 +188,15 @@ impl OutputLengthGuardPluginCore {
                 ("modified_payload", new_payload),
                 ("metadata", meta.into_any().unbind()),
             ];
-            push_metrics_kwargs(py, trace_id, &mut kwargs, total_chars, true, items_modified, &self.cfg)?;
+            push_metrics_kwargs(
+                py,
+                trace_id,
+                &mut kwargs,
+                total_chars,
+                true,
+                items_modified,
+                &self.cfg,
+            )?;
             return build_result_dyn(py, "ToolPostInvokeResult", kwargs);
         }
         let meta = PyDict::new(py);
@@ -213,7 +221,9 @@ impl OutputLengthGuardPluginCore {
         for item in list.iter() {
             let text: String = item.extract()?;
             match handle_text(py, &text, &self.cfg)? {
-                TextResult::Violation(v) => return build_blocked_result(py, trace_id, v, &self.cfg),
+                TextResult::Violation(v) => {
+                    return build_blocked_result(py, trace_id, v, &self.cfg);
+                }
                 TextResult::Modified(new_text) => {
                     total_chars_truncated += text.len();
                     items_modified += 1;
@@ -1937,20 +1947,12 @@ class Payload:
             let meta = result.getattr("metadata").unwrap();
             let inner = meta.get_item("output_length_guard").unwrap();
             assert!(!inner.is_none(), "metrics must be present with trace_id");
-            let limit_mode: String = inner
-                .get_item("limit_mode")
-                .unwrap()
-                .extract()
-                .unwrap();
+            let limit_mode: String = inner.get_item("limit_mode").unwrap().extract().unwrap();
             assert_eq!(
                 limit_mode, "token",
                 "token-mode plugin must emit limit_mode='token', not 'character'"
             );
-            let strategy: String = inner
-                .get_item("strategy")
-                .unwrap()
-                .extract()
-                .unwrap();
+            let strategy: String = inner.get_item("strategy").unwrap().extract().unwrap();
             assert_eq!(
                 strategy, "truncate",
                 "truncate-strategy plugin must emit strategy='truncate'"
