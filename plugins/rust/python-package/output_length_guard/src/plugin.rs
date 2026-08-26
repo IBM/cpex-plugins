@@ -111,14 +111,14 @@ impl OutputLengthGuardPluginCore {
         _name: &str,
     ) -> PyResult<Py<PyAny>> {
         match handle_text(py, text, &self.cfg)? {
-            TextResult::Violation(v) => build_blocked_result(py, trace_id, v),
+            TextResult::Violation(v) => build_blocked_result(py, trace_id, v, &self.cfg),
             TextResult::Modified(new_text) => {
                 let new_result_obj = new_text.into_pyobject(py)?.into_any().unbind();
                 let new_payload = clone_payload_with_attr(py, payload, "result", &new_result_obj)?;
                 let meta = build_text_meta(py, text, &new_text_str(&new_result_obj, py), false)?;
                 let mut kwargs: Vec<(&str, Py<PyAny>)> =
                     vec![("modified_payload", new_payload), ("metadata", meta)];
-                push_metrics_kwargs(py, trace_id, &mut kwargs, text.len(), true, 1)?;
+                push_metrics_kwargs(py, trace_id, &mut kwargs, text.len(), true, 1, &self.cfg)?;
                 build_result_dyn(py, "ToolPostInvokeResult", kwargs)
             }
             TextResult::Unchanged => {
@@ -146,14 +146,14 @@ impl OutputLengthGuardPluginCore {
         };
 
         match handle_text(py, &text, &self.cfg)? {
-            TextResult::Violation(v) => build_blocked_result(py, trace_id, v),
+            TextResult::Violation(v) => build_blocked_result(py, trace_id, v, &self.cfg),
             TextResult::Modified(new_text) => {
                 let new_dict = clone_dict_with_key(py, result_dict, "text", &new_text)?;
                 let new_payload = clone_payload_with_attr(py, payload, "result", &new_dict)?;
                 let meta = build_text_meta(py, &text, &new_text, false)?;
                 let mut kwargs: Vec<(&str, Py<PyAny>)> =
                     vec![("modified_payload", new_payload), ("metadata", meta)];
-                push_metrics_kwargs(py, trace_id, &mut kwargs, text.len(), true, 1)?;
+                push_metrics_kwargs(py, trace_id, &mut kwargs, text.len(), true, 1, &self.cfg)?;
                 build_result_dyn(py, "ToolPostInvokeResult", kwargs)
             }
             TextResult::Unchanged => {
@@ -175,7 +175,7 @@ impl OutputLengthGuardPluginCore {
         let (out_items, was_modified, total_chars, items_modified) =
             match self.process_mcp_items_result(py, list, trace_id)? {
                 Ok(r) => r,
-                Err(violation) => return build_blocked_result(py, trace_id, violation),
+                Err(violation) => return build_blocked_result(py, trace_id, violation, &self.cfg),
             };
 
         if was_modified {
@@ -188,7 +188,7 @@ impl OutputLengthGuardPluginCore {
                 ("modified_payload", new_payload),
                 ("metadata", meta.into_any().unbind()),
             ];
-            push_metrics_kwargs(py, trace_id, &mut kwargs, total_chars, true, items_modified)?;
+            push_metrics_kwargs(py, trace_id, &mut kwargs, total_chars, true, items_modified, &self.cfg)?;
             return build_result_dyn(py, "ToolPostInvokeResult", kwargs);
         }
         let meta = PyDict::new(py);
@@ -213,7 +213,7 @@ impl OutputLengthGuardPluginCore {
         for item in list.iter() {
             let text: String = item.extract()?;
             match handle_text(py, &text, &self.cfg)? {
-                TextResult::Violation(v) => return build_blocked_result(py, trace_id, v),
+                TextResult::Violation(v) => return build_blocked_result(py, trace_id, v, &self.cfg),
                 TextResult::Modified(new_text) => {
                     total_chars_truncated += text.len();
                     items_modified += 1;
@@ -240,6 +240,7 @@ impl OutputLengthGuardPluginCore {
                 total_chars_truncated,
                 true,
                 items_modified,
+                &self.cfg,
             )?;
             return build_result_dyn(py, "ToolPostInvokeResult", kwargs);
         }
@@ -273,7 +274,7 @@ impl OutputLengthGuardPluginCore {
                     details,
                 } => {
                     let violation = build_violation(py, &reason, &description, &code, &details)?;
-                    return build_blocked_result(py, trace_id, violation);
+                    return build_blocked_result(py, trace_id, violation, &self.cfg);
                 }
                 ProcessResult::Ok { value, modified } => {
                     if modified {
@@ -317,7 +318,7 @@ impl OutputLengthGuardPluginCore {
         let (out_items, was_modified, total_chars_seen, items_modified_count) =
             match self.process_mcp_items_result(py, content_list, trace_id)? {
                 Ok(r) => r,
-                Err(violation) => return build_blocked_result(py, trace_id, violation),
+                Err(violation) => return build_blocked_result(py, trace_id, violation, &self.cfg),
             };
 
         let sc_processed = struct_key.is_some();
@@ -345,6 +346,7 @@ impl OutputLengthGuardPluginCore {
                 total_chars_seen,
                 true,
                 items_modified_count,
+                &self.cfg,
             )?;
             return build_result_dyn(py, "ToolPostInvokeResult", kwargs);
         }
@@ -365,26 +367,42 @@ impl OutputLengthGuardPluginCore {
         list: &Bound<'_, PyList>,
         _trace_id: Option<&str>,
     ) -> PyResult<Result<(Vec<Py<PyAny>>, bool, usize, usize), Py<PyAny>>> {
-        // Security: reject lists that exceed max_structure_size
-        if list.len() > self.cfg.max_structure_size && self.cfg.strategy == Strategy::Block {
-            let violation = build_violation(
-                py,
-                "Structure size exceeds security limit",
-                &format!(
-                    "Content list has {} items, exceeding limit of {}",
-                    list.len(),
-                    self.cfg.max_structure_size
-                ),
-                "STRUCTURE_SIZE_VIOLATION",
-                &[
-                    ("size".to_string(), serde_json::json!(list.len())),
-                    (
-                        "max_size".to_string(),
-                        serde_json::json!(self.cfg.max_structure_size),
+        // Security: enforce max_structure_size regardless of strategy.
+        // Mirrors the pattern in structured.rs::process_list / process_dict.
+        if list.len() > self.cfg.max_structure_size {
+            log::error!(
+                "Content list size {} exceeds maximum {} (MCP items)",
+                list.len(),
+                self.cfg.max_structure_size
+            );
+            if self.cfg.strategy == Strategy::Block {
+                let violation = build_violation(
+                    py,
+                    "Structure size exceeds security limit",
+                    &format!(
+                        "Content list has {} items, exceeding limit of {}",
+                        list.len(),
+                        self.cfg.max_structure_size
                     ),
-                ],
-            )?;
-            return Ok(Err(violation));
+                    "STRUCTURE_SIZE_VIOLATION",
+                    &[
+                        ("size".to_string(), serde_json::json!(list.len())),
+                        (
+                            "max_size".to_string(),
+                            serde_json::json!(self.cfg.max_structure_size),
+                        ),
+                    ],
+                )?;
+                return Ok(Err(violation));
+            }
+            // Truncate strategy: pass the oversized list through unchanged (items will
+            // still have their individual text content guarded below).
+            return Ok(Ok((
+                list.iter().map(|item| item.unbind()).collect(),
+                false,
+                0,
+                0,
+            )));
         }
 
         let mut modified = false;
@@ -601,6 +619,7 @@ fn push_metrics_kwargs(
     chars_seen: usize,
     truncated: bool,
     items_modified: usize,
+    cfg: &OutputLengthGuardConfig,
 ) -> PyResult<()> {
     let Some(tid) = trace_id else {
         return Ok(());
@@ -612,8 +631,8 @@ fn push_metrics_kwargs(
             chars_seen,
             truncated_count: if truncated { items_modified } else { 0 },
             blocked: false,
-            mode: "character",
-            strategy: "truncate",
+            mode: cfg.limit_mode.as_str(),
+            strategy: cfg.strategy.as_str(),
             stage: "tool_post_invoke",
         },
     )? {
@@ -655,6 +674,7 @@ fn build_blocked_result(
     py: Python<'_>,
     trace_id: Option<&str>,
     violation: Py<PyAny>,
+    cfg: &OutputLengthGuardConfig,
 ) -> PyResult<Py<PyAny>> {
     let mut kwargs: Vec<(&str, Py<PyAny>)> = vec![
         (
@@ -671,8 +691,8 @@ fn build_blocked_result(
                 chars_seen: 0,
                 truncated_count: 0,
                 blocked: true,
-                mode: "character",
-                strategy: "block",
+                mode: cfg.limit_mode.as_str(),
+                strategy: cfg.strategy.as_str(),
                 stage: "tool_post_invoke",
             },
         )
@@ -1888,6 +1908,97 @@ class Payload:
             assert!(
                 !sc_processed,
                 "None structuredContent must NOT be treated as present; ! deletion mutant would set sc_processed=true"
+            );
+        });
+    }
+
+    // ── Bug fix: push_metrics_kwargs emits actual limit_mode / strategy ──────
+    // Regression test: token-mode truncation must emit limit_mode="token", not "character".
+    #[test]
+    fn token_mode_metrics_emit_correct_limit_mode() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let d = PyDict::new(py);
+            d.set_item("max_tokens", 2usize).unwrap(); // 2 tokens * 4 chars = 8 chars max
+            d.set_item("limit_mode", "token").unwrap();
+            d.set_item("strategy", "truncate").unwrap();
+            d.set_item("max_chars", py.None()).unwrap();
+            let core = OutputLengthGuardPluginCore::new(d.as_any()).unwrap();
+            // 16 chars = 4 estimated tokens > 2 → truncation fires
+            let text = "abcdefghijklmnop".into_pyobject(py).unwrap().into_any();
+            let payload = make_payload(py, "t", text).unwrap();
+            let ctx = PyDict::new(py);
+            let ext = make_extensions(py, "trace-token").unwrap();
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), Some(&ext))
+                .unwrap();
+            let result = result.bind(py);
+            let meta = result.getattr("metadata").unwrap();
+            let inner = meta.get_item("output_length_guard").unwrap();
+            assert!(!inner.is_none(), "metrics must be present with trace_id");
+            let limit_mode: String = inner
+                .get_item("limit_mode")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(
+                limit_mode, "token",
+                "token-mode plugin must emit limit_mode='token', not 'character'"
+            );
+            let strategy: String = inner
+                .get_item("strategy")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(
+                strategy, "truncate",
+                "truncate-strategy plugin must emit strategy='truncate'"
+            );
+        });
+    }
+
+    // ── Bug fix: process_mcp_items_result enforces max_structure_size in truncate mode ──
+    // Regression test: oversized list with strategy=truncate must pass through, not loop forever.
+    #[test]
+    fn mcp_content_dict_oversized_list_truncate_mode_passes_through_unchanged() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let d = PyDict::new(py);
+            d.set_item("max_chars", py.None()).unwrap(); // no char limit
+            d.set_item("max_structure_size", 2usize).unwrap();
+            d.set_item("strategy", "truncate").unwrap();
+            d.set_item("limit_mode", "character").unwrap();
+            let core = OutputLengthGuardPluginCore::new(d.as_any()).unwrap();
+            // 3 items > max_structure_size=2, strategy=truncate: must NOT block,
+            // must return the list unchanged (no panic, no infinite loop).
+            let item_a = PyDict::new(py);
+            item_a.set_item("type", "text").unwrap();
+            item_a.set_item("text", "a").unwrap();
+            let item_b = PyDict::new(py);
+            item_b.set_item("type", "text").unwrap();
+            item_b.set_item("text", "b").unwrap();
+            let item_c = PyDict::new(py);
+            item_c.set_item("type", "text").unwrap();
+            item_c.set_item("text", "c").unwrap();
+            let content = PyList::new(py, [item_a, item_b, item_c]).unwrap();
+            let result_dict = PyDict::new(py);
+            result_dict.set_item("content", content).unwrap();
+            let payload = make_payload(py, "t", result_dict.as_any().clone()).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            let cp: bool = result
+                .bind(py)
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(
+                cp,
+                "oversized list with truncate strategy must not block (continue_processing=true)"
             );
         });
     }
