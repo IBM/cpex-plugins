@@ -12,6 +12,8 @@ from datetime import date
 from pathlib import Path
 import re
 
+from tools.plugin_catalog import CatalogError, discover_plugins
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "tools" / "plugin_catalog.py"
@@ -4301,11 +4303,36 @@ class PluginCatalogTests(unittest.TestCase):
 
             # Then both roots are discovered with language-specific Cargo metadata.
             self.assertEqual(result.returncode, 0, result.stderr)
-            records = {record["slug"]: record for record in json.loads(result.stdout)["plugins"]}
+            discovered = json.loads(result.stdout)["plugins"]
+            self.assertEqual(
+                [record["slug"] for record in discovered], ["rust_demo", "python_demo"]
+            )
+            records = {record["slug"]: record for record in discovered}
             self.assertEqual(records["rust_demo"]["language"], "rust")
             self.assertEqual(records["rust_demo"]["cargo_package_name"], "rust_demo")
             self.assertEqual(records["python_demo"]["language"], "python")
             self.assertIsNone(records["python_demo"]["cargo_package_name"])
+
+    def test_discovery_rejects_duplicate_slug_across_managed_roots(self) -> None:
+        # Given valid Rust and pure-Python plugins with the same slug.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            slug = "shared_demo"
+            rust_path = f"plugins/rust/python-package/{slug}"
+            (root / "Cargo.toml").write_text(
+                f'[workspace]\nmembers = ["{rust_path}"]\n'
+                '[workspace.package]\nrepository = "https://github.com/IBM/cpex-plugins"\n'
+            )
+            self._create_plugin(root, slug)
+            self._create_python_plugin(root, slug)
+
+            # When discovery crosses the second managed root, then ambiguity is rejected.
+            with self.assertRaisesRegex(CatalogError, slug) as raised:
+                discover_plugins(root)
+
+            self.assertIn("across managed roots", str(raised.exception))
+            self.assertIn(rust_path, str(raised.exception))
+            self.assertIn(f"plugins/python/{slug}", str(raised.exception))
 
     def test_python_plugin_validates_without_cargo_workspace_membership(self) -> None:
         # Given a valid Python plugin that is only a root uv workspace member.

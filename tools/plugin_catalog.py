@@ -277,9 +277,18 @@ def discover_plugins(root: Path) -> list[PluginRecord]:
         plugins.append(
             validate_plugin_dir(root, plugin_dir, workspace_members, workspace_package)
         )
+    rust_paths_by_slug = {plugin.slug: plugin.path for plugin in plugins}
     python_root = root / PYTHON_MANAGED_ROOT
     if python_root.exists():
-        for plugin_dir in sorted(path for path in python_root.iterdir() if path.is_dir()):
+        for plugin_dir in sorted(
+            path for path in python_root.iterdir() if path.is_dir()
+        ):
+            if plugin_dir.name in rust_paths_by_slug:
+                python_path = plugin_dir.relative_to(root).as_posix()
+                raise CatalogError(
+                    f"Duplicate plugin slug {plugin_dir.name!r} across managed roots: "
+                    f"{rust_paths_by_slug[plugin_dir.name]} and {python_path}"
+                )
             plugins.append(
                 validate_plugin_dir(root, plugin_dir, workspace_members, workspace_package)
             )
