@@ -31,6 +31,7 @@ plugins:
     hooks: [tool_pre_invoke, tool_post_invoke]
     mode: sequential
     priority: 200
+    capabilities: [read_headers]
     config:
       enabled: false
       metering_url: "https://metering.example.invalid/events"
