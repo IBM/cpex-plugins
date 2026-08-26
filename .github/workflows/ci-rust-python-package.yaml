@@ -65,6 +65,11 @@ jobs:
       has_mutation_cargo_packages: ${{ steps.detect.outputs.has_mutation_cargo_packages }}
       release_validation_tags: ${{ steps.detect.outputs.release_validation_tags }}
       has_release_validation_tags: ${{ steps.detect.outputs.has_release_validation_tags }}
+      rust_plugins: ${{ steps.detect.outputs.rust_plugins }}
+      has_rust_plugins: ${{ steps.detect.outputs.has_rust_plugins }}
+      rust_plugin_count: ${{ steps.detect.outputs.rust_plugin_count }}
+      rust_release_validation_tags: ${{ steps.detect.outputs.rust_release_validation_tags }}
+      has_rust_release_validation_tags: ${{ steps.detect.outputs.has_rust_release_validation_tags }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -98,6 +103,11 @@ jobs:
           has_mutation_cargo_packages="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(str(json.load(sys.stdin)["has_mutation_cargo_packages"]).lower())')"
           release_validation_tags="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["release_validation_tags"]))')"
           has_release_validation_tags="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(str(json.load(sys.stdin)["has_release_validation_tags"]).lower())')"
+          rust_plugins="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["rust_plugins"]))')"
+          has_rust_plugins="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(str(json.load(sys.stdin)["has_rust_plugins"]).lower())')"
+          rust_plugin_count="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["rust_plugin_count"])')"
+          rust_release_validation_tags="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["rust_release_validation_tags"]))')"
+          has_rust_release_validation_tags="$(printf '%s' "${selection}" | python3 -c 'import json, sys; print(str(json.load(sys.stdin)["has_rust_release_validation_tags"]).lower())')"
           if [[ "${has_plugins}" == "false" ]]; then
             has_plugins_output="false"
           else
@@ -114,16 +124,21 @@ jobs:
             echo "has_mutation_cargo_packages=${has_mutation_cargo_packages_output}"
             echo "release_validation_tags=${release_validation_tags}"
             echo "has_release_validation_tags=${has_release_validation_tags}"
+            echo "rust_plugins=${rust_plugins}"
+            echo "has_rust_plugins=${has_rust_plugins}"
+            echo "rust_plugin_count=${rust_plugin_count}"
+            echo "rust_release_validation_tags=${rust_release_validation_tags}"
+            echo "has_rust_release_validation_tags=${has_rust_release_validation_tags}"
           } >> "$GITHUB_OUTPUT"
 
   build-test:
     needs: validate-and-detect
-    if: needs.validate-and-detect.outputs.has_plugins == 'true'
+    if: needs.validate-and-detect.outputs.has_rust_plugins == 'true'
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        plugin: ${{ fromJson(needs.validate-and-detect.outputs.plugins) }}
+        plugin: ${{ fromJson(needs.validate-and-detect.outputs.rust_plugins) }}
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -264,7 +279,7 @@ jobs:
 
   coverage:
     needs: validate-and-detect
-    if: needs.validate-and-detect.outputs.has_plugins == 'true'
+    if: needs.validate-and-detect.outputs.has_rust_plugins == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -305,7 +320,7 @@ jobs:
         env:
           CARGO_PACKAGES: ${{ needs.validate-and-detect.outputs.cargo_packages }}
           NEXTEST_PROFILE: ci
-          PLUGINS: ${{ needs.validate-and-detect.outputs.plugins }}
+          PLUGINS: ${{ needs.validate-and-detect.outputs.rust_plugins }}
           PYO3_PYTHON: python
         run: |
           mkdir -p coverage
@@ -333,7 +348,7 @@ jobs:
 
       - name: Enforce per-plugin coverage floor
         env:
-          PLUGINS: ${{ needs.validate-and-detect.outputs.plugins }}
+          PLUGINS: ${{ needs.validate-and-detect.outputs.rust_plugins }}
         run: python3 tools/plugin_catalog.py coverage-check . coverage/cobertura.xml 90.00 "${PLUGINS}"
 
       - name: Upload coverage to Codecov
@@ -370,12 +385,12 @@ jobs:
           cargo doc "${cargo_args[@]}" --lib --no-deps --document-private-items
 
   release-validation:
-    if: github.event_name == 'pull_request' && needs.validate-and-detect.outputs.has_release_validation_tags == 'true'
+    if: github.event_name == 'pull_request' && needs.validate-and-detect.outputs.has_rust_release_validation_tags == 'true'
     needs: validate-and-detect
     strategy:
       fail-fast: false
       matrix:
-        tag: ${{ fromJson(needs.validate-and-detect.outputs.release_validation_tags) }}
+        tag: ${{ fromJson(needs.validate-and-detect.outputs.rust_release_validation_tags) }}
     permissions:
       contents: read
       pull-requests: read
@@ -400,7 +415,7 @@ jobs:
         always() &&
         github.event_name == 'push' &&
         github.ref == 'refs/heads/main' &&
-        needs.validate-and-detect.outputs.has_release_validation_tags == 'true' &&
+        needs.validate-and-detect.outputs.has_rust_release_validation_tags == 'true' &&
         needs.build-test.result == 'success' &&
         needs.security-policy.result == 'success' &&
         needs.coverage.result == 'success' &&
@@ -420,7 +435,7 @@ jobs:
       - name: Create release tags for bumped plugin versions
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAGS: ${{ needs.validate-and-detect.outputs.release_validation_tags }}
+          RELEASE_TAGS: ${{ needs.validate-and-detect.outputs.rust_release_validation_tags }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"

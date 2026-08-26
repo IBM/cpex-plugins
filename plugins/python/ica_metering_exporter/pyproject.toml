@@ -1,0 +1,69 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cpex-ica-metering-exporter"
+version = "0.1.0"
+description = "Export MCP tool invocation metrics to ICA core-services metering endpoint"
+authors = [{ name = "ICA Team" }]
+license = { text = "Apache-2.0" }
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["cpex>=0.1.3,<0.2", "httpx>=0.27,<1", "PyJWT>=2.8,<3"]
+classifiers = [
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+[project.entry-points."cpex.plugins"]
+ica_metering_exporter = "cpex_ica_metering_exporter.plugin:IcaMeteringExporterPlugin"
+
+[tool.hatch.build.targets.wheel]
+packages = ["cpex_ica_metering_exporter"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.3.0",
+    "ruff",
+    "mypy",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-config", "--strict-markers"]
+filterwarnings = ["error"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+follow_untyped_imports = true
+
+[[tool.mypy.overrides]]
+module = ["cpex", "cpex.*"]
+ignore_missing_imports = true
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = ["ANN401", "COM812", "CPY001", "ISC001", "D203", "D213", "UP045"]
+
+[tool.ruff.lint.per-file-ignores]
+"cpex_ica_metering_exporter/plugin.py" = ["C901", "PLR0911", "PLR0912"]
+"cpex_ica_metering_exporter/transport.py" = ["C901"]
+"tests/**/*.py" = ["S101", "ARG", "PLR2004", "SLF001", "D", "INP001", "PT018"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true

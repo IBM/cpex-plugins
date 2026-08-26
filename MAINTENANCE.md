@@ -35,12 +35,12 @@ The monthly workflow runs automatically on the 1st of each month and opens a PR.
 
 1. **Review the lock file diffs**
    - `Cargo.lock` — check for any crate jumping a major version unexpectedly
-   - `uv.lock` — check for any package bumping past the constraint bounds in `pyproject.toml`
-   - `plugins/rust/python-package/sql_sanitizer/uv.lock` — same check
+   - Root `uv.lock` — check every Rust-packaged and pure-Python workspace member for packages bumping past the constraint bounds in `pyproject.toml`
 
 2. **Verify gateway compatibility constraints are still satisfied**
    - Open `pyproject.toml` → `[tool.uv] constraint-dependencies`
    - Confirm each pinned range (`cpex`, `pydantic`, `maturin`, etc.) still holds after the bump
+   - Review `httpx` and `PyJWT` compatibility for the ICA Metering Exporter; the root uv lock spans all workspace members
 
 3. **Check `deny.toml` advisory suppressions**
    - If `cargo deny check advisories` introduced new RUSTSEC advisories in the workflow log, evaluate and either update the suppress list with a justification comment or fix the dependency
@@ -62,13 +62,14 @@ When a release is imminent and a dependency bump is needed:
 # OR run locally:
 cargo update
 uv lock --upgrade
-cd plugins/rust/python-package/sql_sanitizer && uv lock --upgrade && cd -
 cargo deny --all-features check advisories --config deny.toml
-# Run tests for all plugins:
-for plugin in encoded_exfil_detection pii_filter rate_limiter retry_with_backoff secrets_detection sql_sanitizer url_reputation; do
-  make plugin-test PLUGIN=$plugin
+# Run tests for all plugins through dual-root routing:
+for plugin in encoded_exfil_detection pii_filter rate_limiter retry_with_backoff secrets_detection sql_sanitizer url_reputation ica_metering_exporter; do
+  make plugin-test PLUGIN="$plugin"
 done
 ```
+
+The maintenance workflow keeps explicit `rust_plugins` and `python_plugins` arrays because their test commands run from different roots. The Python loop runs each slug from `plugins/python/${plugin}`. Add every future Rust slug to `rust_plugins` and every future pure-Python slug to `python_plugins` in `.github/workflows/plugin-maintenance.yaml`.
 
 ---
 
@@ -82,6 +83,8 @@ Records known constraints between plugin dependencies and the gateway (`cpex`/`m
 | all | `pydantic` | `>=2.13.4,<3` | gateway 0.1.x | Pydantic v3 not yet validated against gateway models | 2026-07 |
 | all | `maturin` | `>=1.13.3,<2.0` | build toolchain | Major maturin bumps may change wheel ABI tagging | 2026-07 |
 | all | `redis` | `>=7.4.0` | gateway 0.1.x | Lower bound — no upper constraint yet | 2026-07 |
+| `ica_metering_exporter` | `httpx` | `>=0.27,<1` | gateway 0.1.x | HTTP client is resolved in the root uv workspace; validate transport behavior when bumping | 2026-08 |
+| `ica_metering_exporter` | `PyJWT` | `>=2.8,<3` | gateway 0.1.x | HS256 service JWT behavior is resolved in the root uv workspace; validate token generation when bumping | 2026-08 |
 | `pii_filter` | `pyo3` | `0.29.0` (workspace) | — | ABI3-py311; bump with cross-plugin coordination | 2026-07 |
 | `secrets_detection` | `regex` | `1.12.3` (workspace) | — | No constraint; update freely | 2026-07 |
 

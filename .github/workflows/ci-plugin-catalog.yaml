@@ -6,21 +6,31 @@ on:
     paths:
       - "tests/test_plugin_catalog.py"
       - "tools/plugin_catalog.py"
+      - "tools/validate_ci_selection.py"
+      - "pyproject.toml"
+      - "plugins/python/**"
       - "plugins/rust/python-package/*/Cargo.toml"
       - "plugins/rust/python-package/*/plugin-manifest.yaml"
       - ".github/workflows/ci-plugin-catalog.yaml"
       - ".github/workflows/ci-rust-python-package.yaml"
       - ".github/workflows/release-rust-python-package.yaml"
+      - ".github/workflows/ci-python-package.yaml"
+      - ".github/workflows/release-python-package.yaml"
   pull_request:
     branches: [main]
     paths:
       - "tests/test_plugin_catalog.py"
       - "tools/plugin_catalog.py"
+      - "tools/validate_ci_selection.py"
+      - "pyproject.toml"
+      - "plugins/python/**"
       - "plugins/rust/python-package/*/Cargo.toml"
       - "plugins/rust/python-package/*/plugin-manifest.yaml"
       - ".github/workflows/ci-plugin-catalog.yaml"
       - ".github/workflows/ci-rust-python-package.yaml"
       - ".github/workflows/release-rust-python-package.yaml"
+      - ".github/workflows/ci-python-package.yaml"
+      - ".github/workflows/release-python-package.yaml"
 
 concurrency:
   group: ci-plugin-catalog-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}

@@ -62,7 +62,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          plugins=(
+          rust_plugins=(
             encoded_exfil_detection
             pii_filter
             rate_limiter
@@ -71,11 +71,22 @@ jobs:
             sql_sanitizer
             url_reputation
           )
-          for plugin in "${plugins[@]}"; do
+          for plugin in "${rust_plugins[@]}"; do
             echo "::group::Testing ${plugin}"
             pushd "plugins/rust/python-package/${plugin}"
             make sync
             NEXTEST_PROFILE=ci make ci
+            popd
+            echo "::endgroup::"
+          done
+          python_plugins=(
+            ica_metering_exporter
+          )
+          for plugin in "${python_plugins[@]}"; do
+            echo "::group::Testing ${plugin}"
+            pushd "plugins/python/${plugin}"
+            make sync
+            make ci
             popd
             echo "::endgroup::"
           done
@@ -95,10 +106,9 @@ jobs:
             ### Changes
             - `cargo update` applied to Rust workspace (`Cargo.lock`)
             - `uv lock --upgrade` applied to root Python workspace (`uv.lock`)
-            - `uv lock --upgrade` applied to `sql_sanitizer` plugin lock file
 
             ### Validation performed in CI
-            - All 7 plugins built and tested on `ubuntu-latest`
+            - All 8 managed plugins built and tested on `ubuntu-latest`
             - `cargo deny check advisories` passed — no new CVEs
 
             ### Reviewer checklist

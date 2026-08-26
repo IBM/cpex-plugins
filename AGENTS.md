@@ -9,7 +9,8 @@
 This is a monorepo of standalone plugin packages for the ContextForge Plugin Extensibility (CPEX) Framework. Each plugin lives in its own top-level directory with independent build configuration.
 
 - Plugins are implemented as **pure Python** or **pure Rust**. Each plugin uses one language for its core logic — there is no dual-path where a plugin ships both Rust and Python implementations with a Rust fallback. For Rust plugins, Python entry points (PyO3/maturin) are a packaging and distribution layer only, not a parallel implementation.
-- Each plugin has its own `pyproject.toml`, `Cargo.toml`, `Makefile`, and `tests/`.
+- Rust plugins live in `plugins/rust/python-package/<slug>/`; realized pure-Python plugins live in `plugins/python/<slug>/`.
+- Every plugin has its own `pyproject.toml`, `Makefile`, package directory, and unit tests. Rust plugins additionally have `Cargo.toml` and Rust source files.
 - Package names follow the pattern `cpex-<plugin-name>` (e.g., `cpex-rate-limiter`).
 - `cpex` is the framework runtime dependency; declare it in plugin `pyproject.toml`.
 
@@ -25,10 +26,10 @@ This is a monorepo of standalone plugin packages for the ContextForge Plugin Ext
   - Run during plugin development and CI
   - Scope: Plugin logic, Rust functions, Python bindings
 
-- **Plugin-framework integration tests**: Located in `plugins/rust/python-package/<slug>/tests/`
-  - Test plugin integration with the local plugin framework (PyO3 bindings, Python ↔ Rust interface)
+- **Plugin-framework integration tests**: Located in `plugins/rust/python-package/<slug>/tests/` for Rust plugins and `plugins/tests/<slug>/` for pure-Python plugins
+  - Test plugin integration with the local plugin framework, including the PyO3 interface for Rust plugins
   - Run via `make test-integration` within the plugin directory
-  - Scope: PyO3 entry points, plugin loading by the Python framework, hook dispatch
+  - Scope: Plugin entry points (including PyO3 for Rust), loading by the Python framework, hook dispatch
 
 - **Gateway integration tests**: Located in `mcp-context-forge/tests/integration/`
   - Test plugin integration with the full gateway
@@ -46,7 +47,7 @@ This is a monorepo of standalone plugin packages for the ContextForge Plugin Ext
 
 When developing a plugin:
 
-1. Write unit tests in the plugin's own directory (Rust: inline `mod tests`; Python: `plugins/rust/python-package/<slug>/tests/`) and plugin-framework integration tests in `plugins/rust/python-package/<slug>/tests/`
+1. Write unit tests in the plugin's own directory (Rust: inline `mod tests` plus binding tests; pure Python: `plugins/python/<slug>/tests/`) and plugin-framework integration tests in the Rust plugin's `tests/` directory or `plugins/tests/<slug>/` for pure Python
 2. Run local tests: `make test-all` and `make test-integration` from plugin directory
 3. After plugin PR is merged, coordinate with `mcp-context-forge` team
 4. Write gateway integration/E2E tests in `mcp-context-forge/tests/`
@@ -112,6 +113,22 @@ The plugin framework is currently implemented in Python (`mcpgateway/plugins/fra
    - Update mcp-context-forge dependencies
    - Deploy with new plugin version
 
+### Current Workflow: Pure Python
+
+Pure-Python plugins implement their logic directly in Python under `plugins/python/<slug>/`; they are independent implementations, not fallbacks for Rust plugins.
+
+1. Create the plugin directory and required package files under `plugins/python/<slug>/`.
+2. Implement the plugin in `cpex_<slug>/` and keep `plugin-manifest.yaml` aligned with the package entry point.
+3. Add unit tests under `plugins/python/<slug>/tests/` and plugin-framework integration tests under `plugins/tests/<slug>/`.
+4. Run the local workflow:
+   ```bash
+   cd plugins/python/<slug>
+   uv sync --dev
+   make test-all
+   make test-integration
+   ```
+5. Run `make ci`, then release with the standard `<slug>-v<version>` tag after review.
+
 ### Future Workflow: Pure Rust
 
 **Architecture (Post-Framework Migration):**
@@ -175,7 +192,7 @@ The plugin framework is currently implemented in Python (`mcpgateway/plugins/fra
 
 ## Build & Test
 
-From within a plugin directory (e.g., `rate_limiter/`):
+From within a Rust plugin directory (e.g., `rate_limiter/`):
 
 ```bash
 uv sync --dev              # Install Python dependencies
@@ -184,24 +201,31 @@ make test-all              # Run Rust + Python tests
 make check-all             # fmt-check + clippy + Rust tests
 ```
 
+From within a pure-Python plugin directory:
+
+```bash
+uv sync --dev
+make test-all              # Run unit and plugin-framework integration tests
+make check-all             # Run formatting, lint, and type checks
+```
+
 ## Conventions
 
 - Python: 3.11+, type hints, snake_case, Pydantic for config validation.
 - Rust: stable toolchain, `cargo fmt`, `clippy -- -D warnings`.
 - All source files must include Apache-2.0 SPDX license headers.
-- Versions are defined in `Cargo.toml` and pulled dynamically by maturin (`dynamic = ["version"]`).
+- Rust versions are defined in `Cargo.toml` and pulled dynamically by maturin (`dynamic = ["version"]`); pure-Python versions are defined in the plugin's `pyproject.toml`.
 
 ## Versioning
 
 Every change to a core plugin must include a plugin version bump.
 
-When bumping a plugin version, update all of these:
+The version source and lockfile depend on the implementation language:
 
-1. `Cargo.toml` — the single source of truth for the version number.
-2. `cpex_<plugin>/plugin-manifest.yaml` — the `version` field.
-3. `Cargo.lock` — updates automatically on the next build.
+- **Rust**: `Cargo.toml` is the single source of truth; update `Cargo.lock` and make the `cpex_<plugin>/plugin-manifest.yaml` version match.
+- **Pure Python**: the plugin's `pyproject.toml` is the single source of truth; regenerate the root `uv.lock` and make the `cpex_<plugin>/plugin-manifest.yaml` version match. Pure-Python workspace members do not have member-local `uv.lock` files.
 
-Tag releases as `<plugin>-v<version>` (e.g., `rate-limiter-v0.0.2`) on `main` to trigger the PyPI publish workflow.
+Tag releases as `<plugin>-v<version>` on `main` to trigger the language-appropriate PyPI publish workflow. Examples are `rate-limiter-v0.0.2` and `ica-metering-exporter-v0.1.0`.
 
 ## OpenTelemetry Integration and Trace Context
 

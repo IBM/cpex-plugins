@@ -2,24 +2,24 @@
 
 ## Repository Model
 
-This repository currently manages one plugin class: Rust plugins that are built with PyO3/maturin and published to PyPI as Python packages.
+This repository manages Rust plugins built with PyO3/maturin and pure-Python plugins. Both are published to PyPI as Python packages, but each plugin has only one implementation language.
 
-Managed plugin path:
+Managed plugin paths:
 
 ```text
-plugins/rust/python-package/<slug>/
+plugins/rust/python-package/<slug>/  # Rust implementation with Python packaging
+plugins/python/<slug>/               # Pure-Python implementation
 ```
 
-Every managed plugin must satisfy the catalog contract enforced by `tools/plugin_catalog.py`:
+`tools/plugin_catalog.py` discovers both roots and records each plugin's language. Every managed plugin must satisfy these shared catalog contracts:
 
 - distribution name: `cpex-<slug>`
 - Python module: `cpex_<slug>`
-- `Cargo.toml` is the version source of truth
-- `cpex_<slug>/plugin-manifest.yaml` version matches `Cargo.toml`
 - `cpex_<slug>/plugin-manifest.yaml` defines top-level `kind` in `module.object` form
 - `pyproject.toml` publishes the matching plugin class reference under `[project.entry-points."cpex.plugins"]` in `module:object` form
-- plugin `Cargo.toml` repository metadata points to `https://github.com/IBM/cpex-plugins`
-- plugin crate is listed in the top-level workspace `Cargo.toml`
+- the manifest version matches the language-specific source: `Cargo.toml` for Rust or `pyproject.toml` for pure Python
+- every plugin is a root uv-workspace member; only Rust plugin crates are top-level Cargo-workspace members
+- Rust plugin `Cargo.toml` repository metadata points to `https://github.com/IBM/cpex-plugins`
 
 ## Working on One Plugin
 
@@ -30,7 +30,18 @@ make install
 make test-all
 ```
 
-Swap `rate_limiter` for any other managed plugin slug.
+Swap `rate_limiter` for any other managed Rust plugin slug.
+
+For a pure-Python plugin:
+
+```bash
+cd plugins/python/ica_metering_exporter
+make sync
+make test-all
+make check-all
+```
+
+Pure-Python unit tests run from `plugins/python/<slug>/tests/`; `make test-integration` runs the matching framework suite from `plugins/tests/<slug>/`.
 
 ## Secrets Detection Count Semantics
 
@@ -79,9 +90,9 @@ make detect-secrets-check
 
 ## Adding a New Managed Plugin
 
-### Using the Plugin Scaffold Generator (Recommended)
+### Using the Rust Plugin Scaffold Generator
 
-The easiest way to create a new plugin is using the scaffold generator:
+**Rust-only:** the scaffold generator creates Rust plugins with PyO3/maturin packaging. It must not be used to generate pure-Python plugins.
 
 ```bash
 make plugin-scaffold
@@ -111,7 +122,7 @@ After scaffolding:
 3. Run `make plugins-validate` to verify structure
 4. Run `make plugin-test PLUGIN=<slug>` to execute the plugin's full `make ci` flow
 
-### Manual Plugin Creation
+### Manual Rust Plugin Creation
 
 If you prefer to create a plugin manually:
 
@@ -121,6 +132,16 @@ If you prefer to create a plugin manually:
 4. Run `make plugins-validate`.
 5. Run `make plugin-test PLUGIN=<slug>` to execute the plugin's full `make ci` flow.
 
+### Manual Pure-Python Plugin Creation
+
+1. Create `plugins/python/<slug>/` with `pyproject.toml`, `Makefile`, `README.md`, `cpex_<slug>/`, and `tests/`; do not add a `Cargo.toml`.
+2. Register the distribution as a root uv-workspace member and publish the manifest's plugin class under `[project.entry-points."cpex.plugins"]`.
+3. Keep the version in the plugin's `pyproject.toml`, match it in `cpex_<slug>/plugin-manifest.yaml`, and regenerate the root `uv.lock`.
+4. Add plugin-framework integration tests under `plugins/tests/<slug>/`.
+5. Run `make plugins-validate`, then run `make sync`, `make test-all`, and `make ci` from the plugin directory.
+
+The catalog exposes separate Rust and Python selections to CI. `.github/workflows/ci-rust-python-package.yaml` builds selected Rust plugins, while `.github/workflows/ci-python-package.yaml` builds selected pure-Python plugins. Shared changes can select plugins from both roots without treating a Python implementation as a Rust fallback.
+
 ## Releasing
 
 Releases are per plugin and version-bump driven. Use this process to publish a
@@ -128,20 +149,25 @@ new version of an existing managed plugin to PyPI.
 
 1. Pick the plugin slug and new version.
 
-   The plugin slug is the directory name under
-   `plugins/rust/python-package/<slug>/`, for example `rate_limiter`. The tag
-   slug is the hyphenated form, for example `rate-limiter`.
+   The plugin slug is the directory name under its managed root, for example
+   `plugins/rust/python-package/rate_limiter/` or
+   `plugins/python/ica_metering_exporter/`. The tag slug is the hyphenated
+   form, for example `rate-limiter` or `ica-metering-exporter`.
 
 2. Update the version files.
 
-   `Cargo.toml` is the version source of truth. The plugin manifest and
-   top-level lockfile must stay consistent with it.
+   `Cargo.toml` is the Rust version source of truth and updates `Cargo.lock`.
+   A pure-Python plugin's `pyproject.toml` is its version source of truth and
+   updates the root `uv.lock`. The plugin manifest must match in both cases.
 
    ```bash
    $EDITOR plugins/rust/python-package/rate_limiter/Cargo.toml
    $EDITOR plugins/rust/python-package/rate_limiter/cpex_rate_limiter/plugin-manifest.yaml
    cargo update -p rate_limiter --precise 0.0.5
    ```
+
+   For a pure-Python plugin, edit its `pyproject.toml` and manifest, then run
+   `uv lock` at the repository root.
 
 3. Run local validation.
 
@@ -154,11 +180,12 @@ new version of an existing managed plugin to PyPI.
 
 5. Let CI create the release tag and publish.
 
-   On a `main` push, `.github/workflows/ci-rust-python-package.yaml` detects
-   plugin `Cargo.toml` version bumps. After the build, security, coverage, and
-   documentation jobs are green, it creates the release tag at the merge commit
-   and invokes `.github/workflows/release-rust-python-package.yaml` with PyPI
-   publishing enabled.
+   On a `main` push, `.github/workflows/ci-rust-python-package.yaml` detects Rust
+   `Cargo.toml` version bumps and `.github/workflows/ci-python-package.yaml`
+   detects pure-Python `pyproject.toml` version bumps. After each language's
+   required checks are green, the matching CI workflow creates the release tag
+   at the merge commit and invokes `release-rust-python-package.yaml` or
+   `release-python-package.yaml` with PyPI publishing enabled.
 
    The workflow uses `GITHUB_TOKEN` to push release tags. Repository tag
    protection or rulesets for release tag patterns must allow that token, or
@@ -175,6 +202,7 @@ new version of an existing managed plugin to PyPI.
 
    - `rate_limiter` -> `rate-limiter-v0.0.5`
    - `secrets_detection` -> `secrets-detection-v0.2.2`
+   - `ica_metering_exporter` -> `ica-metering-exporter-v0.1.0`
 
    Use `make plugins-list` to inspect the current managed plugin slugs and
    package names. Do not create the tag manually for ordinary releases; manual
@@ -185,6 +213,8 @@ new version of an existing managed plugin to PyPI.
    ```bash
    gh run list --workflow ci-rust-python-package.yaml --branch main --limit 5
    gh run list --workflow release-rust-python-package.yaml --limit 5
+   gh run list --workflow ci-python-package.yaml --branch main --limit 5
+   gh run list --workflow release-python-package.yaml --limit 5
    gh run watch <run-id> --exit-status
    ```
 
@@ -197,12 +227,13 @@ new version of an existing managed plugin to PyPI.
    The release page should also exist at
    `https://pypi.org/project/cpex-rate-limiter/0.0.5/`.
 
-The CI workflow creates tags only after the required checks pass. It then calls
-the release workflow directly for publishing; it does not rely on a bot-created
-tag push to start another workflow run. The release workflow resolves the tag
-back to the managed plugin path, validates metadata and versions, then builds
-and publishes only that plugin. PyPI publishing is allowed only for release tags
-that point at `main`.
+The CI workflows create tags only after their required checks pass. They call
+the matching release workflow directly for publishing rather than relying on a
+bot-created tag push. Both release workflows resolve every catalog tag, then
+language guards skip all post-resolution jobs in the wrong-language workflow.
+The matching workflow validates metadata and versions, builds and tests the
+plugin's artifacts, and publishes only that plugin. PyPI publishing is allowed
+only for release tags that point at `main`.
 
 Dependency refresh work is separate from the release process. Track broader
 dependency or ContextForge updates outside a plugin release PR.

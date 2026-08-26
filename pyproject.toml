@@ -29,4 +29,5 @@ members = [
     "plugins/rust/python-package/secrets_detection",
     "plugins/rust/python-package/sql_sanitizer",
     "plugins/rust/python-package/url_reputation",
+    "plugins/python/ica_metering_exporter",
 ]

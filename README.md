@@ -1,6 +1,6 @@
 # cpex-plugins
 
-Monorepo for managed CPEX plugins that are implemented in Rust and published as Python packages.
+Monorepo for managed CPEX plugins implemented in pure Python or Rust and published as Python packages.
 
 ## Runtime Requirements
 
@@ -10,7 +10,10 @@ Rust plugin packages require their compiled PyO3 extension at import/runtime. Th
 
 ## Layout
 
-Managed plugins live under `plugins/rust/python-package/<slug>/`.
+Managed plugins live under two language-specific roots:
+
+- Rust plugins packaged for Python: `plugins/rust/python-package/<slug>/`
+- Pure-Python plugins: `plugins/python/<slug>/`
 
 Current plugins:
 
@@ -21,31 +24,34 @@ Current plugins:
 | `rate_limiter` | `cpex-rate-limiter` | Enforce per-user, per-tenant, and per-tool rate limits |
 | `retry_with_backoff` | `cpex-retry-with-backoff` | Apply retry policy and exponential backoff metadata to transient failures |
 | `secrets_detection` | `cpex-secrets-detection` | Detect and redact likely credentials in prompt arguments, tool inputs and outputs, and resource content |
+| `sql_sanitizer` | `cpex-sql-sanitizer` | Analyze SQL for blocked statements, unsafe mutations, and interpolation patterns |
 | `url_reputation` | `cpex-url-reputation` | Apply static URL allowlist, blocklist, pattern, and heuristic checks before resource fetches |
+| `ica_metering_exporter` | `cpex-ica-metering-exporter` | Export MCP tool invocation metrics to an ICA core-services metering endpoint |
 
-Each managed plugin must include:
+Every managed plugin includes:
 
 - `pyproject.toml`
-- `Cargo.toml`
 - `Makefile`
 - `README.md`
 - `cpex_<slug>/__init__.py`
 - `cpex_<slug>/plugin-manifest.yaml`
 
-Python integration tests live under `plugins/tests/<slug>/`; Rust unit tests live in the plugin crate.
+Rust plugins additionally include `Cargo.toml` and Rust source files. Pure-Python plugins do not include `Cargo.toml`; their implementation and unit tests live in the Python package directory.
 
-Rust crates are owned by the top-level workspace in `Cargo.toml`. Python package names follow `cpex-<slug>`, Python modules follow `cpex_<slug>`, plugin manifests must declare a top-level `kind` in `module.object` form, and `pyproject.toml` must publish the matching `module:object` reference under `[project.entry-points."cpex.plugins"]`. Release tags use the hyphenated slug form `<slug-with-hyphens>-v<version>`, for example `rate-limiter-v0.0.2`.
+Pure-Python unit tests live under `plugins/python/<slug>/tests/`, shared plugin-framework integration tests live under `plugins/tests/<slug>/`, and Rust unit tests live in the plugin crate.
+
+Rust crates are owned by the top-level workspace in `Cargo.toml`; all Python distributions are members of the root uv workspace. Python package names follow `cpex-<slug>`, Python modules follow `cpex_<slug>`, plugin manifests must declare a top-level `kind` in `module.object` form, and `pyproject.toml` must publish the matching `module:object` reference under `[project.entry-points."cpex.plugins"]`. Rust plugin versions come from `Cargo.toml` and update `Cargo.lock`; pure-Python plugin versions come from `pyproject.toml` and update the root `uv.lock`. The plugin manifest version must match the language-specific source in both cases. Release tags use the hyphenated slug form `<slug-with-hyphens>-v<version>`, for example `rate-limiter-v0.0.2`.
 
 ## Testing Strategy
 
 Testing spans two repositories:
 
-- **Unit tests**: within each plugin's own directory — Python in `plugins/rust/python-package/<slug>/tests/`, Rust inline via `mod tests` in source files
-- **Plugin-framework integration tests**: `plugins/rust/python-package/<slug>/tests/` — test PyO3 bindings and plugin loading by the Python framework (`make test-integration`)
+- **Unit tests**: within each plugin's own directory — pure Python in `plugins/python/<slug>/tests/`, Rust inline via `mod tests`, and Python binding tests for Rust packages under their plugin directory
+- **Plugin-framework integration tests**: `plugins/tests/<slug>/` for pure-Python plugins and the Rust plugin's own `tests/` directory — test framework discovery, loading, and hook dispatch (`make test-integration`)
 - **Gateway integration tests**: `mcp-context-forge/tests/integration/` — test plugin integration with the full gateway
 - **E2E tests**: `mcp-context-forge/tests/e2e/` — test complete workflows with plugins
 
-Unit tests and plugin-framework integration tests live in the plugin's own directory. Gateway integration and E2E tests live in `mcp-context-forge`.
+Unit tests live in each plugin's own directory. Plugin-framework integration tests live under `plugins/tests/<slug>/` for pure-Python plugins and in the plugin-local `tests/` directory for Rust plugins. Gateway integration and E2E tests live in `mcp-context-forge`.
 
 See [TESTING.md](TESTING.md) for detailed testing guidelines and cross-repository coordination.
 
@@ -72,9 +78,9 @@ After the plugin framework is migrated to Rust:
 See [DEVELOPING.md](DEVELOPING.md) for detailed workflows for both current and future development.
 
 
-## Creating a New Plugin
+## Creating a New Rust Plugin
 
-Use the plugin scaffold generator to create a new plugin with all required files and structure:
+The current plugin scaffold generator is Rust-only. Use it to create a Rust plugin with its PyO3/maturin packaging layer; create pure-Python plugins manually under `plugins/python/<slug>/`.
 
 ```bash
 make plugin-scaffold
@@ -119,13 +125,21 @@ The catalog and validator used by CI live in `tools/plugin_catalog.py`.
 
 ## Quick Start
 
-### Develop a Plugin
+### Develop a Rust Plugin
 
 ```bash
 cd plugins/rust/python-package/<slug>
 uv sync --dev              # Install dependencies
 make install               # Build Rust extension
 make test-all              # Run unit tests
+```
+
+### Develop a Pure-Python Plugin
+
+```bash
+cd plugins/python/<slug>
+make sync                  # Install dependencies
+make test-all              # Run unit and plugin-framework integration tests
 ```
 
 ### Plugin-Framework Integration Testing

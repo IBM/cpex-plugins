@@ -40,39 +40,112 @@ def _assert_mutation_jobs(value: object) -> list[dict[str, object]]:
     return value
 
 
+def _assert_string_list(value: object, field_name: str) -> list[str]:
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise AssertionError(f"{field_name} must be a string list")
+    return value
+
+
+def _assert_bool(value: object, field_name: str, expected: bool) -> bool:
+    if not isinstance(value, bool):
+        raise AssertionError(f"{field_name} must be bool")
+    if value is not expected:
+        raise AssertionError(f"{field_name} must match its list")
+    return value
+
+
+def _assert_count(value: object, field_name: str, items: list[str]) -> int:
+    if type(value) is not int or value != len(items):
+        raise AssertionError(f"{field_name} must equal len of its plugin list")
+    return value
+
+
 def main() -> int:
     payload = json.load(sys.stdin)
+    if not isinstance(payload, dict):
+        raise AssertionError("CI selection payload must be an object")
     plugins = _assert_slug_list(payload.get("plugins"), "plugins")
+    rust_plugins = _assert_slug_list(payload.get("rust_plugins"), "rust_plugins")
+    python_plugins = _assert_slug_list(payload.get("python_plugins"), "python_plugins")
     cargo_packages = _assert_slug_list(payload.get("cargo_packages"), "cargo_packages")
     mutation_cargo_packages = _assert_slug_list(
         payload.get("mutation_cargo_packages"), "mutation_cargo_packages"
     )
     mutation_jobs = _assert_mutation_jobs(payload.get("mutation_jobs"))
-    release_validation_tags = payload.get("release_validation_tags")
-    has_plugins = payload.get("has_plugins")
-    plugin_count = payload.get("plugin_count")
-
-    if not isinstance(release_validation_tags, list) or any(
-        not isinstance(item, str) for item in release_validation_tags
+    release_validation_tags = _assert_string_list(
+        payload.get("release_validation_tags"), "release_validation_tags"
+    )
+    rust_release_validation_tags = _assert_string_list(
+        payload.get("rust_release_validation_tags"), "rust_release_validation_tags"
+    )
+    python_release_validation_tags = _assert_string_list(
+        payload.get("python_release_validation_tags"), "python_release_validation_tags"
+    )
+    has_plugins = _assert_bool(payload.get("has_plugins"), "has_plugins", bool(plugins))
+    has_rust_plugins = _assert_bool(
+        payload.get("has_rust_plugins"), "has_rust_plugins", bool(rust_plugins)
+    )
+    has_python_plugins = _assert_bool(
+        payload.get("has_python_plugins"), "has_python_plugins", bool(python_plugins)
+    )
+    plugin_count = _assert_count(payload.get("plugin_count"), "plugin_count", plugins)
+    rust_plugin_count = _assert_count(
+        payload.get("rust_plugin_count"), "rust_plugin_count", rust_plugins
+    )
+    python_plugin_count = _assert_count(
+        payload.get("python_plugin_count"), "python_plugin_count", python_plugins
+    )
+    has_mutation_cargo_packages = _assert_bool(
+        payload.get("has_mutation_cargo_packages"),
+        "has_mutation_cargo_packages",
+        bool(mutation_cargo_packages),
+    )
+    has_release_validation_tags = _assert_bool(
+        payload.get("has_release_validation_tags"),
+        "has_release_validation_tags",
+        bool(release_validation_tags),
+    )
+    has_rust_release_validation_tags = _assert_bool(
+        payload.get("has_rust_release_validation_tags"),
+        "has_rust_release_validation_tags",
+        bool(rust_release_validation_tags),
+    )
+    has_python_release_validation_tags = _assert_bool(
+        payload.get("has_python_release_validation_tags"),
+        "has_python_release_validation_tags",
+        bool(python_release_validation_tags),
+    )
+    if plugins != sorted(rust_plugins + python_plugins):
+        raise AssertionError("plugins must equal the combined language plugin lists")
+    if release_validation_tags != sorted(
+        rust_release_validation_tags + python_release_validation_tags
     ):
-        raise AssertionError("release_validation_tags must be a string list")
-    if not isinstance(has_plugins, bool):
-        raise AssertionError("has_plugins must be bool")
-    if not isinstance(plugin_count, int) or plugin_count != len(plugins):
-        raise AssertionError("plugin_count must equal len(plugins)")
+        raise AssertionError(
+            "release_validation_tags must equal the combined language tag lists"
+        )
 
     print(
         json.dumps(
             {
                 "plugins": plugins,
+                "rust_plugins": rust_plugins,
+                "python_plugins": python_plugins,
                 "has_plugins": has_plugins,
+                "has_rust_plugins": has_rust_plugins,
+                "has_python_plugins": has_python_plugins,
                 "plugin_count": plugin_count,
+                "rust_plugin_count": rust_plugin_count,
+                "python_plugin_count": python_plugin_count,
                 "cargo_packages": cargo_packages,
                 "mutation_cargo_packages": mutation_cargo_packages,
                 "mutation_jobs": mutation_jobs,
-                "has_mutation_cargo_packages": bool(mutation_cargo_packages),
+                "has_mutation_cargo_packages": has_mutation_cargo_packages,
                 "release_validation_tags": release_validation_tags,
-                "has_release_validation_tags": bool(release_validation_tags),
+                "rust_release_validation_tags": rust_release_validation_tags,
+                "python_release_validation_tags": python_release_validation_tags,
+                "has_release_validation_tags": has_release_validation_tags,
+                "has_rust_release_validation_tags": has_rust_release_validation_tags,
+                "has_python_release_validation_tags": has_python_release_validation_tags,
             }
         )
     )

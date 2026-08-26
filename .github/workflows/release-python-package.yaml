@@ -1,4 +1,4 @@
-name: Release Rust Python Package Plugin
+name: Release Python Package Plugin
 
 on:
   push:
@@ -38,6 +38,7 @@ on:
         required: false
         default: true
         type: boolean
+
 permissions:
   contents: read
 
@@ -48,7 +49,6 @@ jobs:
       plugin: ${{ steps.resolve.outputs.plugin }}
       slug: ${{ steps.resolve.outputs.plugin }}
       plugin_path: ${{ steps.resolve.outputs.plugin_path }}
-      wheel_matrix: ${{ steps.resolve.outputs.wheel_matrix }}
       publish_env: ${{ steps.resolve.outputs.publish_env }}
       publish_enabled: ${{ steps.resolve.outputs.publish_enabled }}
       checkout_ref: ${{ steps.resolve.outputs.checkout_ref }}
@@ -105,21 +105,15 @@ jobs:
           plugin="$(printf '%s' "${release_info}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["slug"])')"
           plugin_path="$(printf '%s' "${release_info}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["path"])')"
           language="$(printf '%s' "${release_info}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["language"])')"
-          if [[ "${language}" != "rust" ]]; then
+          if [[ "${language}" != "python" ]]; then
             skip=true
-            wheel_matrix="[]"
-          elif [[ -n "${TAG_INPUT}" ]]; then
-            skip=false
-            wheel_matrix="$(python3 -c 'import json; print(json.dumps([{"runner":"ubuntu-latest","platform":"linux-x86_64"},{"runner":"ubuntu-24.04-arm","platform":"linux-aarch64"},{"runner":"ubuntu-24.04-s390x","platform":"linux-s390x"},{"runner":"ubuntu-24.04-ppc64le","platform":"linux-ppc64le"},{"runner":"macos-latest","platform":"macos-arm64"},{"runner":"windows-latest","platform":"windows-x86_64"}]))')"
           else
             skip=false
-            wheel_matrix="$(printf '%s' "${release_info}" | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["release_wheel_matrix"]))')"
           fi
 
           {
             echo "plugin=${plugin}"
             echo "plugin_path=${plugin_path}"
-            echo "wheel_matrix=${wheel_matrix}"
             echo "checkout_ref=${checkout_ref}"
             echo "tag_on_main=${tag_on_main}"
             if [[ "${skip}" == "true" ]]; then
@@ -139,7 +133,7 @@ jobs:
             fi
           } >> "$GITHUB_OUTPUT"
 
-  preflight:
+  build:
     needs: resolve
     if: needs.resolve.outputs.skip != 'true'
     runs-on: ubuntu-latest
@@ -155,23 +149,24 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Verify Rust toolchain
-        run: |
-          rustc --version
-          cargo --version
+      - name: Install uv
+        run: python -m pip install uv==0.9.30
 
-      - name: Verify stubs are checked in
+      - name: Build distributions
         working-directory: ${{ needs.resolve.outputs.plugin_path }}
-        run: test -n "$(find . -name '*.pyi' -print -quit)"
+        run: uv build --out-dir dist
 
-  build-wheel:
-    needs: [resolve, preflight]
+      - name: Upload distributions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-dist
+          path: ${{ needs.resolve.outputs.plugin_path }}/dist/
+          if-no-files-found: error
+
+  test-built-wheel:
+    needs: [resolve, build]
     if: needs.resolve.outputs.skip != 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJson(needs.resolve.outputs.wheel_matrix) }}
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-latest
     defaults:
       run:
         shell: bash
@@ -181,42 +176,17 @@ jobs:
           ref: ${{ needs.resolve.outputs.checkout_ref }}
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        if: ${{ matrix.runner != 'ubuntu-24.04-s390x' && matrix.runner != 'ubuntu-24.04-ppc64le' }}
         with:
           python-version: "3.12"
 
-      - name: Install system Python on partner runners
-        if: ${{ matrix.runner == 'ubuntu-24.04-s390x' || matrix.runner == 'ubuntu-24.04-ppc64le' }}
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3.12 python3.12-dev python3.12-venv python3-pip
-          sudo apt-get clean
-          sudo rm -rf /var/lib/apt/lists/*
-          python_bin_dir="${RUNNER_TEMP}/python-bin"
-          mkdir -p "${python_bin_dir}"
-          ln -sf "$(which python3.12)" "${python_bin_dir}/python"
-          export PATH="${python_bin_dir}:$PATH"
-          echo "${python_bin_dir}" >> "$GITHUB_PATH"
-          python --version
-          python -m pip --version
-
-      - name: Verify Rust toolchain
-        run: |
-          rustc --version
-          cargo --version
-
       - name: Install uv
-        run: python -m pip install uv==0.9.30 maturin==1.12.6
+        run: python -m pip install uv==0.9.30
 
-      - name: Build wheel
-        working-directory: ${{ needs.resolve.outputs.plugin_path }}
-        run: uv run maturin build --release --out dist
-
-      - name: Upload wheel artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - name: Download distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: wheel-${{ matrix.platform }}
-          path: ${{ needs.resolve.outputs.plugin_path }}/dist/*.whl
+          name: python-dist
+          path: ${{ needs.resolve.outputs.plugin_path }}/dist
 
       - name: Test built wheel in isolated virtualenv
         working-directory: ${{ needs.resolve.outputs.plugin_path }}
@@ -244,8 +214,8 @@ jobs:
               "${tmpdir}/tests/${{ needs.resolve.outputs.slug }}" -v
           fi
 
-  build-sdist:
-    needs: [resolve, preflight]
+  test-built-sdist:
+    needs: [resolve, build]
     if: needs.resolve.outputs.skip != 'true'
     runs-on: ubuntu-latest
     defaults:
@@ -261,17 +231,13 @@ jobs:
           python-version: "3.12"
 
       - name: Install uv
-        run: python -m pip install uv==0.9.30 maturin==1.12.6
+        run: python -m pip install uv==0.9.30
 
-      - name: Build sdist
-        working-directory: ${{ needs.resolve.outputs.plugin_path }}
-        run: uv run maturin sdist --out dist
-
-      - name: Upload sdist artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - name: Download distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: sdist
-          path: ${{ needs.resolve.outputs.plugin_path }}/dist/*.tar.gz
+          name: python-dist
+          path: ${{ needs.resolve.outputs.plugin_path }}/dist
 
       - name: Test built sdist in isolated virtualenv
         working-directory: ${{ needs.resolve.outputs.plugin_path }}
@@ -301,17 +267,17 @@ jobs:
 
   publish:
     if: ${{ needs.resolve.outputs.skip != 'true' && needs.resolve.outputs.publish_enabled == 'true' && (needs.resolve.outputs.publish_env != 'pypi' || needs.resolve.outputs.tag_on_main == 'true') }}
-    needs: [resolve, build-wheel, build-sdist]
+    needs: [resolve, build, test-built-wheel, test-built-sdist]
     runs-on: ubuntu-latest
     environment: ${{ needs.resolve.outputs.publish_env }}
     permissions:
       id-token: write
     steps:
-      - name: Download all artifacts
+      - name: Download distributions
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
+          name: python-dist
           path: dist
-          merge-multiple: true
 
       - name: Publish distributions to TestPyPI
         if: needs.resolve.outputs.publish_env == 'testpypi'
