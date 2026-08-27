@@ -2658,7 +2658,7 @@ class PluginCatalogTests(unittest.TestCase):
 
         result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "plugin_count")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "8")
+        self.assertEqual(result.stdout.strip(), "9")
 
         result = run_catalog("ci-selection-field", str(REPO_ROOT), "all", "", "", "cargo_packages")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -2695,7 +2695,7 @@ class PluginCatalogTests(unittest.TestCase):
             "python_plugins": '["ica_metering_exporter"]',
             "has_rust_plugins": "true",
             "has_python_plugins": "true",
-            "rust_plugin_count": "7",
+            "rust_plugin_count": "8",
             "python_plugin_count": "1",
             "rust_release_validation_tags": "[]",
             "python_release_validation_tags": "[]",
@@ -4626,8 +4626,8 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         repository_payload = json.loads(result.stdout)
 
-        # Then all-mode characterizes the required 7 Rust / 1 Python split.
-        self.assertEqual(repository_payload["rust_plugin_count"], 7)
+        # Then all-mode characterizes the required 8 Rust / 1 Python split.
+        self.assertEqual(repository_payload["rust_plugin_count"], 8)
         self.assertEqual(repository_payload["python_plugin_count"], 1)
         self.assertTrue(repository_payload["has_rust_plugins"])
         self.assertTrue(repository_payload["has_python_plugins"])
