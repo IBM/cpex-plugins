@@ -509,9 +509,9 @@ fn handle_text(py: Python<'_>, text: &str, cfg: &OutputLengthGuardConfig) -> PyR
         return Ok(TextResult::Unchanged);
     }
 
-    let length = text.len();
+    let char_count = text.chars().count();
     let token_count = estimate_tokens(text, cfg.chars_per_token);
-    let (below_min, above_max) = evaluate_text_limits(length, token_count, cfg);
+    let (below_min, above_max) = evaluate_text_limits(char_count, token_count, cfg);
 
     if !below_min && !above_max {
         return Ok(TextResult::Unchanged);
@@ -546,12 +546,12 @@ fn handle_text(py: Python<'_>, text: &str, cfg: &OutputLengthGuardConfig) -> PyR
                     "Output length out of bounds".to_string(),
                     format!(
                         "Result length {} exceeds max_chars {}",
-                        length,
+                        char_count,
                         cfg.max_chars.unwrap_or(0)
                     ),
                     "OUTPUT_LENGTH_VIOLATION".to_string(),
                     vec![
-                        ("length".to_string(), serde_json::json!(length)),
+                        ("length".to_string(), serde_json::json!(char_count)),
                         ("max_chars".to_string(), serde_json::json!(cfg.max_chars)),
                         (
                             "strategy".to_string(),
@@ -564,11 +564,11 @@ fn handle_text(py: Python<'_>, text: &str, cfg: &OutputLengthGuardConfig) -> PyR
                     "Output length below minimum".to_string(),
                     format!(
                         "Result length {} (tokens {}) below minimum",
-                        length, token_count
+                        char_count, token_count
                     ),
                     "OUTPUT_LENGTH_VIOLATION".to_string(),
                     vec![
-                        ("length".to_string(), serde_json::json!(length)),
+                        ("length".to_string(), serde_json::json!(char_count)),
                         ("min_chars".to_string(), serde_json::json!(cfg.min_chars)),
                         ("token_count".to_string(), serde_json::json!(token_count)),
                         ("min_tokens".to_string(), serde_json::json!(cfg.min_tokens)),
@@ -2015,6 +2015,69 @@ class Payload:
                 cp,
                 "oversized list with truncate strategy must not block (continue_processing=true)"
             );
+        });
+    }
+
+    // ── Bug fix: char-mode detection uses char count not byte length ──────────
+    // A 4-char CJK string (4 bytes × 3 = 12 bytes in UTF-8) with max_chars=10
+    // must NOT trigger — 4 chars ≤ 10. With the old text.len() it would fire
+    // (12 > 10). With the fix (chars().count()) it correctly passes through.
+    #[test]
+    fn char_mode_detection_uses_char_count_not_bytes_for_cjk() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            // "你好世界" = 4 CJK chars, 12 UTF-8 bytes
+            let core = make_core(Some(10), "block").unwrap();
+            let text = "你好世界".into_pyobject(py).unwrap().into_any();
+            let payload = make_payload(py, "t", text).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            let cp: bool = result
+                .bind(py)
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(
+                cp,
+                "4-char CJK string must not be blocked with max_chars=10 (char count=4, byte len=12)"
+            );
+            // modified_payload must be None — no truncation needed
+            let modified = result.bind(py).getattr("modified_payload").unwrap();
+            assert!(
+                modified.is_none(),
+                "4-char CJK string must pass through unmodified"
+            );
+        });
+    }
+
+    // Companion: 11-char CJK string (33 bytes) with max_chars=10 MUST block.
+    #[test]
+    fn char_mode_detection_blocks_cjk_string_exceeding_char_limit() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            // "你好世界！" × 3 = 15 chars, well above max_chars=10
+            let core = make_core(Some(10), "block").unwrap();
+            let text = "你好世界！你好世界！你"
+                .into_pyobject(py)
+                .unwrap()
+                .into_any(); // 11 chars
+            let payload = make_payload(py, "t", text).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            let cp: bool = result
+                .bind(py)
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(!cp, "11-char CJK string must be blocked with max_chars=10");
         });
     }
 }

@@ -101,9 +101,12 @@ fn process_string(
         });
     }
 
-    let length = text.len();
-    let token_count = length / cfg.chars_per_token.max(1);
-    let (below_min, above_max) = evaluate_text_limits(length, token_count, cfg);
+    // Use char count (not byte length) so that max_chars is enforced in Unicode
+    // codepoints, matching Python's len(str) semantics. Byte length is only used
+    // for token estimation, which mirrors Python's len(text) // chars_per_token.
+    let char_count = text.chars().count();
+    let token_count = text.len() / cfg.chars_per_token.max(1);
+    let (below_min, above_max) = evaluate_text_limits(char_count, token_count, cfg);
 
     if !below_min && !above_max {
         return Ok(ProcessResult::Ok {
@@ -144,13 +147,13 @@ fn process_string(
                 reason: format!("String length out of bounds at {}", location),
                 description: format!(
                     "String length {} exceeds max_chars {} at {}",
-                    length,
+                    char_count,
                     cfg.max_chars.unwrap_or(0),
                     location
                 ),
                 code: "OUTPUT_LENGTH_VIOLATION".to_string(),
                 details: vec![
-                    ("length".to_string(), serde_json::json!(length)),
+                    ("length".to_string(), serde_json::json!(char_count)),
                     ("max_chars".to_string(), serde_json::json!(cfg.max_chars)),
                     (
                         "strategy".to_string(),
@@ -165,11 +168,11 @@ fn process_string(
                 reason: format!("String length/tokens below minimum at {}", location),
                 description: format!(
                     "String length {} or tokens {} below minimum at {}",
-                    length, token_count, location
+                    char_count, token_count, location
                 ),
                 code: "OUTPUT_LENGTH_VIOLATION".to_string(),
                 details: vec![
-                    ("length".to_string(), serde_json::json!(length)),
+                    ("length".to_string(), serde_json::json!(char_count)),
                     ("min_chars".to_string(), serde_json::json!(cfg.min_chars)),
                     ("token_count".to_string(), serde_json::json!(token_count)),
                     ("min_tokens".to_string(), serde_json::json!(cfg.min_tokens)),
