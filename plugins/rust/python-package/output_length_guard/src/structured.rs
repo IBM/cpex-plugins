@@ -356,16 +356,10 @@ pub fn generate_text_representation(data: &Bound<'_, PyAny>, depth: usize) -> Py
             return generate_text_representation(&val, depth + 1);
         }
         // Multi-key dict or depth limit reached
-        let json_module = pyo3::Python::attach(|_py| {
-            // We already have access to py via data's GIL
-            Ok::<_, PyErr>(())
-        });
-        let _ = json_module;
         return json_dumps(data);
     }
 
-    if let Ok(list) = data.cast::<PyList>() {
-        let _ = list;
+    if data.cast::<PyList>().is_ok() {
         return json_dumps(data);
     }
 

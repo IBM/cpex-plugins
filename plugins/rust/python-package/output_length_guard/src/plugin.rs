@@ -115,15 +115,18 @@ impl OutputLengthGuardPluginCore {
             TextResult::Modified(new_text) => {
                 let new_result_obj = new_text.into_pyobject(py)?.into_any().unbind();
                 let new_payload = clone_payload_with_attr(py, payload, "result", &new_result_obj)?;
-                let meta = build_text_meta(py, text, &new_text_str(&new_result_obj, py), false)?;
-                let mut kwargs: Vec<(&str, Py<PyAny>)> =
-                    vec![("modified_payload", new_payload), ("metadata", meta)];
-                push_metrics_kwargs(py, trace_id, &mut kwargs, text.len(), true, 1, &self.cfg)?;
+                let meta =
+                    build_text_meta_dict(py, text, &new_text_str(&new_result_obj, py), false)?;
+                merge_metrics_into_meta(py, &meta, trace_id, text.len(), true, 1, &self.cfg)?;
+                let kwargs: Vec<(&str, Py<PyAny>)> = vec![
+                    ("modified_payload", new_payload),
+                    ("metadata", meta.into_any().unbind()),
+                ];
                 build_result_dyn(py, "ToolPostInvokeResult", kwargs)
             }
             TextResult::Unchanged => {
-                let meta = build_text_meta(py, text, text, true)?;
-                let kwargs: Vec<(&str, Py<PyAny>)> = vec![("metadata", meta)];
+                let meta = build_text_meta_dict(py, text, text, true)?;
+                let kwargs: Vec<(&str, Py<PyAny>)> = vec![("metadata", meta.into_any().unbind())];
                 build_result_dyn(py, "ToolPostInvokeResult", kwargs)
             }
         }
@@ -150,15 +153,17 @@ impl OutputLengthGuardPluginCore {
             TextResult::Modified(new_text) => {
                 let new_dict = clone_dict_with_key(py, result_dict, "text", &new_text)?;
                 let new_payload = clone_payload_with_attr(py, payload, "result", &new_dict)?;
-                let meta = build_text_meta(py, &text, &new_text, false)?;
-                let mut kwargs: Vec<(&str, Py<PyAny>)> =
-                    vec![("modified_payload", new_payload), ("metadata", meta)];
-                push_metrics_kwargs(py, trace_id, &mut kwargs, text.len(), true, 1, &self.cfg)?;
+                let meta = build_text_meta_dict(py, &text, &new_text, false)?;
+                merge_metrics_into_meta(py, &meta, trace_id, text.len(), true, 1, &self.cfg)?;
+                let kwargs: Vec<(&str, Py<PyAny>)> = vec![
+                    ("modified_payload", new_payload),
+                    ("metadata", meta.into_any().unbind()),
+                ];
                 build_result_dyn(py, "ToolPostInvokeResult", kwargs)
             }
             TextResult::Unchanged => {
-                let meta = build_text_meta(py, &text, &text, true)?;
-                let kwargs: Vec<(&str, Py<PyAny>)> = vec![("metadata", meta)];
+                let meta = build_text_meta_dict(py, &text, &text, true)?;
+                let kwargs: Vec<(&str, Py<PyAny>)> = vec![("metadata", meta.into_any().unbind())];
                 build_result_dyn(py, "ToolPostInvokeResult", kwargs)
             }
         }
@@ -184,19 +189,19 @@ impl OutputLengthGuardPluginCore {
             let new_payload = clone_payload_with_attr(py, payload, "result", &new_result_obj)?;
             let meta = PyDict::new(py);
             meta.set_item("mcp_content_processed", true)?;
-            let mut kwargs: Vec<(&str, Py<PyAny>)> = vec![
-                ("modified_payload", new_payload),
-                ("metadata", meta.into_any().unbind()),
-            ];
-            push_metrics_kwargs(
+            merge_metrics_into_meta(
                 py,
+                &meta,
                 trace_id,
-                &mut kwargs,
                 total_chars,
                 true,
                 items_modified,
                 &self.cfg,
             )?;
+            let kwargs: Vec<(&str, Py<PyAny>)> = vec![
+                ("modified_payload", new_payload),
+                ("metadata", meta.into_any().unbind()),
+            ];
             return build_result_dyn(py, "ToolPostInvokeResult", kwargs);
         }
         let meta = PyDict::new(py);
@@ -239,19 +244,19 @@ impl OutputLengthGuardPluginCore {
             let new_result_obj = new_list.into_any().unbind();
             let new_payload = clone_payload_with_attr(py, payload, "result", &new_result_obj)?;
             let meta = PyDict::new(py);
-            let mut kwargs: Vec<(&str, Py<PyAny>)> = vec![
-                ("modified_payload", new_payload),
-                ("metadata", meta.into_any().unbind()),
-            ];
-            push_metrics_kwargs(
+            merge_metrics_into_meta(
                 py,
+                &meta,
                 trace_id,
-                &mut kwargs,
                 total_chars_truncated,
                 true,
                 items_modified,
                 &self.cfg,
             )?;
+            let kwargs: Vec<(&str, Py<PyAny>)> = vec![
+                ("modified_payload", new_payload),
+                ("metadata", meta.into_any().unbind()),
+            ];
             return build_result_dyn(py, "ToolPostInvokeResult", kwargs);
         }
         let meta = PyDict::new(py);
@@ -345,19 +350,19 @@ impl OutputLengthGuardPluginCore {
             meta.set_item("mcp_result_processed", true)?;
             meta.set_item("items_modified", true)?;
             meta.set_item("structured_content_processed", sc_processed)?;
-            let mut kwargs: Vec<(&str, Py<PyAny>)> = vec![
-                ("modified_payload", new_payload),
-                ("metadata", meta.into_any().unbind()),
-            ];
-            push_metrics_kwargs(
+            merge_metrics_into_meta(
                 py,
+                &meta,
                 trace_id,
-                &mut kwargs,
                 total_chars_seen,
                 true,
                 items_modified_count,
                 &self.cfg,
             )?;
+            let kwargs: Vec<(&str, Py<PyAny>)> = vec![
+                ("modified_payload", new_payload),
+                ("metadata", meta.into_any().unbind()),
+            ];
             return build_result_dyn(py, "ToolPostInvokeResult", kwargs);
         }
 
@@ -622,10 +627,15 @@ fn build_output_metrics<'py>(
     Ok(Some(outer))
 }
 
-fn push_metrics_kwargs(
+/// Merge OTel metrics into an existing metadata dict.
+///
+/// When a trace_id is present, builds the `output_length_guard` metrics dict and
+/// inserts it as `meta["output_length_guard"]`.  This avoids a second "metadata"
+/// entry in the kwargs vec, which would silently overwrite the first one.
+fn merge_metrics_into_meta(
     py: Python<'_>,
+    meta: &Bound<'_, PyDict>,
     trace_id: Option<&str>,
-    kwargs: &mut Vec<(&str, Py<PyAny>)>,
     chars_seen: usize,
     truncated: bool,
     items_modified: usize,
@@ -634,7 +644,7 @@ fn push_metrics_kwargs(
     let Some(tid) = trace_id else {
         return Ok(());
     };
-    if let Some(md) = build_output_metrics(
+    if let Some(outer) = build_output_metrics(
         py,
         Some(tid),
         MetricsArgs {
@@ -646,7 +656,10 @@ fn push_metrics_kwargs(
             stage: "tool_post_invoke",
         },
     )? {
-        kwargs.push(("metadata", md.into_any().unbind()));
+        // outer is { "output_length_guard": {...} } — merge its single entry into meta
+        if let Some(inner) = outer.get_item(PLUGIN_KEY)? {
+            meta.set_item(PLUGIN_KEY, inner)?;
+        }
     }
     Ok(())
 }
@@ -832,12 +845,12 @@ fn new_text_str(obj: &Py<PyAny>, py: Python<'_>) -> String {
     obj.bind(py).extract::<String>().unwrap_or_default()
 }
 
-fn build_text_meta(
-    py: Python<'_>,
+fn build_text_meta_dict<'py>(
+    py: Python<'py>,
     original: &str,
     new_text: &str,
     within_bounds: bool,
-) -> PyResult<Py<PyAny>> {
+) -> PyResult<Bound<'py, PyDict>> {
     let meta = PyDict::new(py);
     meta.set_item("original_length", original.len())?;
     meta.set_item("within_bounds", within_bounds)?;
@@ -845,7 +858,7 @@ fn build_text_meta(
         meta.set_item("truncated", new_text != original)?;
         meta.set_item("new_length", new_text.len())?;
     }
-    Ok(meta.into_any().unbind())
+    Ok(meta)
 }
 
 /// Extract trace_id from extensions.request.trace_id
