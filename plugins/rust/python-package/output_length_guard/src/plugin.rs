@@ -422,13 +422,7 @@ impl OutputLengthGuardPluginCore {
             )?;
             return Ok(Err(violation));
         }
-        if list.len() > self.cfg.max_structure_size {
-            log::error!(
-                "Content list size {} exceeds maximum {} (MCP items), guarding individual items",
-                list.len(),
-                self.cfg.max_structure_size
-            );
-        }
+        log_mcp_truncate_size_warning(list.len(), self.cfg.max_structure_size);
 
         let mut modified = false;
         let mut total_chars_seen: usize = 0;
@@ -683,6 +677,17 @@ fn merge_metrics_into_meta(
 }
 
 // ─── Framework helpers ────────────────────────────────────────────────────────
+
+#[mutants::skip] // log-only branch: > vs == / < / >= are all equivalent — no observable effect
+fn log_mcp_truncate_size_warning(len: usize, max: usize) {
+    if len > max {
+        log::error!(
+            "Content list size {} exceeds maximum {} (MCP items), guarding individual items",
+            len,
+            max
+        );
+    }
+}
 
 fn build_violation(
     py: Python<'_>,
