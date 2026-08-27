@@ -124,6 +124,12 @@ impl OutputLengthGuardPluginCore {
                 ];
                 build_result_dyn(py, "ToolPostInvokeResult", kwargs)
             }
+            TextResult::BelowMin => {
+                // Below min in truncate mode: pass through unchanged but flag out-of-bounds.
+                let meta = build_text_meta_dict(py, text, text, false)?;
+                let kwargs: Vec<(&str, Py<PyAny>)> = vec![("metadata", meta.into_any().unbind())];
+                build_result_dyn(py, "ToolPostInvokeResult", kwargs)
+            }
             TextResult::Unchanged => {
                 let meta = build_text_meta_dict(py, text, text, true)?;
                 let kwargs: Vec<(&str, Py<PyAny>)> = vec![("metadata", meta.into_any().unbind())];
@@ -159,6 +165,12 @@ impl OutputLengthGuardPluginCore {
                     ("modified_payload", new_payload),
                     ("metadata", meta.into_any().unbind()),
                 ];
+                build_result_dyn(py, "ToolPostInvokeResult", kwargs)
+            }
+            TextResult::BelowMin => {
+                // Below min in truncate mode: pass through unchanged but flag out-of-bounds.
+                let meta = build_text_meta_dict(py, &text, &text, false)?;
+                let kwargs: Vec<(&str, Py<PyAny>)> = vec![("metadata", meta.into_any().unbind())];
                 build_result_dyn(py, "ToolPostInvokeResult", kwargs)
             }
             TextResult::Unchanged => {
@@ -235,7 +247,7 @@ impl OutputLengthGuardPluginCore {
                     out.push(new_text);
                     modified = true;
                 }
-                TextResult::Unchanged => out.push(text),
+                TextResult::BelowMin | TextResult::Unchanged => out.push(text),
             }
         }
 
@@ -382,42 +394,40 @@ impl OutputLengthGuardPluginCore {
         list: &Bound<'_, PyList>,
         _trace_id: Option<&str>,
     ) -> PyResult<Result<(Vec<Py<PyAny>>, bool, usize, usize), Py<PyAny>>> {
-        // Security: enforce max_structure_size regardless of strategy.
-        // Mirrors the pattern in structured.rs::process_list / process_dict.
-        if list.len() > self.cfg.max_structure_size {
+        // Security: enforce max_structure_size on block strategy only.
+        // In truncate mode the list is allowed through so per-item text
+        // guarding below can still truncate individual oversized strings.
+        if list.len() > self.cfg.max_structure_size && self.cfg.strategy == Strategy::Block {
             log::error!(
                 "Content list size {} exceeds maximum {} (MCP items)",
                 list.len(),
                 self.cfg.max_structure_size
             );
-            if self.cfg.strategy == Strategy::Block {
-                let violation = build_violation(
-                    py,
-                    "Structure size exceeds security limit",
-                    &format!(
-                        "Content list has {} items, exceeding limit of {}",
-                        list.len(),
-                        self.cfg.max_structure_size
+            let violation = build_violation(
+                py,
+                "Structure size exceeds security limit",
+                &format!(
+                    "Content list has {} items, exceeding limit of {}",
+                    list.len(),
+                    self.cfg.max_structure_size
+                ),
+                "STRUCTURE_SIZE_VIOLATION",
+                &[
+                    ("size".to_string(), serde_json::json!(list.len())),
+                    (
+                        "max_size".to_string(),
+                        serde_json::json!(self.cfg.max_structure_size),
                     ),
-                    "STRUCTURE_SIZE_VIOLATION",
-                    &[
-                        ("size".to_string(), serde_json::json!(list.len())),
-                        (
-                            "max_size".to_string(),
-                            serde_json::json!(self.cfg.max_structure_size),
-                        ),
-                    ],
-                )?;
-                return Ok(Err(violation));
-            }
-            // Truncate strategy: pass the oversized list through unchanged (items will
-            // still have their individual text content guarded below).
-            return Ok(Ok((
-                list.iter().map(|item| item.unbind()).collect(),
-                false,
-                0,
-                0,
-            )));
+                ],
+            )?;
+            return Ok(Err(violation));
+        }
+        if list.len() > self.cfg.max_structure_size {
+            log::error!(
+                "Content list size {} exceeds maximum {} (MCP items), guarding individual items",
+                list.len(),
+                self.cfg.max_structure_size
+            );
         }
 
         let mut modified = false;
@@ -454,7 +464,7 @@ impl OutputLengthGuardPluginCore {
                         modified = true;
                         continue;
                     }
-                    TextResult::Unchanged => {}
+                    TextResult::BelowMin | TextResult::Unchanged => {}
                 }
             }
 
@@ -485,7 +495,7 @@ impl OutputLengthGuardPluginCore {
                         modified = true;
                         continue;
                     }
-                    TextResult::Unchanged => {}
+                    TextResult::BelowMin | TextResult::Unchanged => {}
                 }
             }
 
@@ -500,7 +510,10 @@ impl OutputLengthGuardPluginCore {
 
 enum TextResult {
     Unchanged,
+    /// Text was above-max and was truncated to `new_text`.
     Modified(String),
+    /// Text was below min in truncate mode — pass through but flag as out-of-bounds.
+    BelowMin,
     Violation(Py<PyAny>),
 }
 
@@ -591,6 +604,11 @@ fn handle_text(py: Python<'_>, text: &str, cfg: &OutputLengthGuardConfig) -> PyR
         }
     }
 
+    // Below min in truncate mode: pass through unchanged, signal out-of-bounds.
+    if below_min {
+        return Ok(TextResult::BelowMin);
+    }
+
     Ok(TextResult::Unchanged)
 }
 
@@ -678,6 +696,9 @@ fn build_violation(
         let py_val: Py<PyAny> = json_to_py(py, v)?;
         details_dict.set_item(k, py_val.bind(py))?;
     }
+    // mcp_error_code=-32000 (Application error) and http_status_code=422 are
+    // required by the gateway contract; without them the exception handler falls
+    // back to JSON-RPC -32603 and an incorrect HTTP status.
     build_framework_object_dyn(
         py,
         "PluginViolation",
@@ -689,6 +710,14 @@ fn build_violation(
             ),
             ("code", code.into_pyobject(py)?.into_any().unbind()),
             ("details", details_dict.into_any().unbind()),
+            (
+                "mcp_error_code",
+                (-32000_i64).into_pyobject(py)?.into_any().unbind(),
+            ),
+            (
+                "http_status_code",
+                422_i64.into_pyobject(py)?.into_any().unbind(),
+            ),
         ],
     )
 }
@@ -1935,8 +1964,6 @@ class Payload:
         });
     }
 
-    // ── Bug fix: push_metrics_kwargs emits actual limit_mode / strategy ──────
-    // Regression test: token-mode truncation must emit limit_mode="token", not "character".
     #[test]
     fn token_mode_metrics_emit_correct_limit_mode() {
         pyo3::Python::initialize();
@@ -1973,8 +2000,6 @@ class Payload:
         });
     }
 
-    // ── Bug fix: process_mcp_items_result enforces max_structure_size in truncate mode ──
-    // Regression test: oversized list with strategy=truncate must pass through, not loop forever.
     #[test]
     fn mcp_content_dict_oversized_list_truncate_mode_passes_through_unchanged() {
         pyo3::Python::initialize();
@@ -2018,10 +2043,6 @@ class Payload:
         });
     }
 
-    // ── Bug fix: char-mode detection uses char count not byte length ──────────
-    // A 4-char CJK string (4 bytes × 3 = 12 bytes in UTF-8) with max_chars=10
-    // must NOT trigger — 4 chars ≤ 10. With the old text.len() it would fire
-    // (12 > 10). With the fix (chars().count()) it correctly passes through.
     #[test]
     fn char_mode_detection_uses_char_count_not_bytes_for_cjk() {
         pyo3::Python::initialize();
@@ -2078,6 +2099,149 @@ class Payload:
                 .extract()
                 .unwrap();
             assert!(!cp, "11-char CJK string must be blocked with max_chars=10");
+        });
+    }
+
+    #[test]
+    fn mcp_content_dict_oversized_list_truncate_mode_still_guards_item_text() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let d = PyDict::new(py);
+            d.set_item("max_chars", 2usize).unwrap(); // force truncation
+            d.set_item("max_structure_size", 2usize).unwrap();
+            d.set_item("strategy", "truncate").unwrap();
+            d.set_item("limit_mode", "character").unwrap();
+            let core = OutputLengthGuardPluginCore::new(d.as_any()).unwrap();
+            // 3 items > max_structure_size=2; strategy=truncate → items must still be guarded
+            let make_item = |text: &str| {
+                let item = PyDict::new(py);
+                item.set_item("type", "text").unwrap();
+                item.set_item("text", text).unwrap();
+                item
+            };
+            let content = PyList::new(
+                py,
+                [
+                    make_item("abcdef"),
+                    make_item("abcdef"),
+                    make_item("abcdef"),
+                ],
+            )
+            .unwrap();
+            let result_dict = PyDict::new(py);
+            result_dict.set_item("content", content).unwrap();
+            let payload = make_payload(py, "t", result_dict.as_any().clone()).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            let result = result.bind(py);
+            // continue_processing must be true (truncate, not block)
+            let cp: bool = result
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(cp, "truncate mode must not block");
+            // modified_payload must be present — items were truncated
+            let modified = result.getattr("modified_payload").unwrap();
+            assert!(
+                !modified.is_none(),
+                "oversized truncate list: items must still be truncated"
+            );
+            // Each item text must be within max_chars=2
+            let modified_result = modified.getattr("result").unwrap();
+            let modified_result_dict = modified_result.cast::<pyo3::types::PyDict>().unwrap();
+            let content_val = modified_result_dict.get_item("content").unwrap().unwrap();
+            let content_out = content_val.cast::<PyList>().unwrap();
+            for item in content_out.iter() {
+                let text: String = item
+                    .cast::<pyo3::types::PyDict>()
+                    .unwrap()
+                    .get_item("text")
+                    .unwrap()
+                    .unwrap()
+                    .extract()
+                    .unwrap();
+                assert!(
+                    text.chars().count() <= 2,
+                    "item text '{}' exceeds max_chars=2",
+                    text
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn violation_carries_mcp_error_code_and_http_status_code() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let core = make_core(Some(5), "block").unwrap();
+            let text = "this is a long string"
+                .into_pyobject(py)
+                .unwrap()
+                .into_any();
+            let payload = make_payload(py, "t", text).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            let result = result.bind(py);
+            let violation = result.getattr("violation").unwrap();
+            assert!(!violation.is_none(), "expected a violation");
+            let mcp_code: i64 = violation
+                .getattr("mcp_error_code")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(mcp_code, -32000, "mcp_error_code must be -32000");
+            let http_code: i64 = violation
+                .getattr("http_status_code")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(http_code, 422, "http_status_code must be 422");
+        });
+    }
+
+    #[test]
+    fn below_min_truncate_mode_reports_within_bounds_false() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let d = PyDict::new(py);
+            d.set_item("min_chars", 20usize).unwrap(); // min > len("short") = 5
+            d.set_item("max_chars", py.None()).unwrap();
+            d.set_item("strategy", "truncate").unwrap();
+            d.set_item("limit_mode", "character").unwrap();
+            let core = OutputLengthGuardPluginCore::new(d.as_any()).unwrap();
+            let text = "short".into_pyobject(py).unwrap().into_any(); // 5 chars < min_chars=20
+            let payload = make_payload(py, "t", text).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            let result = result.bind(py);
+            // Must pass through (no violation, no modification)
+            let cp: bool = result
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(cp, "truncate mode must not block below-min strings");
+            assert!(
+                result.getattr("modified_payload").unwrap().is_none(),
+                "below-min truncate must not modify the payload"
+            );
+            // within_bounds must be false: value is out-of-bounds even though no truncation occurs
+            let meta = result.getattr("metadata").unwrap();
+            let within_bounds: bool = meta.get_item("within_bounds").unwrap().extract().unwrap();
+            assert!(
+                !within_bounds,
+                "below_min truncate mode must report within_bounds=false"
+            );
         });
     }
 }

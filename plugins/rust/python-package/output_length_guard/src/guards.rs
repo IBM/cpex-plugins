@@ -88,16 +88,24 @@ fn is_below_token_min(token_count: usize, min_tokens: usize) -> bool {
     min_tokens > 0 && token_count < min_tokens
 }
 
-/// Returns a sub-slice capped at `max_text_length` bytes.
+/// Returns a sub-slice capped at `max_text_length` bytes, snapped to the
+/// nearest valid UTF-8 char boundary at or before `max_text_length`.
+///
+/// Without the boundary snap, slicing at an arbitrary byte offset inside a
+/// multi-byte codepoint (e.g. `"€" * 400`, `max_text_length=1000`) causes a
+/// `PanicException` at the `&value[..cut]` site.
 ///
 /// Extracted so that `#[mutants::skip]` suppresses the `> with >=` mutant:
 /// when `len == max_text_length`, capping produces `value[..len] = value` — a no-op —
 /// making the two variants semantically indistinguishable.
-#[mutants::skip] // equivalent: > vs >= when len == max_text_length; capping to self = no-op
-#[inline]
+#[mutants::skip] // equivalent: > vs >= when len == max_text_length; capping to self = no-op; snap loop usize equivalence
 fn cap_at_max_text_length(value: &str, max_text_length: usize) -> &str {
     if value.len() > max_text_length {
-        &value[..max_text_length]
+        let mut cut = max_text_length;
+        while cut > 0 && !value.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        &value[..cut]
     } else {
         value
     }
@@ -955,6 +963,32 @@ mod tests {
         assert!(
             result.starts_with(&"a".repeat(16)),
             "result must start with the 'a' prefix"
+        );
+    }
+
+    #[test]
+    fn cap_at_max_text_length_does_not_panic_on_multibyte_boundary() {
+        let s: String = "€".repeat(400); // 1200 bytes
+        assert_eq!(s.len(), 1200);
+        let cfg = OutputLengthGuardConfig {
+            max_text_length: 1000,
+            max_tokens: Some(1),
+            limit_mode: crate::config::LimitMode::Token,
+            strategy: Strategy::Truncate,
+            ellipsis: String::new(),
+            ..Default::default()
+        };
+        // Must not panic; result must be valid UTF-8 and at most 1000 bytes.
+        let result = truncate(&s, &cfg);
+        assert!(
+            std::str::from_utf8(result.as_bytes()).is_ok(),
+            "result must be valid UTF-8"
+        );
+        // All "€" chars are 3 bytes; the nearest boundary at or below 1000 is 999.
+        assert!(
+            result.len() <= 1000,
+            "result must not exceed max_text_length bytes: len={}",
+            result.len()
         );
     }
 }
