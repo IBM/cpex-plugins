@@ -9,6 +9,7 @@ use pyo3::types::{PyDict, PyList, PyString};
 
 use crate::config::OutputLengthGuardConfig;
 use crate::output_length_guard::*;
+use crate::structured::{generate_text_representation, process_structured_data};
 
 /// Output Length Guard engine implementation.
 #[pyclass]
@@ -61,10 +62,10 @@ impl OutputLengthGuardEngine {
             );
         }
         if result.is_instance_of::<PyDict>() {
-            let text = result.cast::<PyDict>()?;
+            let result_dict = result.cast::<PyDict>()?;
 
             //  Dict with text field
-            if let Some(text) = text.get_item("text")? {
+            if let Some(text) = result_dict.get_item("text")? {
                 if text.is_instance_of::<PyString>() {
                     return self.handle_plain_string(
                         py,
@@ -74,7 +75,19 @@ impl OutputLengthGuardEngine {
                     );
                 }
             }
+
             // MCP CallToolResult as dict (from model_dump with 'content' key)
+            if let Some(content) = result_dict.get_item("content")? {
+                if content.is_instance_of::<PyList>() {
+                    return self.handle_mcp_content_dict(
+                        py,
+                        payload,
+                        &payload_name,
+                        context,
+                        result_dict,
+                    );
+                }
+            }
             debug!(
                 "OutputLengthGuard: Dict result from tool '{}' has no 'text' field, passing through unchanged",
                 payload_name
@@ -327,6 +340,115 @@ impl OutputLengthGuardEngine {
             kwargs.push(("modified_payload", tool_post_invoke_payload));
         }
         return build_framework_object_dyn(py, "ToolPostInvokeResult", kwargs);
+    }
+
+    fn handle_mcp_content_dict(
+        &self,
+        py: Python<'_>,
+        payload: &Bound<'_, PyAny>,
+        payload_name: &str,
+        context: &Bound<'_, PyAny>,
+        result: &Bound<PyDict>,
+    ) -> PyResult<Py<PyAny>> {
+        let mut struct_key: Option<&str> = None;
+
+        // PRIORITY CHECK: Process structuredContent first if present (and not None/null)
+        if result
+            .get_item("structuredContent")
+            .is_ok_and(|v| v.is_some())
+        {
+            struct_key = Some("structuredContent");
+        } else if result
+            .get_item("structured_content")
+            .is_ok_and(|v| v.is_some())
+        {
+            struct_key = Some("structured_content");
+        }
+        if let Some(key) = struct_key {
+            let content = result.get_item(key)?.unwrap();
+            let plugin_config = &self.config;
+            let (truncated_struct, struct_modified, violation) =
+                process_structured_data(&content, plugin_config, context, "", 0);
+
+            //comon metadata
+            let metadata = PyDict::new(py);
+            metadata.set_item("min_tokens", plugin_config.min_tokens)?;
+            metadata.set_item("max_tokens", plugin_config.max_tokens)?;
+            metadata.set_item("chars_per_token", plugin_config.chars_per_token)?;
+            // Handle violations
+            if let Some(violation) = violation {
+                debug!("Blocking due to violation in %s", struct_key);
+                let violations = self.build_violation_object(py, violation)?;
+                let metadata = PyDict::new(py);
+                metadata.set_item("structured_content_blocked", true)?;
+                metadata.set_item("location", struct_key)?;
+
+                let kwargs: Vec<(&str, Py<PyAny>)> = vec![
+                    (
+                        "continue_processing",
+                        false.into_pyobject(py)?.to_owned().into_any().unbind(),
+                    ),
+                    ("violation", violations),
+                    ("metadata", metadata.into_any().unbind()),
+                ];
+                return build_framework_object_dyn(py, "ToolPostInvokeResult", kwargs);
+            }
+            if struct_modified {
+                let new_result = result.copy()?;
+                new_result.set_item(key, truncated_struct)?;
+                let new_text = generate_text_representation(truncated_struct, 0);
+                let text_item = PyDict::new(py);
+                text_item.set_item("type", "text")?;
+                text_item.set_item("text", new_text)?;
+                let content_list = PyList::new(py, [text_item]);
+                new_result.set_item("content", content_list.ok())?;
+
+                metadata.set_item("mcp_result_processed", true)?;
+                metadata.set_item("items_modified", true)?;
+                metadata.set_item("structured_content_processed", true)?;
+
+                let mut kwargs: Vec<(&str, Py<PyAny>)> =
+                    vec![("metadata", metadata.into_any().unbind())];
+                let tool_post_invoke_payload = build_framework_object(
+                    py,
+                    "ToolPostInvokePayload",
+                    [
+                        ("name", payload_name.into_pyobject(py)?.into_any().unbind()),
+                        ("result", new_result.into_any().unbind()),
+                    ],
+                )?;
+
+                kwargs.push(("modified_payload", tool_post_invoke_payload));
+                return build_framework_object_dyn(py, "ToolPostInvokeResult", kwargs);
+            }
+        }
+
+        // Always process content array regardless of whether structuredContent was present
+
+        let contents = result.get_item("content").map_or(None, |content| {
+            if content.is_some_and(|value| value.is_instance_of::<PyList>()) {
+                Some(content.unwrap().cast::<PyList>().unwrap())
+            } else {
+                None
+            }
+        });
+
+        if let Some(content_list) = contents {
+            let mut modified = false;
+            let content_out = PyList::empty(py);
+            for item in content_list.iter() {
+                // If item is not of dict continue yo next
+                let Ok(item_dict) = item.cast::<PyDict>() else {
+                    content_out.append(&item)?;
+                    continue;
+                };
+                let item_type: Option<String> =
+                    item_dict.get_item("type")?.and_then(|v| v.extract().ok());
+                match item_type.as_deref() {}
+            }
+        }
+
+        todo!()
     }
 
     fn build_violation_object(

@@ -111,12 +111,19 @@ pub fn truncate(
     format!("{prefix}{ell}")
 }
 
+/// Check if a string represents a finite numeric value.
+///
+/// Handles integers, floats, and scientific notation.
+/// Rejects nan, inf, and strings longer than 50 characters
+/// to prevent guard bypass via numeric exemption.
+///
+/// Examples: "123", "123.45", "1.23e-4", "5E+10"
 pub fn is_numeric_string(text: &str) -> bool {
     if text.len() > MAX_NUMERIC_STRING_LENGTH {
         return false;
     }
 
-    match text.parse::<f64>() {
+    match text.trim().parse::<f64>() {
         Ok(value) => value.is_finite(),
         Err(_) => false,
     }
