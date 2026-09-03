@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cpex-ica-metering-exporter"
-version = "0.1.0"
+version = "0.1.1"
 description = "Export MCP tool invocation metrics to ICA core-services metering endpoint"
 authors = [{ name = "ICA Team" }]
 license = { text = "Apache-2.0" }

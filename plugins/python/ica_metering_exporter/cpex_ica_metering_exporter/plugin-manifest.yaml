@@ -1,6 +1,6 @@
 description: "Export MCP tool invocation metrics to ICA metering service"
 author: "ICA Team"
-version: "0.1.0"
+version: "0.1.1"
 kind: "cpex_ica_metering_exporter.plugin.IcaMeteringExporterPlugin"
 available_hooks:
   - "tool_pre_invoke"
