@@ -127,6 +127,7 @@ fn process_string(
                 ),
                 code: "OUTPUT_TOKEN_VIOLATION".to_string(),
                 details: vec![
+                    ("length".to_string(), serde_json::json!(char_count)),
                     ("token_count".to_string(), serde_json::json!(token_count)),
                     ("max_tokens".to_string(), serde_json::json!(cfg.max_tokens)),
                     (

@@ -34,7 +34,7 @@ config:
   ellipsis: "…"          # Appended on truncation (empty = none)
   word_boundary: false   # Truncate at word boundary
   max_text_length: 1000000    # Security: max bytes to process (1KB–10MB)
-  max_structure_size: 10000   # Security: max items in list/dict (10–100K)
+  max_structure_size: 10000   # Security: max items in list/dict (1–100K; Rust intentionally supports tighter limits than Python)
   max_recursion_depth: 100    # Security: max nesting depth (10–1000)
 ```
 

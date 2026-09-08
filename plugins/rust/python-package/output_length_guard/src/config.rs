@@ -7,7 +7,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
 use thiserror::Error;
 
-// Security limit constants (match Python config.py validators)
+// Security limit constants. max_structure_size intentionally supports smaller
+// values than the Python implementation so deployments and tests can enforce
+// tight per-result structure limits; the accepted Rust range is 1..=100_000.
 pub const MIN_MAX_TEXT_LENGTH: usize = 1_000;
 pub const MAX_MAX_TEXT_LENGTH: usize = 10_000_000;
 pub const DEFAULT_MAX_TEXT_LENGTH: usize = 1_000_000;
@@ -246,7 +248,7 @@ impl OutputLengthGuardConfig {
             let n: usize = val.extract()?;
             if !(MIN_MAX_STRUCTURE_SIZE..=MAX_MAX_STRUCTURE_SIZE).contains(&n) {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                    "max_structure_size must be between {} and {}",
+                    "max_structure_size must be between {} and {} (Rust intentionally supports values below Python's minimum of 10)",
                     MIN_MAX_STRUCTURE_SIZE, MAX_MAX_STRUCTURE_SIZE
                 )));
             }
@@ -505,6 +507,18 @@ mod tests {
             let d = PyDict::new(py);
             d.set_item("max_text_length", 100).unwrap(); // below 1000 min
             assert!(OutputLengthGuardConfig::from_py_dict(&d).is_err());
+        });
+    }
+
+    #[test]
+    fn from_py_dict_accepts_minimum_max_structure_size() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            let d = PyDict::new(py);
+            d.set_item("max_structure_size", MIN_MAX_STRUCTURE_SIZE)
+                .unwrap();
+            let cfg = OutputLengthGuardConfig::from_py_dict(&d).unwrap();
+            assert_eq!(cfg.max_structure_size, 1);
         });
     }
 

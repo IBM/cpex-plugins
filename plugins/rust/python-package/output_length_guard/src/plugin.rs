@@ -255,20 +255,30 @@ impl OutputLengthGuardPluginCore {
         let mut total_chars_truncated: usize = 0;
         let mut items_modified: usize = 0;
         let mut out: Vec<String> = Vec::with_capacity(list.len());
+        let item_metadata = PyList::empty(py);
 
-        for item in list.iter() {
+        for (index, item) in list.iter().enumerate() {
             let text: String = item.extract()?;
             match handle_text(py, &text, &self.cfg)? {
                 TextResult::Violation(v) => {
-                    return build_blocked_result(py, trace_id, v, &self.cfg);
+                    let result = build_blocked_result(py, trace_id, v, &self.cfg)?;
+                    append_list_audit_metadata(&result, &item_metadata, Some(index), list.len())?;
+                    return Ok(result);
                 }
                 TextResult::Modified(new_text) => {
                     total_chars_truncated += text.chars().count();
                     items_modified += 1;
+                    item_metadata.append(build_text_meta_dict(
+                        py, &text, &new_text, false, &self.cfg,
+                    )?)?;
                     out.push(new_text);
                     modified = true;
                 }
-                TextResult::BelowMin | TextResult::Unchanged => out.push(text),
+                TextResult::BelowMin | TextResult::Unchanged => {
+                    item_metadata
+                        .append(build_text_meta_dict(py, &text, &text, true, &self.cfg)?)?;
+                    out.push(text);
+                }
             }
         }
 
@@ -286,6 +296,7 @@ impl OutputLengthGuardPluginCore {
                 items_modified,
                 &self.cfg,
             )?;
+            meta.set_item("items", item_metadata)?;
             let kwargs: Vec<(&str, Py<PyAny>)> = vec![
                 ("modified_payload", new_payload),
                 ("metadata", meta.into_any().unbind()),
@@ -293,6 +304,7 @@ impl OutputLengthGuardPluginCore {
             return build_result_dyn(py, "ToolPostInvokeResult", kwargs);
         }
         let meta = PyDict::new(py);
+        meta.set_item("items", item_metadata)?;
         let kwargs: Vec<(&str, Py<PyAny>)> = vec![("metadata", meta.into_any().unbind())];
         build_result_dyn(py, "ToolPostInvokeResult", kwargs)
     }
@@ -355,6 +367,9 @@ impl OutputLengthGuardPluginCore {
             meta.set_item("mcp_result_processed", true)?;
             meta.set_item("items_modified", true)?;
             meta.set_item("structured_content_processed", true)?;
+            meta.set_item("min_tokens", self.cfg.min_tokens)?;
+            meta.set_item("max_tokens", self.cfg.max_tokens)?;
+            meta.set_item("chars_per_token", self.cfg.chars_per_token)?;
             let kwargs: Vec<(&str, Py<PyAny>)> = vec![
                 ("modified_payload", new_payload),
                 ("metadata", meta.into_any().unbind()),
@@ -557,6 +572,7 @@ fn handle_text(py: Python<'_>, text: &str, cfg: &OutputLengthGuardConfig) -> PyR
                     ),
                     "OUTPUT_TOKEN_VIOLATION".to_string(),
                     vec![
+                        ("length".to_string(), serde_json::json!(char_count)),
                         ("token_count".to_string(), serde_json::json!(token_count)),
                         ("max_tokens".to_string(), serde_json::json!(cfg.max_tokens)),
                         (
@@ -754,30 +770,73 @@ fn build_blocked_result(
     violation: Py<PyAny>,
     cfg: &OutputLengthGuardConfig,
 ) -> PyResult<Py<PyAny>> {
-    let mut kwargs: Vec<(&str, Py<PyAny>)> = vec![
-        (
-            "continue_processing",
-            false.into_pyobject(py)?.to_owned().into_any().unbind(),
-        ),
-        ("violation", violation),
-    ];
+    // Preserve the legacy violation metadata for every blocked result.  The
+    // violation details contain the offending length/token count and, for
+    // structured values, the location and security-limit fields.
+    let meta = PyDict::new(py);
+    meta.set_item("within_bounds", false)?;
+    meta.set_item("limit_mode", cfg.limit_mode.as_str())?;
+    meta.set_item("strategy", cfg.strategy.as_str())?;
+    meta.set_item("truncated", false)?;
+
+    let violation_bound = violation.bind(py);
+    let mut chars_seen = 0;
+    if let Ok(details) = violation_bound.getattr("details")
+        && let Ok(details_dict) = details.cast::<PyDict>()
+    {
+        for (key, value) in details_dict.iter() {
+            meta.set_item(&key, &value)?;
+        }
+        if let Some(length) = details_dict.get_item("length")? {
+            meta.set_item("original_length", &length)?;
+            meta.set_item("new_length", &length)?;
+            chars_seen = length.extract::<usize>()?;
+        }
+    }
+
     if let Some(tid) = trace_id
-        && let Ok(Some(md)) = build_output_metrics(
+        && let Some(outer) = build_output_metrics(
             py,
             Some(tid),
             MetricsArgs {
-                chars_seen: 0,
+                chars_seen,
                 truncated_count: 0,
                 blocked: true,
                 mode: cfg.limit_mode.as_str(),
                 strategy: cfg.strategy.as_str(),
                 stage: "tool_post_invoke",
             },
-        )
+        )?
+        && let Some(inner) = outer.get_item(PLUGIN_KEY)?
     {
-        kwargs.push(("metadata", md.into_any().unbind()));
+        meta.set_item(PLUGIN_KEY, inner)?;
     }
+
+    let kwargs: Vec<(&str, Py<PyAny>)> = vec![
+        (
+            "continue_processing",
+            false.into_pyobject(py)?.to_owned().into_any().unbind(),
+        ),
+        ("violation", violation),
+        ("metadata", meta.into_any().unbind()),
+    ];
     build_result_dyn(py, "ToolPostInvokeResult", kwargs)
+}
+
+fn append_list_audit_metadata(
+    result: &Py<PyAny>,
+    items: &Bound<'_, PyList>,
+    violation_index: Option<usize>,
+    total_items: usize,
+) -> PyResult<()> {
+    let metadata = result.bind(items.py()).getattr("metadata")?;
+    let metadata = metadata.cast::<PyDict>()?;
+    metadata.set_item("items", items)?;
+    if let Some(index) = violation_index {
+        metadata.set_item("violation_index", index)?;
+    }
+    metadata.set_item("total_items", total_items)?;
+    Ok(())
 }
 
 fn build_result_dyn(
@@ -2327,6 +2386,219 @@ class Payload:
                     .extract::<usize>()
                     .unwrap(),
                 5
+            );
+        });
+    }
+    #[test]
+    fn blocked_plain_string_preserves_legacy_metadata_without_trace_id() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let core = make_core(Some(5), "block").unwrap();
+            let text = "this is too long".into_pyobject(py).unwrap().into_any();
+            let payload = make_payload(py, "t", text).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            let metadata = result.bind(py).getattr("metadata").unwrap();
+            assert_eq!(
+                metadata
+                    .get_item("original_length")
+                    .unwrap()
+                    .extract::<usize>()
+                    .unwrap(),
+                16
+            );
+            assert_eq!(
+                metadata
+                    .get_item("limit_mode")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "character"
+            );
+            assert_eq!(
+                metadata
+                    .get_item("strategy")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "block"
+            );
+            assert!(!metadata.contains("output_length_guard").unwrap());
+        });
+    }
+
+    #[test]
+    fn blocked_structured_content_preserves_location_metadata() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let d = PyDict::new(py);
+            d.set_item("max_chars", 5usize).unwrap();
+            d.set_item("strategy", "block").unwrap();
+            let core = OutputLengthGuardPluginCore::new(d.as_any()).unwrap();
+            let structured = PyDict::new(py);
+            structured.set_item("answer", "this is too long").unwrap();
+            let item = PyDict::new(py);
+            item.set_item("type", "text").unwrap();
+            item.set_item("text", "ok").unwrap();
+            let content = PyList::new(py, [item]).unwrap();
+            let result_dict = PyDict::new(py);
+            result_dict.set_item("content", content).unwrap();
+            result_dict
+                .set_item("structuredContent", structured)
+                .unwrap();
+            let payload = make_payload(py, "t", result_dict.as_any().clone()).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            let metadata = result.bind(py).getattr("metadata").unwrap();
+            assert_eq!(
+                metadata
+                    .get_item("location")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "answer"
+            );
+            assert_eq!(
+                metadata
+                    .get_item("length")
+                    .unwrap()
+                    .extract::<usize>()
+                    .unwrap(),
+                16
+            );
+        });
+    }
+    #[test]
+    fn string_list_metadata_contains_per_item_audit_data() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let core = make_core(Some(5), "truncate").unwrap();
+            let list = PyList::new(py, ["hello world", "short"]).unwrap();
+            let payload = make_payload(py, "t", list.as_any().clone()).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            let metadata = result.bind(py).getattr("metadata").unwrap();
+            let items_value = metadata.get_item("items").unwrap();
+            let items = items_value.cast::<PyList>().unwrap();
+            assert_eq!(items.len(), 2);
+            assert_eq!(
+                items
+                    .get_item(0)
+                    .unwrap()
+                    .get_item("original_length")
+                    .unwrap()
+                    .extract::<usize>()
+                    .unwrap(),
+                11
+            );
+            assert!(
+                items
+                    .get_item(1)
+                    .unwrap()
+                    .get_item("within_bounds")
+                    .unwrap()
+                    .extract::<bool>()
+                    .unwrap()
+            );
+        });
+    }
+
+    #[test]
+    fn blocked_string_list_metadata_contains_violation_position() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let core = make_core(Some(5), "block").unwrap();
+            let list = PyList::new(py, ["ok", "this is too long", "later"]).unwrap();
+            let payload = make_payload(py, "t", list.as_any().clone()).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            let metadata = result.bind(py).getattr("metadata").unwrap();
+            assert_eq!(
+                metadata
+                    .get_item("violation_index")
+                    .unwrap()
+                    .extract::<usize>()
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                metadata
+                    .get_item("total_items")
+                    .unwrap()
+                    .extract::<usize>()
+                    .unwrap(),
+                3
+            );
+            let items_value = metadata.get_item("items").unwrap();
+            let items = items_value.cast::<PyList>().unwrap();
+            assert_eq!(items.len(), 1);
+        });
+    }
+
+    #[test]
+    fn structured_content_modified_metadata_preserves_token_configuration() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let d = PyDict::new(py);
+            d.set_item("max_chars", 5usize).unwrap();
+            d.set_item("min_tokens", 2usize).unwrap();
+            d.set_item("max_tokens", 10usize).unwrap();
+            d.set_item("chars_per_token", 3usize).unwrap();
+            d.set_item("strategy", "truncate").unwrap();
+            let core = OutputLengthGuardPluginCore::new(d.as_any()).unwrap();
+            let structured = PyDict::new(py);
+            structured.set_item("answer", "this is too long").unwrap();
+            let item = PyDict::new(py);
+            item.set_item("type", "text").unwrap();
+            item.set_item("text", "ok").unwrap();
+            let content = PyList::new(py, [item]).unwrap();
+            let result_dict = PyDict::new(py);
+            result_dict.set_item("content", content).unwrap();
+            result_dict
+                .set_item("structuredContent", structured)
+                .unwrap();
+            let payload = make_payload(py, "t", result_dict.as_any().clone()).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            let metadata = result.bind(py).getattr("metadata").unwrap();
+            assert_eq!(
+                metadata
+                    .get_item("min_tokens")
+                    .unwrap()
+                    .extract::<usize>()
+                    .unwrap(),
+                2
+            );
+            assert_eq!(
+                metadata
+                    .get_item("max_tokens")
+                    .unwrap()
+                    .extract::<usize>()
+                    .unwrap(),
+                10
+            );
+            assert_eq!(
+                metadata
+                    .get_item("chars_per_token")
+                    .unwrap()
+                    .extract::<usize>()
+                    .unwrap(),
+                3
             );
         });
     }
