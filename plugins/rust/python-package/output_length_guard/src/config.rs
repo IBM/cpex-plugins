@@ -27,7 +27,8 @@ pub const MIN_CHARS_PER_TOKEN: usize = 1;
 pub const MAX_CHARS_PER_TOKEN: usize = 10;
 
 pub const DEFAULT_ELLIPSIS: &str = "\u{2026}"; // …
-pub const DEFAULT_MAX_CHARS: Option<usize> = Some(15_000);
+
+pub const DEFAULT_MAX_CHARS: Option<usize> = None;
 
 /// Strategy for out-of-bounds output
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -297,7 +298,9 @@ mod tests {
     fn default_config_has_expected_values() {
         let cfg = OutputLengthGuardConfig::default();
         assert_eq!(cfg.min_chars, 0);
-        assert_eq!(cfg.max_chars, Some(15_000));
+        // Matches Python: `max_chars: Optional[int] = Field(default=None, ...)`.
+        // None means unlimited when no explicit config is supplied.
+        assert_eq!(cfg.max_chars, None);
         assert_eq!(cfg.chars_per_token, 4);
         assert!(matches!(cfg.limit_mode, LimitMode::Character));
         assert!(matches!(cfg.strategy, Strategy::Truncate));
@@ -305,6 +308,24 @@ mod tests {
         assert_eq!(cfg.max_text_length, DEFAULT_MAX_TEXT_LENGTH);
         assert_eq!(cfg.max_structure_size, DEFAULT_MAX_STRUCTURE_SIZE);
         assert_eq!(cfg.max_recursion_depth, DEFAULT_MAX_RECURSION_DEPTH);
+    }
+
+    // Regression: empty plugin config dict must default max_chars to None (unlimited),
+    // matching the Python Pydantic model `max_chars: Optional[int] = Field(default=None)`.
+    // Before this fix Rust defaulted to Some(15_000), silently truncating responses
+    // that Python would have passed through unchanged.
+    #[test]
+    fn empty_config_dict_defaults_max_chars_to_none() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            let d = PyDict::new(py);
+            // No max_chars key — should keep the struct default (None = unlimited)
+            let cfg = OutputLengthGuardConfig::from_py_dict(&d).unwrap();
+            assert_eq!(
+                cfg.max_chars, None,
+                "empty config dict must default max_chars to None (unlimited), matching Python behaviour"
+            );
+        });
     }
 
     #[test]

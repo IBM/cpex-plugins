@@ -282,3 +282,48 @@ async def test_security_limit_max_recursion_depth_block() -> None:
     assert result.continue_processing is False
     assert result.violation is not None
     assert result.violation.code == "STRUCTURE_DEPTH_VIOLATION"
+
+
+@pytest.mark.asyncio
+async def test_empty_config_defaults_max_chars_to_none_unlimited() -> None:
+    """Regression: empty plugin config must default max_chars to None (unlimited).
+
+    Python Pydantic model: `max_chars: Optional[int] = Field(default=None, ...)`.
+    Before fix, Rust defaulted to Some(15_000) and silently truncated responses
+    that Python would have passed through unchanged.
+    """
+    plugin = OutputLengthGuardPlugin(
+        PluginConfig(
+            name="output_length_guard",
+            kind="cpex_output_length_guard.output_length_guard.OutputLengthGuardPlugin",
+            config={},  # empty — no max_chars key
+        )
+    )
+    # A 20,000-char string: would be truncated under the old Some(15_000) default,
+    # must pass through unchanged with the correct None default.
+    long_text = "A" * 20_000
+    payload = ToolPostInvokePayload(name="tool1", result=long_text)
+    result = await plugin.tool_post_invoke(payload, _make_context())
+    assert result.modified_payload is None, (
+        "empty config must default max_chars to None (unlimited); "
+        "if this fails the Rust default was Some(15_000) not None"
+    )
+
+
+@pytest.mark.asyncio
+async def test_unsupported_result_type_is_skipped_with_type_name_in_reason() -> None:
+    """Regression: unsupported result types must emit reason='unsupported_type_<typename>'.
+
+    Matches Python's `unsupported_type_<type name>` contract (reviewer thread 3872148026).
+    """
+    plugin = OutputLengthGuardPlugin(_make_config())
+    # An integer result is not a supported shape
+    payload = ToolPostInvokePayload(name="t", result=42)  # type: ignore[arg-type]
+    result = await plugin.tool_post_invoke(payload, _make_context())
+    # Must not block — unsupported types are skipped
+    assert result.continue_processing is True
+    assert result.metadata is not None
+    reason = result.metadata.get("reason", "")
+    assert reason.startswith("unsupported_type_"), (
+        f"reason must start with 'unsupported_type_', got {reason!r}"
+    )
