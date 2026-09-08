@@ -7,7 +7,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use crate::config::{OutputLengthGuardConfig, Strategy};
-use crate::guards::{evaluate_text_limits, is_numeric_string, truncate};
+use crate::guards::{estimate_tokens, evaluate_text_limits, is_numeric_string, truncate};
 
 /// Result of processing a structured value.
 pub enum ProcessResult {
@@ -101,11 +101,9 @@ fn process_string(
         });
     }
 
-    // Use char count (not byte length) so that max_chars is enforced in Unicode
-    // codepoints, matching Python's len(str) semantics. Byte length is only used
-    // for token estimation, which mirrors Python's len(text) // chars_per_token.
+    // Use Unicode codepoints for both character and token limits.
     let char_count = text.chars().count();
-    let token_count = text.len() / cfg.chars_per_token.max(1);
+    let token_count = estimate_tokens(text, cfg.chars_per_token);
     let (below_min, above_max) = evaluate_text_limits(char_count, token_count, cfg);
 
     if !below_min && !above_max {
@@ -638,6 +636,29 @@ mod tests {
             match process_structured_data(py, &s, &cfg, "", 0).unwrap() {
                 ProcessResult::Violation { code, .. } => assert_eq!(code, "OUTPUT_TOKEN_VIOLATION"),
                 ProcessResult::Ok { .. } => panic!("expected token violation"),
+            }
+        });
+    }
+
+    #[test]
+    fn process_string_token_mode_uses_unicode_codepoints() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            let cfg = OutputLengthGuardConfig {
+                max_tokens: Some(1),
+                limit_mode: LimitMode::Token,
+                strategy: Strategy::Block,
+                chars_per_token: 4,
+                max_chars: None,
+                ellipsis: "…".to_string(),
+                ..Default::default()
+            };
+            let s = "é".repeat(5).into_pyobject(py).unwrap().into_any();
+            match process_structured_data(py, &s, &cfg, "", 0).unwrap() {
+                ProcessResult::Ok { modified, .. } => assert!(!modified),
+                ProcessResult::Violation { .. } => {
+                    panic!("five Unicode codepoints at four chars per token estimate one token")
+                }
             }
         });
     }

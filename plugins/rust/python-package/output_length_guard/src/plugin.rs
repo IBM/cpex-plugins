@@ -115,9 +115,22 @@ impl OutputLengthGuardPluginCore {
             TextResult::Modified(new_text) => {
                 let new_result_obj = new_text.into_pyobject(py)?.into_any().unbind();
                 let new_payload = clone_payload_with_attr(py, payload, "result", &new_result_obj)?;
-                let meta =
-                    build_text_meta_dict(py, text, &new_text_str(&new_result_obj, py), false)?;
-                merge_metrics_into_meta(py, &meta, trace_id, text.len(), true, 1, &self.cfg)?;
+                let meta = build_text_meta_dict(
+                    py,
+                    text,
+                    &new_text_str(&new_result_obj, py),
+                    false,
+                    &self.cfg,
+                )?;
+                merge_metrics_into_meta(
+                    py,
+                    &meta,
+                    trace_id,
+                    text.chars().count(),
+                    true,
+                    1,
+                    &self.cfg,
+                )?;
                 let kwargs: Vec<(&str, Py<PyAny>)> = vec![
                     ("modified_payload", new_payload),
                     ("metadata", meta.into_any().unbind()),
@@ -126,12 +139,12 @@ impl OutputLengthGuardPluginCore {
             }
             TextResult::BelowMin => {
                 // Below min in truncate mode: pass through unchanged but flag out-of-bounds.
-                let meta = build_text_meta_dict(py, text, text, false)?;
+                let meta = build_text_meta_dict(py, text, text, false, &self.cfg)?;
                 let kwargs: Vec<(&str, Py<PyAny>)> = vec![("metadata", meta.into_any().unbind())];
                 build_result_dyn(py, "ToolPostInvokeResult", kwargs)
             }
             TextResult::Unchanged => {
-                let meta = build_text_meta_dict(py, text, text, true)?;
+                let meta = build_text_meta_dict(py, text, text, true, &self.cfg)?;
                 let kwargs: Vec<(&str, Py<PyAny>)> = vec![("metadata", meta.into_any().unbind())];
                 build_result_dyn(py, "ToolPostInvokeResult", kwargs)
             }
@@ -159,8 +172,16 @@ impl OutputLengthGuardPluginCore {
             TextResult::Modified(new_text) => {
                 let new_dict = clone_dict_with_key(py, result_dict, "text", &new_text)?;
                 let new_payload = clone_payload_with_attr(py, payload, "result", &new_dict)?;
-                let meta = build_text_meta_dict(py, &text, &new_text, false)?;
-                merge_metrics_into_meta(py, &meta, trace_id, text.len(), true, 1, &self.cfg)?;
+                let meta = build_text_meta_dict(py, &text, &new_text, false, &self.cfg)?;
+                merge_metrics_into_meta(
+                    py,
+                    &meta,
+                    trace_id,
+                    text.chars().count(),
+                    true,
+                    1,
+                    &self.cfg,
+                )?;
                 let kwargs: Vec<(&str, Py<PyAny>)> = vec![
                     ("modified_payload", new_payload),
                     ("metadata", meta.into_any().unbind()),
@@ -169,12 +190,12 @@ impl OutputLengthGuardPluginCore {
             }
             TextResult::BelowMin => {
                 // Below min in truncate mode: pass through unchanged but flag out-of-bounds.
-                let meta = build_text_meta_dict(py, &text, &text, false)?;
+                let meta = build_text_meta_dict(py, &text, &text, false, &self.cfg)?;
                 let kwargs: Vec<(&str, Py<PyAny>)> = vec![("metadata", meta.into_any().unbind())];
                 build_result_dyn(py, "ToolPostInvokeResult", kwargs)
             }
             TextResult::Unchanged => {
-                let meta = build_text_meta_dict(py, &text, &text, true)?;
+                let meta = build_text_meta_dict(py, &text, &text, true, &self.cfg)?;
                 let kwargs: Vec<(&str, Py<PyAny>)> = vec![("metadata", meta.into_any().unbind())];
                 build_result_dyn(py, "ToolPostInvokeResult", kwargs)
             }
@@ -242,7 +263,7 @@ impl OutputLengthGuardPluginCore {
                     return build_blocked_result(py, trace_id, v, &self.cfg);
                 }
                 TextResult::Modified(new_text) => {
-                    total_chars_truncated += text.len();
+                    total_chars_truncated += text.chars().count();
                     items_modified += 1;
                     out.push(new_text);
                     modified = true;
@@ -447,7 +468,7 @@ impl OutputLengthGuardPluginCore {
                 match handle_text(py, &text, &self.cfg)? {
                     TextResult::Violation(v) => return Ok(Err(v)),
                     TextResult::Modified(new_text) => {
-                        total_chars_seen += text.len();
+                        total_chars_seen += text.chars().count();
                         items_modified_count += 1;
                         let new_item = copy_dict_replace_keys(
                             py,
@@ -476,7 +497,7 @@ impl OutputLengthGuardPluginCore {
                 match handle_text(py, &text, &self.cfg)? {
                     TextResult::Violation(v) => return Ok(Err(v)),
                     TextResult::Modified(new_text) => {
-                        total_chars_seen += text.len();
+                        total_chars_seen += text.chars().count();
                         items_modified_count += 1;
                         let new_resource = copy_dict_replace_keys(
                             py,
@@ -884,13 +905,16 @@ fn build_text_meta_dict<'py>(
     original: &str,
     new_text: &str,
     within_bounds: bool,
+    cfg: &OutputLengthGuardConfig,
 ) -> PyResult<Bound<'py, PyDict>> {
     let meta = PyDict::new(py);
-    meta.set_item("original_length", original.len())?;
+    meta.set_item("original_length", original.chars().count())?;
     meta.set_item("within_bounds", within_bounds)?;
     if !within_bounds {
+        meta.set_item("limit_mode", cfg.limit_mode.as_str())?;
+        meta.set_item("strategy", cfg.strategy.as_str())?;
         meta.set_item("truncated", new_text != original)?;
-        meta.set_item("new_length", new_text.len())?;
+        meta.set_item("new_length", new_text.chars().count())?;
     }
     Ok(meta)
 }
@@ -2006,6 +2030,35 @@ class Payload:
     }
 
     #[test]
+    fn token_mode_uses_unicode_codepoints_for_plain_text() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let d = PyDict::new(py);
+            d.set_item("max_tokens", 1usize).unwrap();
+            d.set_item("chars_per_token", 4usize).unwrap();
+            d.set_item("limit_mode", "token").unwrap();
+            d.set_item("strategy", "truncate").unwrap();
+            d.set_item("max_chars", py.None()).unwrap();
+            let core = OutputLengthGuardPluginCore::new(d.as_any()).unwrap();
+            let text = "é".repeat(5).into_pyobject(py).unwrap().into_any();
+            let payload = make_payload(py, "t", text).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            assert!(
+                result
+                    .bind(py)
+                    .getattr("modified_payload")
+                    .unwrap()
+                    .is_none(),
+                "five Unicode codepoints at four chars per token estimate one token"
+            );
+        });
+    }
+
+    #[test]
     fn mcp_content_dict_oversized_list_truncate_mode_passes_through_unchanged() {
         pyo3::Python::initialize();
         pyo3::Python::attach(|py| {
@@ -2246,6 +2299,34 @@ class Payload:
             assert!(
                 !within_bounds,
                 "below_min truncate mode must report within_bounds=false"
+            );
+            assert_eq!(
+                meta.get_item("limit_mode")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "character"
+            );
+            assert_eq!(
+                meta.get_item("strategy")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "truncate"
+            );
+            assert_eq!(
+                meta.get_item("truncated")
+                    .unwrap()
+                    .extract::<bool>()
+                    .unwrap(),
+                false
+            );
+            assert_eq!(
+                meta.get_item("new_length")
+                    .unwrap()
+                    .extract::<usize>()
+                    .unwrap(),
+                5
             );
         });
     }

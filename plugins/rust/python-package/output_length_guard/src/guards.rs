@@ -36,10 +36,10 @@ pub fn evaluate_text_limits(
     }
 }
 
-/// Estimate token count using configurable chars-per-token ratio.
+/// Estimate token count using configurable Unicode-codepoints-per-token ratio.
 pub fn estimate_tokens(text: &str, chars_per_token: usize) -> usize {
     let cpt = chars_per_token.max(1);
-    text.len() / cpt
+    text.chars().count() / cpt
 }
 
 /// Find word boundary position.
@@ -148,16 +148,17 @@ pub fn truncate(value: &str, cfg: &OutputLengthGuardConfig) -> String {
                 return value.to_string();
             }
             let safe_cpt = cfg.chars_per_token.max(1);
-            let estimated = value.len() / safe_cpt;
+            let estimated = estimate_tokens(value, safe_cpt);
             if estimated <= max_tokens {
                 return value.to_string();
             }
             // cap at max_text_length first
             let effective = cap_at_max_text_length(value, cfg.max_text_length);
-            let mut cut = (max_tokens * safe_cpt).min(effective.len());
-            // Snap to a valid char boundary.
-            // Skip: usize > 0 vs >= 0 is equivalent (>= 0 always true); /= 1 is a timeout.
-            snap_to_char_boundary(effective, &mut cut);
+            let max_chars = max_tokens * safe_cpt;
+            let mut cut = effective
+                .char_indices()
+                .nth(max_chars)
+                .map_or(effective.len(), |(byte_index, _)| byte_index);
             // `cut > 0` guard: usize > 0 vs >= 0 is an equivalent mutation (>= 0 always true).
             if cfg.word_boundary && is_nonzero(cut) {
                 cut = find_word_boundary(effective, cut, cut);
@@ -253,6 +254,11 @@ mod tests {
         assert_eq!(estimate_tokens("abcdefgh", 4), 2);
         assert_eq!(estimate_tokens("abcdefgh", 2), 4);
         assert_eq!(estimate_tokens("", 4), 0);
+    }
+
+    #[test]
+    fn estimate_tokens_counts_unicode_codepoints_not_utf8_bytes() {
+        assert_eq!(estimate_tokens(&"é".repeat(5), 4), 1);
     }
 
     #[test]
@@ -576,6 +582,12 @@ mod tests {
         assert_eq!(truncate(s, &cfg), "abcdefgh");
     }
 
+    #[test]
+    fn truncate_token_mode_uses_unicode_codepoint_cut() {
+        let cfg = token_cfg(Some(1));
+        assert_eq!(truncate(&"é".repeat(9), &cfg), "éééé…");
+    }
+
     // Kill: replace > with >= in is_numeric_string length check (line 152)
     #[test]
     fn is_numeric_string_accepts_exactly_50_char_numeric() {
@@ -797,25 +809,13 @@ mod tests {
         );
     }
 
-    // ── truncate token-mode lines 97-98: snap loop -= vs += ─────────────────
-    // Cut at a non-char-boundary byte; loop must decrement to prior boundary.
-    // "á"×5 = 10 bytes. max_tokens=1, cpt=3: cut=min(3,10)=3.
-    // Byte 3=0xA1 (not a boundary). -= loop: cut=2 (boundary). result="á" (2 bytes).
-    // With += mutant: cut=4 (boundary). result="áá" (4 bytes). Different!
     #[test]
-    fn truncate_token_mode_snap_loop_decrements_to_exact_char_boundary() {
+    fn truncate_token_mode_cuts_at_requested_codepoint_count() {
         let mut cfg = token_cfg(Some(1));
         cfg.chars_per_token = 3;
         cfg.ellipsis = String::new();
-        let s: String = "á".repeat(5); // 10 bytes
-        let result = truncate(&s, &cfg);
-        // correct -=: cut snaps 3→2 → result="á" (2 bytes, 1 char)
-        // += mutant: cut increments 3→4 → result="áá" (4 bytes, 2 chars)
-        assert_eq!(
-            result, "á",
-            "snap must decrement to byte 2 (1 'á'), got: {:?}",
-            result
-        );
+        let s: String = "á".repeat(6);
+        assert_eq!(truncate(&s, &cfg), "ááá");
     }
 
     // ── truncate token-mode line 100: word_boundary && cut > 0 → || or < ────
