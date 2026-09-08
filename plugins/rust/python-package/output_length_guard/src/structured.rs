@@ -315,7 +315,7 @@ fn process_dict(
     let out_dict = PyDict::new(py);
 
     for (key, value) in dict.iter() {
-        let key_str = key.extract::<String>().unwrap_or_default();
+        let key_str = key.str()?.to_string_lossy().into_owned();
         let value_path = if path.is_empty() {
             key_str.clone()
         } else {
@@ -993,6 +993,26 @@ mod tests {
                 result, "leaf",
                 "chain of 11 single-key dicts must not return bare 'leaf' (depth limit must fire at depth=10)"
             );
+        });
+    }
+
+    #[test]
+    fn process_dict_reports_non_string_key_in_violation_location() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            let cfg = block_char_cfg(3);
+            let d = PyDict::new(py);
+            d.set_item(1, "toolongstring").unwrap();
+            match process_structured_data(py, d.as_any(), &cfg, "", 0).unwrap() {
+                ProcessResult::Violation { details, .. } => {
+                    let location = details
+                        .iter()
+                        .find(|(key, _)| key == "location")
+                        .map(|(_, value)| value.as_str().unwrap());
+                    assert_eq!(location, Some("1"));
+                }
+                ProcessResult::Ok { .. } => panic!("expected violation from nested string"),
+            }
         });
     }
 }

@@ -94,7 +94,9 @@ impl OutputLengthGuardPluginCore {
         // Unsupported result type
         let meta = PyDict::new(py);
         meta.set_item("skipped", true)?;
-        meta.set_item("reason", "unsupported_type")?;
+        let type_name_obj = result_val.get_type().name()?;
+        let type_name = type_name_obj.to_string_lossy();
+        meta.set_item("reason", format!("unsupported_type_{}", type_name))?;
         default_result_with_meta(py, "ToolPostInvokeResult", meta)
     }
 }
@@ -2599,6 +2601,29 @@ class Payload:
                     .extract::<usize>()
                     .unwrap(),
                 3
+            );
+        });
+    }
+    #[test]
+    fn unsupported_result_reason_includes_type_name() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            install_framework_module(py).unwrap();
+            let core = make_core(Some(5), "truncate").unwrap();
+            let value = 42usize.into_pyobject(py).unwrap().into_any();
+            let payload = make_payload(py, "t", value).unwrap();
+            let ctx = PyDict::new(py);
+            let result = core
+                .tool_post_invoke(py, &payload, ctx.as_any(), None)
+                .unwrap();
+            let metadata = result.bind(py).getattr("metadata").unwrap();
+            assert_eq!(
+                metadata
+                    .get_item("reason")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "unsupported_type_int"
             );
         });
     }
