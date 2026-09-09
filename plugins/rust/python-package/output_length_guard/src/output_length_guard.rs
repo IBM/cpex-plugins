@@ -10,6 +10,13 @@ pub struct HandleTextResult {
     pub metadata: Py<PyDict>,
     pub violation: Option<PluginViolation>,
 }
+pub struct HandleListResult {
+    pub mcp_out: Option<Py<PyList>>,
+    pub metadata: Option<Py<PyDict>>,
+    pub violation: Option<PluginViolation>,
+    pub modified: bool,
+}
+
 #[derive(FromPyObject)]
 pub struct PluginViolation {
     pub reason: String,
@@ -171,23 +178,17 @@ pub fn handle_list(
     py: Python<'_>,
     result: &Bound<PyList>,
     config: &OutputLengthGuardConfig,
-    context: &Bound<'_, PyAny>,
-    path: &str,
-    depth: u32,
-) -> (PyList, bool, Option<PluginViolation>) {
+) -> PyResult<HandleListResult> {
     let mut modified = false;
-    let mcp_out = PyList::empty(py);
+    let mcp_out: Bound<'_, PyList> = PyList::empty(py);
 
     for item in result.iter() {
         let Ok(dict) = item.cast::<PyDict>() else {
-            mcp_out.append(&item);
+            mcp_out.append(&item)?;
             continue;
         };
 
-        let item_type: Option<String> = dict
-            .get_item("type")
-            .ok()
-            .and_then(|optional_value| optional_value.and_then(|value| value.extract().ok()));
+        let item_type: Option<String> = dict.get_item("type")?.and_then(|v| v.extract().ok());
 
         match item_type.as_deref() {
             Some("text") => {
@@ -199,19 +200,14 @@ pub fn handle_list(
                         .and_then(|v| v.extract().ok())
                         .unwrap();
 
-                    let new_text = handle_text(py, &current_text, &self.config)?;
-                    let mut kwargs: Vec<(&str, Py<PyAny>)> =
-                        vec![("meta", new_text.metadata.into_any())];
-                    if let Some(violation) = new_text.violation {
-                        let violations = self.build_violation_object(py, violation)?;
-                        kwargs.extend([
-                            (
-                                "continue_processing",
-                                false.into_pyobject(py)?.to_owned().into_any().unbind(),
-                            ),
-                            ("violation", violations),
-                        ]);
-                        return build_framework_object_dyn(py, "ToolPostInvokeResult", kwargs);
+                    let new_text = handle_text(py, &current_text, config)?;
+                    if new_text.violation.is_some() {
+                        return Ok(HandleListResult {
+                            modified: false,
+                            metadata: Some(new_text.metadata),
+                            violation: new_text.violation,
+                            mcp_out: None,
+                        });
                     }
 
                     if new_text.text != current_text {
@@ -248,20 +244,15 @@ pub fn handle_list(
                     continue;
                 };
 
-                let new_text = handle_text(py, &current_text, &self.config)?;
+                let new_text = handle_text(py, &current_text, config)?;
 
-                let mut kwargs: Vec<(&str, Py<PyAny>)> =
-                    vec![("meta", new_text.metadata.into_any())];
-                if let Some(violation) = new_text.violation {
-                    let violations = self.build_violation_object(py, violation)?;
-                    kwargs.extend([
-                        (
-                            "continue_processing",
-                            false.into_pyobject(py)?.to_owned().into_any().unbind(),
-                        ),
-                        ("violation", violations),
-                    ]);
-                    return build_framework_object_dyn(py, "ToolPostInvokeResult", kwargs);
+                if new_text.violation.is_some() {
+                    return Ok(HandleListResult {
+                        modified: false,
+                        metadata: Some(new_text.metadata),
+                        violation: new_text.violation,
+                        mcp_out: None,
+                    });
                 }
 
                 if new_text.text != current_text {
@@ -280,7 +271,12 @@ pub fn handle_list(
             }
         }
     }
-    todo!()
+    return Ok(HandleListResult {
+        mcp_out: Some(mcp_out.unbind()),
+        metadata: None,
+        violation: None,
+        modified,
+    });
 }
 pub struct OutputLengthGuardPlugin {
     cfg: OutputLengthGuardConfig,

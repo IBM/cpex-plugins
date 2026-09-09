@@ -377,7 +377,7 @@ impl OutputLengthGuardEngine {
             metadata.set_item("chars_per_token", plugin_config.chars_per_token)?;
             // Handle violations
             if let Some(violation) = violation {
-                debug!("Blocking due to violation in %s", struct_key);
+                debug!("Blocking due to violation in {}", struct_key);
                 let violations = self.build_violation_object(py, violation)?;
                 let metadata = PyDict::new(py);
                 metadata.set_item("structured_content_blocked", true)?;
@@ -434,21 +434,43 @@ impl OutputLengthGuardEngine {
         });
 
         if let Some(content_list) = contents {
-            let mut modified = false;
-            let content_out = PyList::empty(py);
-            for item in content_list.iter() {
-                // If item is not of dict continue yo next
-                let Ok(item_dict) = item.cast::<PyDict>() else {
-                    content_out.append(&item)?;
-                    continue;
-                };
-                let item_type: Option<String> =
-                    item_dict.get_item("type")?.and_then(|v| v.extract().ok());
-                match item_type.as_deref() {}
+            let new_result = handle_list(py, content_list, &self.config)?;
+            if let Some(violation) = new_result.violation {
+                let violations = self.build_violation_object(py, violation)?;
+                let kwargs: Vec<(&str, Py<PyAny>)> = vec![
+                    (
+                        "continue_processing",
+                        false.into_pyobject(py)?.to_owned().into_any().unbind(),
+                    ),
+                    ("violation", violations),
+                    ("metadata", new_result.metadata.unwrap().into_any()),
+                ];
+                return build_framework_object_dyn(py, "ToolPostInvokeResult", kwargs);
+            }
+            if new_result.modified {
+                let new_result = result.copy()?;
+                new_result.set_item("content", new_result.mc)?;
             }
         }
-
-        todo!()
+        let kwargs: Vec<(&str, Py<PyAny>)> = vec![
+            (
+                "mcp_result_processed",
+                true.into_pyobject(py)?.to_owned().into_any().unbind(),
+            ),
+            (
+                "items_modified",
+                false.into_pyobject(py)?.to_owned().into_any().unbind(),
+            ),
+            (
+                "structured_content_processed",
+                (!struct_key.is_none())
+                    .into_pyobject(py)?
+                    .to_owned()
+                    .into_any()
+                    .unbind(),
+            ),
+        ];
+        return build_framework_object_dyn(py, "ToolPostInvokeResult", kwargs);
     }
 
     fn build_violation_object(
