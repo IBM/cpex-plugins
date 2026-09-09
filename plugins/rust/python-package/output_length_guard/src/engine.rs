@@ -377,7 +377,7 @@ impl OutputLengthGuardEngine {
             metadata.set_item("chars_per_token", plugin_config.chars_per_token)?;
             // Handle violations
             if let Some(violation) = violation {
-                debug!("Blocking due to violation in {}", struct_key);
+                debug!("Blocking due to violation in {:?}", struct_key);
                 let violations = self.build_violation_object(py, violation)?;
                 let metadata = PyDict::new(py);
                 metadata.set_item("structured_content_blocked", true)?;
@@ -433,6 +433,12 @@ impl OutputLengthGuardEngine {
             }
         });
 
+        let metadata = PyDict::new(py);
+        metadata.set_item("mcp_result_processed", true)?;
+        metadata.set_item("structured_content_processed", !struct_key.is_none())?;
+        metadata.set_item("items_modified", false)?;
+        let mut kwargs: Vec<(&str, Py<PyAny>)> = vec![];
+
         if let Some(content_list) = contents {
             let new_result = handle_list(py, content_list, &self.config)?;
             if let Some(violation) = new_result.violation {
@@ -447,29 +453,23 @@ impl OutputLengthGuardEngine {
                 ];
                 return build_framework_object_dyn(py, "ToolPostInvokeResult", kwargs);
             }
+
             if new_result.modified {
-                let new_result = result.copy()?;
-                new_result.set_item("content", new_result.mc)?;
+                let modified_result = result.copy()?;
+                modified_result.set_item("content", new_result.mcp_out)?;
+                let modified_payload = build_framework_object(
+                    py,
+                    "ToolPostInvokePayload",
+                    [
+                        ("name", payload_name.into_pyobject(py)?.into_any().unbind()),
+                        ("result", modified_result.into_any().unbind()),
+                    ],
+                )?;
+                metadata.set_item("items_modified", true)?;
+                kwargs.push(("modified_payload", modified_payload));
             }
         }
-        let kwargs: Vec<(&str, Py<PyAny>)> = vec![
-            (
-                "mcp_result_processed",
-                true.into_pyobject(py)?.to_owned().into_any().unbind(),
-            ),
-            (
-                "items_modified",
-                false.into_pyobject(py)?.to_owned().into_any().unbind(),
-            ),
-            (
-                "structured_content_processed",
-                (!struct_key.is_none())
-                    .into_pyobject(py)?
-                    .to_owned()
-                    .into_any()
-                    .unbind(),
-            ),
-        ];
+        kwargs.push(("metadata", metadata.into_any().unbind()));
         return build_framework_object_dyn(py, "ToolPostInvokeResult", kwargs);
     }
 
