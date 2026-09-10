@@ -1,4 +1,4 @@
-use crate::config::OutputLengthGuardConfig;
+use crate::config::*;
 use crate::guard::{evaluate_text_limits, is_numeric_string, truncate};
 use crate::output_length_guard::PluginViolation;
 use log::{debug, error, info};
@@ -40,11 +40,11 @@ fn process_structured_data_inner(
 ) -> PyResult<(Py<PyAny>, bool, Option<PluginViolation>)> {
     let py = data.py();
 
-    log::debug!(
+    debug!(
         "Processing structured data: type={}, path={}, strategy={}",
         data.get_type().name()?,
         path_or_root(path),
-        config.strategy
+        config.strategy.as_str()
     );
 
     // Security: Check recursion depth
@@ -55,7 +55,7 @@ fn process_structured_data_inner(
             config.max_recursion_depth,
             path
         );
-        if config.strategy == "block" {
+        if config.strategy == Strategy::Block {
             let violation = PluginViolation {
                 reason: "Recursion depth exceeds security limit".to_string(),
                 description: format!(
@@ -95,7 +95,7 @@ fn process_structured_data_inner(
         }
 
         let length = text.chars().count();
-        let token_count = length / config.chars_per_token;
+        let token_count = length / config.chars_per_token as usize;
         let (below_min, above_max) = evaluate_text_limits(length, token_count, config);
 
         if below_min || above_max {
@@ -108,14 +108,14 @@ fn process_structured_data_inner(
             );
 
             // BLOCK MODE: return violation immediately
-            if config.strategy == "block" {
+            if config.strategy == Strategy::Block {
                 let location = if !path.is_empty() {
                     format!(" at {}", path)
                 } else {
                     String::new()
                 };
 
-                let violation = if above_max && config.limit_mode == "token" {
+                let violation = if above_max && config.limit_mode == LimitMode::Token {
                     log::warn!(
                         "Token limit violation, blocking: location={}, tokens={}, max={}",
                         path_or_root(path),
@@ -207,7 +207,7 @@ fn process_structured_data_inner(
                     config.max_tokens,
                     config.chars_per_token,
                     config.max_text_length,
-                    &config.limit_mode,
+                    config.limit_mode,
                 );
                 let was_modified = truncated != text;
                 return Ok((truncated.into_py(py), was_modified, None));
@@ -226,7 +226,7 @@ fn process_structured_data_inner(
                 config.max_structure_size,
                 path
             );
-            if config.strategy == "block" {
+            if config.strategy == Strategy::Block {
                 let violation = PluginViolation {
                     reason: "Structure size exceeds security limit".to_string(),
                     description: format!(
@@ -288,7 +288,7 @@ fn process_structured_data_inner(
                 config.max_structure_size,
                 path
             );
-            if config.strategy == "block" {
+            if config.strategy == Strategy::Block {
                 let violation = PluginViolation {
                     reason: "Structure size exceeds security limit".to_string(),
                     description: format!(
