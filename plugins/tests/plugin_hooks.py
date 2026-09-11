@@ -164,6 +164,7 @@ class PluginViolation:
     description: str = ""
     code: str = ""
     details: dict[str, Any] | None = None
+    mcp_error_code: int | None = None
     http_status_code: int = 400
     http_headers: dict[str, str] | None = None
     plugin_name: str = ""

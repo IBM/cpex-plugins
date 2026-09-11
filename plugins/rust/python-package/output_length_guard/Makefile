@@ -1,0 +1,132 @@
+.PHONY: help
+help:
+	@grep '^# help\:' $(firstword $(MAKEFILE_LIST)) | sed 's/^# help\: //'
+
+PACKAGE_NAME := cpex-output-length-guard
+WHEEL_PREFIX := cpex_output_length_guard
+CARGO := cargo
+CARGO_PACKAGE := output_length_guard
+NEXTEST_PROFILE ?= default
+STUB_FILES := cpex_output_length_guard/__init__.pyi
+WHEEL_DIR := ../../../../target/wheels
+
+GREEN := \033[0;32m
+YELLOW := \033[0;33m
+NC := \033[0m
+
+# help: fmt                   - Format Rust code with rustfmt
+# help: fmt-check             - Check Rust code formatting (CI)
+# help: clippy                - Run clippy lints
+.PHONY: fmt fmt-check clippy
+
+fmt:
+	$(CARGO) fmt
+
+fmt-check:
+	$(CARGO) fmt -- --check
+
+clippy:
+	$(CARGO) clippy -- -D warnings
+
+# help: sync                  - Install plugin development dependencies
+# help: test                  - Run Rust unit tests and Python integration tests
+# help: test-unit             - Run Rust unit tests
+# help: test-verbose          - Run Rust tests with verbose output
+# help: test-integration      - Run repo-level integration tests for output_length_guard
+# help: test-all              - Alias for test
+.PHONY: sync test test-unit test-verbose test-python test-integration test-all verify-stubs
+
+sync:
+	uv sync --dev
+
+test-unit:
+	@echo "$(GREEN)Running output_length_guard Rust tests...$(NC)"
+	$(CARGO) nextest run --profile $(NEXTEST_PROFILE) -p $(CARGO_PACKAGE)
+
+test: test-unit test-integration
+
+test-verbose:
+	@echo "$(GREEN)Running output_length_guard Rust tests (verbose)...$(NC)"
+	$(CARGO) nextest run --profile $(NEXTEST_PROFILE) -p $(CARGO_PACKAGE) --no-capture
+
+test-python:
+	$(MAKE) test-integration
+
+test-integration:
+	@echo "$(GREEN)Running Python tests...$(NC)"
+	CPEX_TEST_PLUGIN_HOOKS=1 uv run pytest ../../../tests/output_length_guard/test_integration.py -v -rs
+
+test-all: test
+
+verify-stubs:
+	@test -f cpex_output_length_guard/__init__.pyi
+
+# help: stub-gen              - Generate Python type stubs (.pyi files)
+# help: build                 - Build release wheel (no install)
+# help: install               - Build and install editable extension into project venv
+# help: install-wheel         - Install the previously built wheel into project venv
+.PHONY: stub-gen build install install-wheel uninstall
+
+stub-gen:
+	@echo "$(GREEN)Generating Python type stubs...$(NC)"
+	$(CARGO) run --features stub-gen --bin stub_gen
+	@echo "$(GREEN)Stubs generated$(NC)"
+
+build:
+	@echo "$(GREEN)Building $(PACKAGE_NAME)...$(NC)"
+	uv run maturin build --release
+	@echo "$(GREEN)Build complete$(NC)"
+
+install:
+	@echo "$(GREEN)Installing $(PACKAGE_NAME)...$(NC)"
+	uv run maturin develop --release
+	@echo "$(GREEN)Installation complete$(NC)"
+
+install-wheel: build
+	@echo "$(GREEN)Installing built wheel for $(PACKAGE_NAME)...$(NC)"
+	python3 ../../../../tools/install_built_wheel.py --wheel-dir "$(WHEEL_DIR)" --wheel-prefix "$(WHEEL_PREFIX)" --package-name "$(PACKAGE_NAME)" --venv-dir .venv
+	@echo "$(GREEN)Wheel installation complete$(NC)"
+
+uninstall:
+	@echo "$(YELLOW)Uninstalling $(PACKAGE_NAME)...$(NC)"
+	@uv pip uninstall -y $(PACKAGE_NAME) 2>/dev/null || true
+
+.PHONY: clean clean-all
+
+clean:
+	$(CARGO) clean
+	rm -rf target/ coverage/
+	find . -name "*.whl" -delete
+
+clean-all: clean
+
+# help: doc                   - Generate Rust documentation
+# help: doc-open              - Generate and open documentation
+.PHONY: doc doc-open
+
+doc:
+	$(CARGO) doc --no-deps --document-private-items
+
+doc-open: doc
+	$(CARGO) doc --no-deps --document-private-items --open
+
+# help: verify                - Verify plugin installation
+# help: check-all             - Run fmt-check + clippy + Rust tests
+# help: ci-build              - Run CI build/static verification without integration tests
+# help: ci                    - Run the full CI-equivalent plugin verification flow
+.PHONY: verify check-all ci-build ci pre-commit
+
+verify:
+	@uv run python -c "from cpex_output_length_guard import output_length_guard_rust; print('output_length_guard_rust available')" || echo "output_length_guard_rust not installed — run: make install"
+
+check-all: fmt-check clippy test-unit
+	@echo "$(GREEN)All checks passed$(NC)"
+
+ci-build: check-all verify-stubs build install-wheel
+
+ci: ci-build test-integration
+	@echo "$(GREEN)CI verification passed$(NC)"
+
+pre-commit: check-all
+
+.DEFAULT_GOAL := help
