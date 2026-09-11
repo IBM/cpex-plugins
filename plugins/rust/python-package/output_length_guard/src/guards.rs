@@ -52,9 +52,7 @@ pub fn find_word_boundary(value: &str, cut: usize, max_chars: usize) -> usize {
         return cut;
     }
     let mut cut = cut.min(value.len());
-    while cut > 0 && !value.is_char_boundary(cut) {
-        cut -= 1;
-    }
+    snap_to_char_boundary(value, &mut cut);
 
     let chars: Vec<char> = value[..cut].chars().collect();
     let search_back = (max_chars as f64 * 0.2) as usize;
@@ -430,6 +428,21 @@ mod tests {
         // Should find space at index 5 (char 'h','e','l','l','o',' ')
         // byte offset after ' ' = 6
         assert!(pos <= 11);
+    }
+
+    #[test]
+    fn find_word_boundary_snaps_invalid_utf8_cut_to_boundary() {
+        let value = "é abc";
+        // Byte offset 1 is inside the two-byte `é` codepoint. The safe cut is 0.
+        assert_eq!(find_word_boundary(value, 1, 5), 0);
+    }
+
+    #[test]
+    fn find_word_boundary_repeatedly_snaps_invalid_utf8_cut() {
+        let value = "éé abc";
+        // Byte offset 3 is inside the second `é`; snapping must decrement to 2,
+        // not stop at 3 or jump to 0.
+        assert_eq!(find_word_boundary(value, 3, 6), 2);
     }
 
     #[test]
