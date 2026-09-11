@@ -45,22 +45,25 @@ pub fn estimate_tokens(text: &str, chars_per_token: usize) -> usize {
 /// Find word boundary position.
 /// Returns the cut position adjusted to a word boundary, or the original cut
 /// if none is found within 20% of max_chars backwards.
+///
+/// `cut` is a byte offset into `value`; `max_chars` is a codepoint budget.
 pub fn find_word_boundary(value: &str, cut: usize, max_chars: usize) -> usize {
     if value.is_empty() || cut == 0 {
         return cut;
     }
-    let cut = cut.min(value.len());
-    let search_back = (max_chars as f64 * 0.2) as usize;
-    let min_search = cut.saturating_sub(search_back);
+    let mut cut = cut.min(value.len());
+    while cut > 0 && !value.is_char_boundary(cut) {
+        cut -= 1;
+    }
 
-    // Walk backwards from cut-1 down to min_search
     let chars: Vec<char> = value[..cut].chars().collect();
+    let search_back = (max_chars as f64 * 0.2) as usize;
+    let min_search = chars.len().saturating_sub(search_back);
+
+    // Walk backwards from the codepoint before the cut to the search limit.
     for i in (min_search..chars.len()).rev() {
         if BOUNDARY_CHARS.contains(&chars[i]) {
-            // Return byte position of i+1 (after the boundary char)
-            // We work in chars but the caller uses byte indices via slicing,
-            // so we need to map back. Since we built chars from value[..cut],
-            // we can sum char lengths.
+            // Convert the selected codepoint boundary back to a byte offset.
             let byte_pos: usize = chars[..=i].iter().map(|c| c.len_utf8()).sum();
             return byte_pos;
         }
@@ -161,7 +164,8 @@ pub fn truncate(value: &str, cfg: &OutputLengthGuardConfig) -> String {
                 .map_or(effective.len(), |(byte_index, _)| byte_index);
             // `cut > 0` guard: usize > 0 vs >= 0 is an equivalent mutation (>= 0 always true).
             if cfg.word_boundary && is_nonzero(cut) {
-                cut = find_word_boundary(effective, cut, cut);
+                let cut_chars = effective[..cut].chars().count();
+                cut = find_word_boundary(effective, cut, cut_chars);
                 // Skip: second snap — BOUNDARY_CHARS are ASCII so pos is always a valid UTF-8 boundary.
                 snap_to_char_boundary(effective, &mut cut);
             }
@@ -198,7 +202,6 @@ pub fn truncate(value: &str, cfg: &OutputLengthGuardConfig) -> String {
             // `cut_byte > 0` guard: usize > 0 vs >= 0 is an equivalent mutation (>= 0 always true).
             if cfg.word_boundary && is_nonzero(cut_byte) {
                 let adj = find_word_boundary(value, cut_byte, max_chars);
-                // find_word_boundary works in byte space already
                 if adj <= cut_byte {
                     cut_byte = adj;
                 }
@@ -372,6 +375,16 @@ mod tests {
             "result should end with ellipsis: {}",
             result
         );
+    }
+
+    #[test]
+    fn truncate_word_boundary_uses_codepoint_window_with_multibyte_prefix() {
+        let mut cfg = char_cfg(Some(10));
+        cfg.word_boundary = true;
+        cfg.ellipsis = "…".to_string();
+        let s = format!("{} abcdefgh", "é".repeat(7));
+
+        assert_eq!(truncate(&s, &cfg), format!("{} …", "é".repeat(7)));
     }
 
     #[test]
