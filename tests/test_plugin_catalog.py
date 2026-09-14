@@ -3144,6 +3144,16 @@ class PluginCatalogTests(unittest.TestCase):
             publish,
         )
 
+    def test_all_plugins_share_the_root_uv_workspace_lock(self) -> None:
+        plugins = discover_plugins(REPO_ROOT)
+        root_project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+        members = set(root_project["tool"]["uv"]["workspace"]["members"])
+        self.assertEqual(members, {plugin.path for plugin in plugins})
+        self.assertTrue((REPO_ROOT / "uv.lock").is_file())
+        for plugin in plugins:
+            with self.subTest(plugin=plugin.slug):
+                self.assertFalse((REPO_ROOT / plugin.path / "uv.lock").exists())
+
     def test_plugin_maintenance_runs_rust_and_python_plugin_lists(self) -> None:
         workflow = (
             REPO_ROOT / ".github" / "workflows" / "plugin-maintenance.yaml"
@@ -3172,6 +3182,7 @@ class PluginCatalogTests(unittest.TestCase):
             rust_plugins,
             [
                 "encoded_exfil_detection",
+                "output_length_guard",
                 "pii_filter",
                 "rate_limiter",
                 "retry_with_backoff",
