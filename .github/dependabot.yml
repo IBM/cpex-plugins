@@ -19,7 +19,7 @@ updates:
       - rust
     open-pull-requests-limit: 5
 
-  # Python dependencies — root uv workspace (all 7 plugins via pyproject.toml)
+  # Python dependencies — root uv workspace (all plugins via pyproject.toml)
   - package-ecosystem: uv
     directory: /
     schedule:
