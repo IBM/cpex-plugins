@@ -10,7 +10,7 @@ authors = [{ name = "ICA Team" }]
 license = { text = "Apache-2.0" }
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["cpex>=0.1.3,<0.2", "httpx>=0.27,<1", "PyJWT>=2.8,<3"]
+dependencies = ["cpex==0.1.3", "httpx>=0.27,<1", "PyJWT>=2.8,<3"]
 classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
