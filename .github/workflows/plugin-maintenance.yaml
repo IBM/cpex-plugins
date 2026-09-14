@@ -64,6 +64,7 @@ jobs:
           set -euo pipefail
           rust_plugins=(
             encoded_exfil_detection
+            output_length_guard
             pii_filter
             rate_limiter
             retry_with_backoff
@@ -108,7 +109,7 @@ jobs:
             - `uv lock --upgrade` applied to root Python workspace (`uv.lock`)
 
             ### Validation performed in CI
-            - All 8 managed plugins built and tested on `ubuntu-latest`
+            - All 9 managed plugins built and tested on `ubuntu-latest`
             - `cargo deny check advisories` passed — no new CVEs
 
             ### Reviewer checklist

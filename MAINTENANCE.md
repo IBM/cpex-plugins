@@ -64,7 +64,7 @@ cargo update
 uv lock --upgrade
 cargo deny --all-features check advisories --config deny.toml
 # Run tests for all plugins through dual-root routing:
-for plugin in encoded_exfil_detection pii_filter rate_limiter retry_with_backoff secrets_detection sql_sanitizer url_reputation ica_metering_exporter; do
+for plugin in encoded_exfil_detection output_length_guard pii_filter rate_limiter retry_with_backoff secrets_detection sql_sanitizer url_reputation ica_metering_exporter; do
   make plugin-test PLUGIN="$plugin"
 done
 ```
@@ -80,7 +80,7 @@ Records known constraints between plugin dependencies and the gateway (`cpex`/`m
 | Plugin | Constrained dependency | Pinned range | Gateway version | Notes | Last reviewed |
 |---|---|---|---|---|---|
 | all | `cpex` | `>=0.1.0,<0.2` | gateway 0.1.x | ABI boundary — major bump requires gateway coordination | 2026-07 |
-| all | `pydantic` | `>=2.13.4,<3` | gateway 0.1.x | Pydantic v3 not yet validated against gateway models | 2026-07 |
+| all | `pydantic` | `>=2.13.5,<3` | gateway 0.1.x | Pydantic v3 not yet validated against gateway models | 2026-07 |
 | all | `maturin` | `>=1.13.3,<2.0` | build toolchain | Major maturin bumps may change wheel ABI tagging | 2026-07 |
 | all | `redis` | `>=7.4.0` | gateway 0.1.x | Lower bound — no upper constraint yet | 2026-07 |
 | `ica_metering_exporter` | `httpx` | `>=0.27,<1` | gateway 0.1.x | HTTP client is resolved in the root uv workspace; validate transport behavior when bumping | 2026-08 |
@@ -108,3 +108,17 @@ Dependabot opens individual PRs weekly for new package releases. Triage criteria
 - **Minor** (`x.Y.z`): review changelog; merge if no breaking API changes and CI passes
 - **Major** (`X.y.z`): evaluate manually; update the compat table; coordinate with gateway team if the dep is in `constraint-dependencies`
 - **RUSTSEC advisory**: treat as P1 — either bump the dep or suppress with a justification in `deny.toml`
+
+### Alerts for removed lockfiles
+
+Every plugin belongs to the root uv workspace and shares the root `uv.lock`.
+Do not add plugin-local lockfiles; the catalog tests enforce this invariant.
+
+If Dependabot reports a manifest that no longer exists on `main`, compare the
+alert's vulnerable version range with the active root lockfile before triaging it.
+Use **Alert settings → Refresh Dependabot alerts** when that action is available
+to rebuild GitHub's dependency graph. If the action is unavailable, ask a repository
+security administrator to refresh it. A verified stale alert can be dismissed as
+**An inaccurate or incorrect alert**, recording the removed manifest, deletion
+commit, inspected `main` commit, and patched version in the dismissal comment.
+Do not suppress the advisory or disable Dependabot to hide stale entries.
