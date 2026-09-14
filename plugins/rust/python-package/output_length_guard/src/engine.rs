@@ -310,15 +310,17 @@ impl OutputLengthGuardEngine {
                 ];
                 return build_framework_object_dyn(py, "ToolPostInvokeResult", kwargs);
             }
-            if struct_modified {
-                let new_result = result.copy()?;
-                new_result.set_item(key, truncated_struct)?;
-                let new_text = generate_text_representation(truncated_struct, 0);
+            if struct_modified && truncated_struct.is_some() {
+                let truncated_struct = truncated_struct.unwrap();
+                let new_text = generate_text_representation(truncated_struct.bind(py), 0);
                 let text_item = PyDict::new(py);
                 text_item.set_item("type", "text")?;
                 text_item.set_item("text", new_text)?;
+
+                let new_result = result.copy()?;
                 let content_list = PyList::new(py, [text_item]);
                 new_result.set_item("content", content_list.ok())?;
+                new_result.set_item(key, truncated_struct)?;
 
                 metadata.set_item("mcp_result_processed", true)?;
                 metadata.set_item("items_modified", true)?;
@@ -342,22 +344,16 @@ impl OutputLengthGuardEngine {
 
         // Always process content array regardless of whether structuredContent was present
 
-        let contents = result.get_item("content").map_or(None, |content| {
-            if content.is_some_and(|value| value.is_instance_of::<PyList>()) {
-                Some(content.unwrap().cast::<PyList>().unwrap())
-            } else {
-                None
-            }
-        });
-
         let metadata = PyDict::new(py);
         metadata.set_item("mcp_result_processed", true)?;
         metadata.set_item("structured_content_processed", !struct_key.is_none())?;
         metadata.set_item("items_modified", false)?;
         let mut kwargs: Vec<(&str, Py<PyAny>)> = vec![];
-
-        if let Some(content_list) = contents {
-            let new_result = handle_list(py, content_list, &self.config)?;
+        if let Some(content) = result.get_item("content")?
+            && content.is_instance_of::<PyList>()
+        {
+            let contents = content.cast::<PyList>()?;
+            let new_result = handle_list(py, contents, &self.config)?;
             if let Some(violation) = new_result.violation {
                 let violations = self.build_violation_object(py, violation)?;
                 let kwargs: Vec<(&str, Py<PyAny>)> = vec![
@@ -386,6 +382,7 @@ impl OutputLengthGuardEngine {
                 kwargs.push(("modified_payload", modified_payload));
             }
         }
+
         kwargs.push(("metadata", metadata.into_any().unbind()));
         return build_framework_object_dyn(py, "ToolPostInvokeResult", kwargs);
     }

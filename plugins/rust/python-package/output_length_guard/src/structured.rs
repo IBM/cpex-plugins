@@ -1,9 +1,9 @@
 use crate::config::*;
 use crate::guard::{evaluate_text_limits, is_numeric_string, truncate};
 use crate::output_length_guard::PluginViolation;
-use log::{debug, error, info};
-use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyString};
+use log::{debug, error, warn};
+use pyo3::types::{IntoPyDict, PyDict, PyList, PyString};
+use pyo3::{IntoPyObjectExt, prelude::*};
 
 fn path_or_root(path: &str) -> &str {
     if path.is_empty() { "root" } else { path }
@@ -16,7 +16,7 @@ pub fn process_structured_data(
     context: &Bound<'_, PyAny>,
     path: &str,
     depth: u32,
-) -> (&Bound<PyAny>, bool, Option<PluginViolation>) {
+) -> (Option<Py<PyAny>>, bool, Option<PluginViolation>) {
     match process_structured_data_inner(data, config, context, path, depth) {
         Ok(result) => result,
         Err(e) => {
@@ -26,7 +26,7 @@ pub fn process_structured_data(
                 path,
                 data.get_type().name().unwrap()
             );
-            (data, false, None)
+            (None, false, None)
         }
     }
 }
@@ -37,7 +37,7 @@ fn process_structured_data_inner(
     context: &Bound<'_, PyAny>,
     path: &str,
     depth: u32,
-) -> PyResult<(Py<PyAny>, bool, Option<PluginViolation>)> {
+) -> PyResult<(Option<Py<PyAny>>, bool, Option<PluginViolation>)> {
     let py = data.py();
 
     debug!(
@@ -49,13 +49,16 @@ fn process_structured_data_inner(
 
     // Security: Check recursion depth
     if depth > config.max_recursion_depth {
-        log::error!(
+        error!(
             "Recursion depth {} exceeds maximum {} at path: {}",
-            depth,
-            config.max_recursion_depth,
-            path
+            depth, config.max_recursion_depth, path
         );
         if config.strategy == Strategy::Block {
+            let details = PyDict::new(py);
+            details.set_item("depth", depth)?;
+            details.set_item("max_depth", config.max_recursion_depth)?;
+            details.set_item("location", path_or_root(path))?;
+
             let violation = PluginViolation {
                 reason: "Recursion depth exceeds security limit".to_string(),
                 description: format!(
@@ -63,26 +66,18 @@ fn process_structured_data_inner(
                     depth, config.max_recursion_depth
                 ),
                 code: "STRUCTURE_DEPTH_VIOLATION".to_string(),
-                details: [
-                    ("depth".to_string(), depth.into_py(py)),
-                    (
-                        "max_depth".to_string(),
-                        config.max_recursion_depth.into_py(py),
-                    ),
-                    ("location".to_string(), path_or_root(path).into_py(py)),
-                ]
-                .into_iter()
-                .collect(),
+
+                details: details.unbind(),
                 mcp_error_code: -32000,
                 http_status_code: 422,
             };
-            return Ok((data.clone().unbind(), false, Some(violation)));
+            return Ok((None, false, Some(violation)));
         }
-        return Ok((data.clone().unbind(), false, None));
+        return Ok((None, false, None));
     }
 
     // Base case: string
-    if let Ok(s) = data.downcast::<PyString>() {
+    if let Ok(s) = data.cast::<PyString>() {
         let text = s.to_string();
 
         if is_numeric_string(&text) {
@@ -91,7 +86,7 @@ fn process_structured_data_inner(
                 path_or_root(path),
                 text.len()
             );
-            return Ok((data.clone().unbind(), false, None));
+            return Ok((None, false, None));
         }
 
         let length = text.chars().count();
@@ -99,12 +94,12 @@ fn process_structured_data_inner(
         let (below_min, above_max) = evaluate_text_limits(length, token_count, config);
 
         if below_min || above_max {
-            log::debug!(
+            debug!(
                 "String out of bounds at {}: length={}, tokens={}, mode={}",
                 path_or_root(path),
                 length,
                 token_count,
-                config.limit_mode
+                config.limit_mode.as_str()
             );
 
             // BLOCK MODE: return violation immediately
@@ -116,63 +111,64 @@ fn process_structured_data_inner(
                 };
 
                 let violation = if above_max && config.limit_mode == LimitMode::Token {
-                    log::warn!(
-                        "Token limit violation, blocking: location={}, tokens={}, max={}",
+                    warn!(
+                        "Token limit violation, blocking: location={}, tokens={}, max={:?}",
                         path_or_root(path),
                         token_count,
                         config.max_tokens
                     );
+                    let details = PyDict::new(py);
+                    details.set_item("token_count", token_count)?;
+                    details.set_item("max_tokens", config.max_tokens)?;
+                    details.set_item("chars_per_token", config.chars_per_token)?;
+                    details.set_item("strategy", config.strategy.as_str())?;
+                    details.set_item("location", path_or_root(path))?;
                     PluginViolation {
                         reason: format!("Estimated token count out of bounds{}", location),
                         description: format!(
-                            "Estimated token count {} exceeds max_tokens {}{}",
+                            "Estimated token count {} exceeds max_tokens {:?}{}",
                             token_count, config.max_tokens, location
                         ),
                         code: "OUTPUT_TOKEN_VIOLATION".to_string(),
-                        details: [
-                            ("token_count".to_string(), token_count.into_py(py)),
-                            ("max_tokens".to_string(), config.max_tokens.into_py(py)),
-                            (
-                                "chars_per_token".to_string(),
-                                config.chars_per_token.into_py(py),
-                            ),
-                            ("strategy".to_string(), config.strategy.clone().into_py(py)),
-                            ("location".to_string(), path_or_root(path).into_py(py)),
-                        ]
-                        .into_iter()
-                        .collect(),
+                        details: details.unbind(),
                         mcp_error_code: -32000,
                         http_status_code: 422,
                     }
                 } else if above_max {
-                    log::debug!(
+                    debug!(
                         "Blocking: string at {} exceeds char limits (length={})",
                         path_or_root(path),
                         length
                     );
+                    let details = PyDict::new(py);
+                    details.set_item("length", length)?;
+                    details.set_item("max_chars", config.max_chars)?;
+                    details.set_item("strategy", config.strategy.as_str())?;
+                    details.set_item("location", path_or_root(path))?;
+
                     PluginViolation {
                         reason: format!("String length out of bounds{}", location),
                         description: format!(
-                            "String length {} exceeds max_chars {}{}",
+                            "String length {} exceeds max_chars {:?}{}",
                             length, config.max_chars, location
                         ),
                         code: "OUTPUT_LENGTH_VIOLATION".to_string(),
-                        details: [
-                            ("length".to_string(), length.into_py(py)),
-                            ("max_chars".to_string(), config.max_chars.into_py(py)),
-                            ("strategy".to_string(), config.strategy.clone().into_py(py)),
-                            ("location".to_string(), path_or_root(path).into_py(py)),
-                        ]
-                        .into_iter()
-                        .collect(),
+                        details: details.unbind(),
                         mcp_error_code: -32000,
                         http_status_code: 422,
                     }
                 } else {
-                    log::debug!(
+                    debug!(
                         "Blocking: string at {} below minimum limits",
                         path_or_root(path)
                     );
+                    let details = PyDict::new(py);
+                    details.set_item("length", length)?;
+                    details.set_item("min_chars", config.min_chars)?;
+                    details.set_item("token_count", token_count)?;
+                    details.set_item("min_tokens", config.min_tokens)?;
+                    details.set_item("location", path_or_root(path))?;
+
                     PluginViolation {
                         reason: format!("String length/tokens below minimum{}", location),
                         description: format!(
@@ -180,21 +176,13 @@ fn process_structured_data_inner(
                             length, token_count, location
                         ),
                         code: "OUTPUT_LENGTH_VIOLATION".to_string(),
-                        details: [
-                            ("length".to_string(), length.into_py(py)),
-                            ("min_chars".to_string(), config.min_chars.into_py(py)),
-                            ("token_count".to_string(), token_count.into_py(py)),
-                            ("min_tokens".to_string(), config.min_tokens.into_py(py)),
-                            ("location".to_string(), path_or_root(path).into_py(py)),
-                        ]
-                        .into_iter()
-                        .collect(),
+                        details: details.unbind(),
                         mcp_error_code: -32000,
                         http_status_code: 422,
                     }
                 };
 
-                return Ok((data.clone().unbind(), false, Some(violation)));
+                return Ok((None, false, Some(violation)));
             }
 
             // TRUNCATE MODE: only truncate if above max
@@ -210,16 +198,16 @@ fn process_structured_data_inner(
                     config.limit_mode,
                 );
                 let was_modified = truncated != text;
-                return Ok((truncated.into_py(py), was_modified, None));
+                return Ok((Some(truncated.into_py_any(py)?), was_modified, None));
             }
         }
 
-        return Ok((data.clone().unbind(), false, None));
+        return Ok((None, false, None));
     }
 
     // Recursive case: list
-    if let Ok(list) = data.downcast::<PyList>() {
-        if list.len() > config.max_structure_size {
+    if let Ok(list) = data.cast::<PyList>() {
+        if list.len() > config.max_structure_size as usize {
             log::error!(
                 "List size {} exceeds maximum {} at path: {}",
                 list.len(),
@@ -227,6 +215,11 @@ fn process_structured_data_inner(
                 path
             );
             if config.strategy == Strategy::Block {
+                let details = PyDict::new(py);
+                details.set_item("size", list.len())?;
+                details.set_item("max_size", config.max_structure_size)?;
+                details.set_item("location", path_or_root(path))?;
+
                 let violation = PluginViolation {
                     reason: "Structure size exceeds security limit".to_string(),
                     description: format!(
@@ -235,26 +228,17 @@ fn process_structured_data_inner(
                         config.max_structure_size
                     ),
                     code: "STRUCTURE_SIZE_VIOLATION".to_string(),
-                    details: [
-                        ("size".to_string(), list.len().into_py(py)),
-                        (
-                            "max_size".to_string(),
-                            config.max_structure_size.into_py(py),
-                        ),
-                        ("location".to_string(), path_or_root(path).into_py(py)),
-                    ]
-                    .into_iter()
-                    .collect(),
+                    details: details.unbind(),
                     mcp_error_code: -32000,
                     http_status_code: 422,
                 };
-                return Ok((data.clone().unbind(), false, Some(violation)));
+                return Ok((None, false, Some(violation)));
             }
-            return Ok((data.clone().unbind(), false, None));
+            return Ok((None, false, None));
         }
 
         let mut modified = false;
-        let result = PyList::empty_bound(py);
+        let result = PyList::empty(py);
 
         for (idx, item) in list.iter().enumerate() {
             let item_path = if !path.is_empty() {
@@ -267,7 +251,7 @@ fn process_structured_data_inner(
                 process_structured_data_inner(&item, config, context, &item_path, depth + 1)?;
 
             if let Some(violation) = violation {
-                return Ok((data.clone().unbind(), false, Some(violation)));
+                return Ok((None, false, Some(violation)));
             }
 
             result.append(processed_item)?;
@@ -276,12 +260,12 @@ fn process_structured_data_inner(
             }
         }
 
-        return Ok((result.into_py(py), modified, None));
+        return Ok((Some(result.into_py_any(py)?), modified, None));
     }
 
     // Recursive case: dict
-    if let Ok(dict) = data.downcast::<PyDict>() {
-        if dict.len() > config.max_structure_size {
+    if let Ok(dict) = data.cast::<PyDict>() {
+        if dict.len() > config.max_structure_size as usize {
             log::error!(
                 "Dict size {} exceeds maximum {} at path: {}",
                 dict.len(),
@@ -289,6 +273,11 @@ fn process_structured_data_inner(
                 path
             );
             if config.strategy == Strategy::Block {
+                let details = PyDict::new(py);
+                details.set_item("size", dict.len())?;
+                details.set_item("max_size", config.max_structure_size)?;
+                details.set_item("location", path_or_root(path))?;
+
                 let violation = PluginViolation {
                     reason: "Structure size exceeds security limit".to_string(),
                     description: format!(
@@ -297,22 +286,13 @@ fn process_structured_data_inner(
                         config.max_structure_size
                     ),
                     code: "STRUCTURE_SIZE_VIOLATION".to_string(),
-                    details: [
-                        ("size".to_string(), dict.len().into_py(py)),
-                        (
-                            "max_size".to_string(),
-                            config.max_structure_size.into_py(py),
-                        ),
-                        ("location".to_string(), path_or_root(path).into_py(py)),
-                    ]
-                    .into_iter()
-                    .collect(),
+                    details: details.unbind(),
                     mcp_error_code: -32000,
                     http_status_code: 422,
                 };
-                return Ok((data.clone().unbind(), false, Some(violation)));
+                return Ok((None, false, Some(violation)));
             }
-            return Ok((data.clone().unbind(), false, None));
+            return Ok((None, false, None));
         }
 
         let mut modified = false;
@@ -332,7 +312,7 @@ fn process_structured_data_inner(
                 process_structured_data_inner(&value, config, context, &value_path, depth + 1)?;
 
             if let Some(violation) = violation {
-                return Ok((data.clone().unbind(), false, Some(violation)));
+                return Ok((None, false, Some(violation)));
             }
 
             result.set_item(key, processed_value)?;
@@ -341,11 +321,11 @@ fn process_structured_data_inner(
             }
         }
 
-        return Ok((result.into_any(), modified, None));
+        return Ok((Some(result.into_py_any(py)?), modified, None));
     }
 
     // Other types (int, bool, None, etc.) — pass through unchanged
-    Ok((data.clone().unbind(), false, None))
+    Ok((None, false, None))
 }
 
 pub fn generate_text_representation(data: &Bound<PyAny>, depth: u32) -> String {
