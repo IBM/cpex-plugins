@@ -278,12 +278,3 @@ pub fn handle_list(
         modified,
     });
 }
-pub struct OutputLengthGuardPlugin {
-    cfg: OutputLengthGuardConfig,
-}
-
-impl OutputLengthGuardPlugin {
-    pub fn new(cfg: OutputLengthGuardConfig) -> Self {
-        Self { cfg }
-    }
-}

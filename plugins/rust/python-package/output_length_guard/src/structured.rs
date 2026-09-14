@@ -2,7 +2,7 @@ use crate::config::*;
 use crate::guard::{evaluate_text_limits, is_numeric_string, truncate};
 use crate::output_length_guard::PluginViolation;
 use log::{debug, error, warn};
-use pyo3::types::{IntoPyDict, PyDict, PyList, PyString};
+use pyo3::types::{PyDict, PyList, PyString};
 use pyo3::{IntoPyObjectExt, prelude::*};
 
 fn path_or_root(path: &str) -> &str {
