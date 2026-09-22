@@ -12,7 +12,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-09-09T11:23:08.739069917Z"
+exclude-newer = "2026-09-12T13:21:19.400500571Z"
 exclude-newer-span = "P10D"
 
 [options.exclude-newer-package]
@@ -510,7 +510,7 @@ dev = [
 
 [[package]]
 name = "cpex-ica-metering-exporter"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "plugins/python/ica_metering_exporter" }
 dependencies = [
     { name = "cpex" },
