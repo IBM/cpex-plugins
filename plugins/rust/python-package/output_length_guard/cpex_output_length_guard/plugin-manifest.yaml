@@ -1,6 +1,6 @@
 description: "Rust-backed output length guard for tool outputs — truncates or blocks responses that exceed configurable character or token limits"
 author: "ContextForge Contributors"
-version: "0.1.1"
+version: "0.1.2"
 kind: "cpex_output_length_guard.output_length_guard.OutputLengthGuardPlugin"
 available_hooks:
   - "tool_post_invoke"
