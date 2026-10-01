@@ -747,10 +747,7 @@ mod tests {
     /// Three-part name (db.schema.table) without WHERE must be blocked.
     #[test]
     fn three_part_name_update_without_where_is_blocked() {
-        let issues = find_issues(
-            "UPDATE mydb.hr.employees SET salary = 0",
-            &default_cfg(),
-        );
+        let issues = find_issues("UPDATE mydb.hr.employees SET salary = 0", &default_cfg());
         assert_eq!(issues, vec!["UPDATE without WHERE clause"]);
     }
 
