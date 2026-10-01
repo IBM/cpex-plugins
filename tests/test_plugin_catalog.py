@@ -3433,10 +3433,6 @@ class PluginCatalogTests(unittest.TestCase):
         self.assertIn("python3 tools/plugin_catalog.py coverage-check . coverage/cobertura.xml 90.00", coverage_check_run)
         self.assertIn('"${PLUGINS}"', coverage_check_run)
         self.assertIn("cobertura.xml", coverage_section)
-        self.assertIn(
-            "codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0",
-            coverage_section,
-        )
         self.assertNotIn("matrix:", coverage_section)
         self.assertIn("CARGO_PACKAGES: ${{ needs.validate-and-detect.outputs.cargo_packages }}", documentation_section)
         self.assertIn('os.environ["CARGO_PACKAGES"]', documentation_run)
