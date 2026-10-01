@@ -17,47 +17,17 @@ use crate::config::SqlSanitizerConfig;
 static PRINTF_FMT_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"%[sdfi]").expect("Invalid printf format regex"));
 
-/// Bind-parameter prefixes that immediately precede digits: `$` (PostgreSQL
-/// positional), `:` (Oracle/JDBC named), `@` (SQL Server/MySQL named).
-/// These are erased from the SQL before inline-literal detection so that a
-/// digit following a bind-marker prefix is not mistaken for a literal value.
+/// Erases `$N`, `:N`, `@N` bind-parameter prefixes before literal detection.
 static BIND_PARAM_DIGIT_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"[$:@]\d+").expect("Invalid bind param digit regex"));
 
-/// Matches an inline literal value (numeric or single-quoted string) in a SQL
-/// context where parameterization is required.
-///
-/// Matched forms:
-///   * Single-quoted string literal:  `'Alice'`, `'O''Brien'` — after masking,
-///     both become `''`, which is what this regex matches.
-///   * Decimal / integer number:      `42`, `3.14`, `-7`
-///
-/// The regex is applied **after** `mask_string_literals` has blanked the
-/// content of quoted literals and **after** `BIND_PARAM_DIGIT_RE` has erased
-/// bind-parameter digit sequences (`$1`, `:1`, `@1`), so `$1` in
-/// `WHERE id = $1` does not produce a false positive.
-///
-/// Numeric literals are matched as a word-boundary-anchored sequence of
-/// digits with an optional leading minus and optional decimal fraction so that
-/// bare SQL identifiers such as column names (`id`) or table aliases (`t1`)
-/// are not treated as numeric literals.  The `\b` after `t` in `t1` prevents
-/// the `1` from matching.
-static INLINE_LITERAL_RE: Lazy<Regex> = Lazy::new(|| {
-    // `''` — a masked (emptied) single-quoted string literal.
-    // `-?\b\d+(\.\d+)?\b` — an inline numeric literal, optionally signed and
-    // with a decimal fraction.  The `\b` anchors prevent matching digits that
-    // are part of an identifier such as `table2`.
-    Regex::new(r"''|-?\b\d+(?:\.\d+)?\b").expect("Invalid inline literal regex")
-});
+/// Matches a masked string literal (`''`) or bare numeric literal (`42`, `3.14`).
+/// Applied after `mask_string_literals` and `BIND_PARAM_DIGIT_RE` erasure.
+static INLINE_LITERAL_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"''|-?\b\d+(?:\.\d+)?\b").expect("Invalid inline literal regex"));
 
-/// Matches the leading keyword of a DML/DQL statement that warrants inline-literal
-/// detection.  Only strings that look like SQL are checked; this prevents numeric
-/// content in non-SQL fields (e.g. HTTP status codes, tool-call IDs, log messages)
-/// from being falsely flagged when `fields = null` and the scanner visits every
-/// string in the payload.
-///
-/// Covered keywords:  SELECT, INSERT, UPDATE, DELETE, MERGE, REPLACE, WITH
-/// (covers CTEs that precede a DML statement).
+/// Guards `has_inline_literals`: skips non-SQL fields (HTTP codes, IDs, log lines)
+/// to avoid false positives when `fields = null`.
 static SQL_KEYWORD_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)\b(?:SELECT|INSERT|UPDATE|DELETE|MERGE|REPLACE|WITH)\b")
         .expect("Invalid SQL keyword regex")
@@ -74,27 +44,8 @@ static DELETE_FROM_RE: Lazy<Regex> = Lazy::new(|| {
 });
 
 static UPDATE_RE: Lazy<Regex> = Lazy::new(|| {
-    // Match a SQL UPDATE statement: UPDATE <table> SET …
-    //
-    // The SET keyword is required so that incidental prose such as
-    // "Append UPDATE query to TC1.SQL" (which contains no SET) is not
-    // mistaken for an UPDATE statement.  A real DML UPDATE always has
-    // a SET clause; prose uses UPDATE as an ordinary verb and does not.
-    //
-    // Table name forms covered:
-    //   * bare identifier:                UPDATE users SET …
-    //   * schema-qualified (1 or 2 dots): UPDATE schema.table SET …
-    //                                     UPDATE db.schema.table SET …
-    //   * ANSI double-quoted:             UPDATE "users" SET …
-    //   * MySQL backtick-quoted:          UPDATE `users` SET …
-    //   * SQL Server bracket:             UPDATE [users] SET …
-    //
-    // The bare-identifier alternative uses `(?:\w+\.)*\w+` so that a dotted
-    // name like `schema.table` or `db.schema.table` is matched as a single
-    // unit before the required `\s+SET\b`.  Without the dotted form the regex
-    // stopped at the first `\w+` component, leaving `.table` unmatched and
-    // causing `\s+SET` to fail — a silent bypass of the WHERE-less guard for
-    // any schema-qualified table.
+    // SET is required so prose like "Append UPDATE query to file" is not matched.
+    // `(?:\w+\.)*\w+` covers bare, schema.table, and db.schema.table names.
     Regex::new(r#"(?i)\bUPDATE\b\s+(?:(?:\w+\.)*\w+|"[^"]*"|`[^`]*`|\[[^\]]*\])\s+SET\b"#)
         .expect("Invalid UPDATE regex")
 });
@@ -275,36 +226,12 @@ fn has_brace_template(sql: &str) -> bool {
     false
 }
 
-/// Return `true` when `sql` (already comment-stripped and literal-masked by
-/// the caller) contains an inline literal value — either a masked string
-/// literal (`''`) or a bare numeric literal — indicating that the SQL was
-/// built with hard-coded values rather than bind parameters.
-///
-/// This is called only when `has_interpolation` returns `false`, so it
-/// catches the case where the final SQL string contains literals directly
-/// rather than via Python-level string assembly.  SQL that uses bind
-/// parameters (`?`, `$1`, `:name`) contains neither interpolation markers
-/// nor inline literals after bind-marker erasure, so it passes cleanly.
-///
-/// **SQL-context gate:** the check is skipped entirely when the string does
-/// not contain a recognised DML/DQL keyword (`SELECT`, `INSERT`, `UPDATE`,
-/// `DELETE`, `MERGE`, `REPLACE`, `WITH`).  This prevents non-SQL fields such
-/// as HTTP status codes, tool-call IDs, or log messages from being falsely
-/// flagged when `fields = null` and the scanner visits every string in the
-/// payload.
-///
-/// Bind-parameter digit sequences (`$1`, `:1`, `@1`) are erased by
-/// `BIND_PARAM_DIGIT_RE` before matching so that `WHERE id = $1` does not
-/// produce a false positive from the standalone digit `1`.
+/// Return `true` when `sql` contains a masked string literal or bare numeric literal.
+/// Skips strings with no SQL keyword; erases `$N`/`:N`/`@N` before matching.
 fn has_inline_literals(sql: &str) -> bool {
-    // Only run literal detection on strings that look like SQL.  Non-SQL fields
-    // (e.g. "status: 200 OK", "tool_call_id: call_42") contain no DML keyword
-    // and are skipped, avoiding false positives when `fields = null`.
     if !SQL_KEYWORD_RE.is_match(sql) {
         return false;
     }
-    // Erase bind-parameter digit sequences ($1, :1, @1) so their digits are
-    // not mistaken for standalone numeric literals.
     let erased = BIND_PARAM_DIGIT_RE.replace_all(sql, "");
     INLINE_LITERAL_RE.is_match(&erased)
 }
@@ -611,24 +538,13 @@ mod tests {
         assert_eq!(issues, Vec::<String>::new());
     }
 
-    /// `%s` inside a single-quoted literal must **not** trigger the interpolation check.
-    ///
-    /// `mask_string_literals` replaces the content of every quoted value with an
-    /// empty string before analysis, so `'%s%'` becomes `''` and `has_interpolation`
-    /// never sees a bare `%s`.  This test exercises that masking path directly
-    /// with `require_parameterization = false` so no other check interferes.
+    /// `%s` inside a quoted literal is masked before interpolation detection runs.
     #[test]
     fn percent_s_inside_string_literal_is_not_flagged_as_interpolation() {
-        // require_parameterization is OFF — the only active check is the
-        // interpolation path.  The `%s` is inside a quoted value and must be
-        // invisible to the detector after masking.
         let issues = find_issues("SELECT * FROM t WHERE name LIKE '%s%'", &default_cfg());
         assert_eq!(issues, Vec::<String>::new());
     }
 
-    /// When `require_parameterization` is enabled, a LIKE predicate that uses a
-    /// bind parameter (`?`) must pass cleanly — no interpolation markers and no
-    /// inline literals.
     #[test]
     fn parameterized_like_with_bind_param_is_not_flagged() {
         let mut cfg = default_cfg();
@@ -721,20 +637,16 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Blocker 1 regressions — schema-qualified table names in UPDATE
+    // Schema-qualified UPDATE regressions
     // -----------------------------------------------------------------------
 
-    /// WHERE-less UPDATE on a schema-qualified table must be blocked.
-    /// Regression for the fix that required SET after the table name: using only
-    /// `\w+` (no dot) caused `schema.table` to stop matching at `schema`, leaving
-    /// `.table SET` unaligned and the statement silently passing the WHERE-less guard.
+    /// Regression: `\w+` stopped at the dot in `schema.table`, bypassing the guard.
     #[test]
     fn schema_qualified_update_without_where_is_blocked() {
         let issues = find_issues("UPDATE hr.employees SET salary = 0", &default_cfg());
         assert_eq!(issues, vec!["UPDATE without WHERE clause"]);
     }
 
-    /// A schema-qualified UPDATE with a WHERE clause must not be blocked.
     #[test]
     fn schema_qualified_update_with_where_is_not_blocked() {
         let issues = find_issues(
@@ -744,7 +656,6 @@ mod tests {
         assert_eq!(issues, Vec::<String>::new());
     }
 
-    /// Three-part name (db.schema.table) without WHERE must be blocked.
     #[test]
     fn three_part_name_update_without_where_is_blocked() {
         let issues = find_issues("UPDATE mydb.hr.employees SET salary = 0", &default_cfg());
@@ -752,23 +663,17 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Blocker 2 regressions — non-SQL fields must not trigger inline-literal check
+    // Non-SQL field regressions (fields = null + require_parameterization)
     // -----------------------------------------------------------------------
 
-    /// A plain status message containing a number must not be flagged as having
-    /// inline literals when `require_parameterization` is enabled and `fields` is
-    /// null (every string field is scanned).  The SQL-context gate prevents the
-    /// numeric literal detector from firing on non-SQL prose.
     #[test]
     fn non_sql_field_with_number_is_not_flagged() {
         let mut cfg = default_cfg();
         cfg.require_parameterization = true;
-        // "status: 200 OK" has no SQL keyword — must pass silently.
         let issues = find_issues("status: 200 OK", &cfg);
         assert_eq!(issues, Vec::<String>::new());
     }
 
-    /// A tool-call ID string containing a number must not be flagged.
     #[test]
     fn tool_call_id_field_is_not_flagged() {
         let mut cfg = default_cfg();
@@ -777,7 +682,6 @@ mod tests {
         assert_eq!(issues, Vec::<String>::new());
     }
 
-    /// A version string containing decimal numbers must not be flagged.
     #[test]
     fn version_string_is_not_flagged() {
         let mut cfg = default_cfg();
@@ -786,7 +690,6 @@ mod tests {
         assert_eq!(issues, Vec::<String>::new());
     }
 
-    /// An error code message must not be flagged.
     #[test]
     fn error_code_message_is_not_flagged() {
         let mut cfg = default_cfg();
@@ -795,11 +698,8 @@ mod tests {
         assert_eq!(issues, Vec::<String>::new());
     }
 
-    /// `SELECT 1` is a legitimate SQL string (contains the SELECT keyword) and
-    /// will be flagged as an inline literal under `require_parameterization`.
-    /// This is expected behaviour — operators who need health-check queries to
-    /// pass should either add `SELECT` to an allowlist via field filtering or
-    /// disable `require_parameterization` for that field.
+    /// `SELECT 1` is flagged because it contains a SQL keyword and a literal.
+    /// Use `fields` filtering or disable `require_parameterization` for health checks.
     #[test]
     fn select_one_health_check_is_flagged_as_inline_literal() {
         let mut cfg = default_cfg();

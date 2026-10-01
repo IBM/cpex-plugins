@@ -39,23 +39,9 @@ pub struct SqlSanitizerConfig {
     pub block_update_without_where: bool,
     /// Strip `--` and `/* */` comments before analysis.
     pub strip_comments: bool,
-    /// Require parameterized queries.  Two detection paths are applied in order:
-    ///
-    /// 1. **Interpolation markers** — flags Python-level string assembly patterns
-    ///    (`+`, `%s`/`%d`/`%f`/`%i`, `{…}`) that suggest the SQL was built by
-    ///    concatenation before being passed to the driver.
-    /// 2. **Inline literals** — flags hard-coded values (`42`, `'Alice'`) that
-    ///    appear directly in the final SQL string.  Only strings that contain a
-    ///    recognised DML/DQL keyword (`SELECT`, `INSERT`, `UPDATE`, `DELETE`,
-    ///    `MERGE`, `REPLACE`, `WITH`) are checked; non-SQL fields are skipped.
-    ///    SQL using `?`, `$1`, or `:name` bind parameters passes cleanly.
-    ///
-    /// **Important:** this control is most precise when `fields` is set to the
-    /// specific field names that carry SQL (e.g. `["sql", "query"]`).  When
-    /// `fields = null` the scanner visits every string in the payload; the
-    /// SQL-context gate reduces false positives for non-SQL fields, but certain
-    /// structural literals (e.g. `SELECT 1`, `LIMIT 10`) will still be flagged
-    /// because they appear in recognisable SQL statements.
+    /// Require parameterized queries.  Flags interpolation markers (`+`, `%s`, `{…}`)
+    /// and inline literals (`42`, `'Alice'`).  Non-SQL fields are skipped via a keyword
+    /// gate.  Most precise when `fields` names only the SQL-bearing fields.
     pub require_parameterization: bool,
     /// Return `continue_processing=False` when a violation is found.
     pub block_on_violation: bool,
