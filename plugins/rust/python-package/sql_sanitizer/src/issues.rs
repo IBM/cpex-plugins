@@ -17,6 +17,39 @@ use crate::config::SqlSanitizerConfig;
 static PRINTF_FMT_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"%[sdfi]").expect("Invalid printf format regex"));
 
+/// Bind-parameter prefixes that immediately precede digits: `$` (PostgreSQL
+/// positional), `:` (Oracle/JDBC named), `@` (SQL Server/MySQL named).
+/// These are erased from the SQL before inline-literal detection so that a
+/// digit following a bind-marker prefix is not mistaken for a literal value.
+static BIND_PARAM_DIGIT_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"[$:@]\d+").expect("Invalid bind param digit regex"));
+
+/// Matches an inline literal value (numeric or single-quoted string) in a SQL
+/// context where parameterization is required.
+///
+/// Matched forms:
+///   * Single-quoted string literal:  `'Alice'`, `'O''Brien'` — after masking,
+///     both become `''`, which is what this regex matches.
+///   * Decimal / integer number:      `42`, `3.14`, `-7`
+///
+/// The regex is applied **after** `mask_string_literals` has blanked the
+/// content of quoted literals and **after** `BIND_PARAM_DIGIT_RE` has erased
+/// bind-parameter digit sequences (`$1`, `:1`, `@1`), so `$1` in
+/// `WHERE id = $1` does not produce a false positive.
+///
+/// Numeric literals are matched as a word-boundary-anchored sequence of
+/// digits with an optional leading minus and optional decimal fraction so that
+/// bare SQL identifiers such as column names (`id`) or table aliases (`t1`)
+/// are not treated as numeric literals.  The `\b` after `t` in `t1` prevents
+/// the `1` from matching.
+static INLINE_LITERAL_RE: Lazy<Regex> = Lazy::new(|| {
+    // `''` — a masked (emptied) single-quoted string literal.
+    // `-?\b\d+(\.\d+)?\b` — an inline numeric literal, optionally signed and
+    // with a decimal fraction.  The `\b` anchors prevent matching digits that
+    // are part of an identifier such as `table2`.
+    Regex::new(r"''|-?\b\d+(?:\.\d+)?\b").expect("Invalid inline literal regex")
+});
+
 static DELETE_FROM_RE: Lazy<Regex> = Lazy::new(|| {
     // A statement whose leading keyword is DELETE is destructive regardless of
     // the table syntax that follows.  Anchoring at the statement start covers:
@@ -28,10 +61,22 @@ static DELETE_FROM_RE: Lazy<Regex> = Lazy::new(|| {
 });
 
 static UPDATE_RE: Lazy<Regex> = Lazy::new(|| {
-    // Match UPDATE followed by a plain, double-quoted (ANSI), backtick-quoted (MySQL),
-    // or bracket-quoted (SQL Server) table name so that `UPDATE "users" SET …` is
-    // not allowed to bypass the WHERE-clause guard.
-    Regex::new(r#"(?i)\bUPDATE\b\s+(?:\w+|"[^"]*"|`[^`]*`|\[[^\]]*\])"#)
+    // Match a SQL UPDATE statement: UPDATE <table> SET …
+    //
+    // The SET keyword is required so that incidental prose such as
+    // "Append UPDATE query to TC1.SQL" (which contains no SET) is not
+    // mistaken for an UPDATE statement.  A real DML UPDATE always has
+    // a SET clause; prose uses UPDATE as an ordinary verb and does not.
+    //
+    // Table name forms covered:
+    //   * bare identifier:        UPDATE users SET …
+    //   * ANSI double-quoted:     UPDATE "users" SET …
+    //   * MySQL backtick-quoted:  UPDATE `users` SET …
+    //   * SQL Server bracket:     UPDATE [users] SET …
+    //
+    // `\s+` after the table name allows `UPDATE t SET` as well as
+    // multi-token forms like `UPDATE schema.table SET`.
+    Regex::new(r#"(?i)\bUPDATE\b\s+(?:\w+|"[^"]*"|`[^`]*`|\[[^\]]*\])\s+SET\b"#)
         .expect("Invalid UPDATE regex")
 });
 
@@ -171,10 +216,15 @@ pub fn find_issues(sql: &str, cfg: &SqlSanitizerConfig) -> Vec<String> {
         issues.extend(find_issues_in_statement(&stmt, cfg));
     }
 
-    // Parameterization check on processed (comment-stripped), literal-masked SQL
-    // to avoid false positives from format markers inside quoted string values.
-    if cfg.require_parameterization && has_interpolation(&mask_string_literals(&processed)) {
-        issues.push("Possible non-parameterized interpolation detected".to_string());
+    // Parameterization check on comment-stripped, literal-masked SQL.
+    // Masking first prevents quoted content from spoofing or bypassing detection.
+    let masked_processed = mask_string_literals(&processed);
+    if cfg.require_parameterization {
+        if has_interpolation(&masked_processed) {
+            issues.push("Possible non-parameterized interpolation detected".to_string());
+        } else if has_inline_literals(&masked_processed) {
+            issues.push("Inline literal values detected; use bind parameters instead".to_string());
+        }
     }
 
     issues
@@ -204,6 +254,27 @@ fn has_brace_template(sql: &str) -> bool {
         return true;
     }
     false
+}
+
+/// Return `true` when `sql` (already comment-stripped and literal-masked by
+/// the caller) contains an inline literal value — either a masked string
+/// literal (`''`) or a bare numeric literal — indicating that the SQL was
+/// built with hard-coded values rather than bind parameters.
+///
+/// This is called only when `has_interpolation` returns `false`, so it
+/// catches the case where the final SQL string contains literals directly
+/// rather than via Python-level string assembly.  SQL that uses bind
+/// parameters (`?`, `$1`, `:name`) contains neither interpolation markers
+/// nor inline literals after bind-marker erasure, so it passes cleanly.
+///
+/// Bind-parameter digit sequences (`$1`, `:1`, `@1`) are erased by
+/// `BIND_PARAM_DIGIT_RE` before matching so that `WHERE id = $1` does not
+/// produce a false positive from the standalone digit `1`.
+fn has_inline_literals(sql: &str) -> bool {
+    // Erase bind-parameter digit sequences ($1, :1, @1) so their digits are
+    // not mistaken for standalone numeric literals.
+    let erased = BIND_PARAM_DIGIT_RE.replace_all(sql, "");
+    INLINE_LITERAL_RE.is_match(&erased)
 }
 
 #[cfg(test)]
@@ -360,15 +431,26 @@ mod tests {
     // Parameterization — extra coverage to catch missed mutants
     // -----------------------------------------------------------------------
 
-    /// `require_parameterization=true` + SQL with NO interpolation markers →
+    /// `require_parameterization=true` + SQL that uses bind parameters →
     /// empty issues.  Catches the mutant that replaces `has_interpolation`
     /// entirely with `true`.
     #[test]
-    fn no_issue_for_safe_sql_when_parameterization_required() {
+    fn no_issue_for_parameterized_sql_when_parameterization_required() {
         let mut cfg = default_cfg();
         cfg.require_parameterization = true;
-        // No `+`, `%.`, or `{…}` — must produce zero issues
-        let issues = find_issues("SELECT id FROM users WHERE name = 'alice'", &cfg);
+        // `?` is a positional bind parameter — no literals, no interpolation
+        let issues = find_issues("SELECT id FROM users WHERE name = ?", &cfg);
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    /// `require_parameterization=true` + SQL with a named bind parameter (`$1`)
+    /// → empty issues.  Verifies that positional parameters in PostgreSQL style
+    /// are not mistaken for literals.
+    #[test]
+    fn no_issue_for_dollar_bind_param_when_parameterization_required() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("SELECT id FROM users WHERE name = $1", &cfg);
         assert_eq!(issues, Vec::<String>::new());
     }
 
@@ -504,6 +586,89 @@ mod tests {
         let mut cfg = default_cfg();
         cfg.require_parameterization = true;
         let issues = find_issues("SELECT * FROM t WHERE name LIKE '%s%'", &cfg);
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    /// Valid UPDATE with WHERE must not be blocked.
+    #[test]
+    fn valid_update_with_where_is_not_blocked() {
+        let issues = find_issues(
+            "UPDATE employees SET salary = 75000 WHERE employee_id = 101",
+            &default_cfg(),
+        );
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    /// Prose containing "UPDATE <word>" without SET must not trigger the WHERE-less UPDATE policy.
+    #[test]
+    fn prose_update_word_is_not_flagged() {
+        let issues = find_issues("Append UPDATE query to TC1.SQL", &default_cfg());
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    /// WHERE-less UPDATE must still be blocked even when a prose field also contains "UPDATE".
+    #[test]
+    fn real_update_without_where_is_still_blocked() {
+        let issues = find_issues("UPDATE employees SET salary = 75000", &default_cfg());
+        assert_eq!(issues, vec!["UPDATE without WHERE clause"]);
+    }
+
+    /// SQL UPDATE with WHERE followed by prose containing "UPDATE" — only the WHERE-less prose is checked, not flagged.
+    #[test]
+    fn mixed_sql_and_prose_update_no_false_positive() {
+        let issues = find_issues(
+            "UPDATE employees SET salary = 75000 WHERE employee_id = 101; \
+             Append UPDATE query to TC1.SQL",
+            &default_cfg(),
+        );
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    /// INSERT with inline literals is flagged when `require_parameterization` is enabled.
+    #[test]
+    fn insert_with_inline_literals_is_flagged() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("INSERT INTO employees VALUES (42, 'Alice', 75000)", &cfg);
+        assert_eq!(
+            issues,
+            vec!["Inline literal values detected; use bind parameters instead"]
+        );
+    }
+
+    /// INSERT with bind parameters passes when `require_parameterization` is enabled.
+    #[test]
+    fn insert_with_bind_params_is_allowed() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("INSERT INTO employees VALUES (?, ?, ?)", &cfg);
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    /// UPDATE with inline numeric literals is flagged when `require_parameterization` is enabled.
+    #[test]
+    fn update_with_inline_literal_where_is_flagged() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues(
+            "UPDATE employees SET salary = 75000 WHERE employee_id = 101",
+            &cfg,
+        );
+        assert_eq!(
+            issues,
+            vec!["Inline literal values detected; use bind parameters instead"]
+        );
+    }
+
+    /// UPDATE with bind parameters passes when `require_parameterization` is enabled.
+    #[test]
+    fn update_with_bind_params_is_allowed() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues(
+            "UPDATE employees SET salary = ? WHERE employee_id = ?",
+            &cfg,
+        );
         assert_eq!(issues, Vec::<String>::new());
     }
 }
