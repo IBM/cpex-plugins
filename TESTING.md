@@ -1,182 +1,103 @@
 # Testing cpex-plugins
 
-## Testing Architecture
+A test earns its place by catching a meaningful failure: an incorrect plugin
+decision, a broken boundary, an unsafe release, or a known regression. Start
+with the behavior and its owner. More test cases and higher coverage are not
+independent goals.
 
-Testing spans two repositories. `cpex-plugins` owns unit tests and plugin-framework integration tests; `mcp-context-forge` owns gateway integration and E2E tests.
+## Ownership
 
-### Unit Tests (cpex-plugins)
+| Layer | Location | What it protects |
+| --- | --- | --- |
+| Rust core | Inline tests in each plugin crate | Detection, redaction, limits, retries, policy decisions, and failure handling |
+| Pure-Python core | `plugins/python/<slug>/tests/` | Plugin decisions, request attribution, transport behavior, and privacy |
+| Python/Rust and hook boundary | `plugins/tests/<slug>/` | Config conversion, binding calls, payload isolation, hook results, and error mapping |
+| Repository tooling | `tests/` | Catalog discovery, CI selection, release validation, coverage aggregation, and wheel selection/installation |
+| Repository security policy | `tests/test_repository_policy.py` | Action SHA pinning and expiry of Cargo advisory exceptions |
+| Distribution | Release workflow artifact jobs | Installation and execution of built wheels and sdists outside the source tree |
+| Full gateway | `mcp-context-forge/tests/integration/` and `tests/e2e/` | Gateway lifecycle, cross-plugin interactions, and complete request flows |
 
-**Location**: Within each plugin's own directory
-- Pure Python: `plugins/python/<slug>/tests/`
-- Rust package binding tests: `plugins/rust/python-package/<slug>/tests/`
-- Rust: inline `mod tests` within source files (e.g., `src/lib.rs`)
+Existing plugin hook suites use `plugins/tests/conftest.py` and its controlled
+hook-model shims. Real-CPEX import smoke tests check that the packages also
+import with the installed framework. Passing the shim suites does not prove
+full gateway compatibility. Generated plugins have local Python hook smoke
+tests that run the wrapper and compiled Rust hooks against CPEX.
 
-**Scope**:
-- Individual plugin functionality in isolation
-- Rust core logic and functions
-- Python bindings and entry points
-- Plugin configuration validation
-- Fast, deterministic tests
+## What stays, what goes
 
-**Purpose**:
-- Provide fast feedback during plugin development
-- Validate plugin logic independently of the gateway
-- Ensure plugin contracts are met
-- Test edge cases and error handling
+| Keep | Remove or consolidate |
+| --- | --- |
+| Security detection, false-positive, redaction, and privacy regressions | Assertions about private Rust module declarations or source layout |
+| Rate-limit concurrency, Redis errors, fail-open/fail-closed behavior, and TLS | Generic constructor and field-presence tests with no behavioral assertion |
+| Hook dispatch, conversion, payload isolation, and observability contracts | Repeating a core algorithm's entire matrix through every wrapper layer |
+| Catalog packaging invariants, mixed-language routing, canonical release tags, and coverage report validation | Hardcoded lists/counts of the current real plugins and every spelling of the same invalid input |
+| Wheel platform compatibility and actual install-command behavior | Exact argparse help wording |
+| Action pinning and dated advisory exception policy | Exact CI job names, step ordering, shell recipes, tool versions, or YAML whitespace |
+| Building, linting, type checking, and installing actual artifacts | Reading Makefiles, stubs, templates, or documentation to assert expected text |
+| One generated hook smoke case per selected hook | Empty TODO tests and tests of Pydantic's ordinary setters/serialization |
 
-**Run Locally**:
-```bash
-# Pure Python
-cd plugins/python/<slug>
-make test-all  # Runs unit and plugin-framework integration tests
+For each new test, describe the defect that would make it fail. Extend an
+existing case when it already owns that behavior. Use representative success,
+failure, and boundary cases; add more inputs when they exercise a different
+policy or a concrete regression. Assertions should survive an internal
+refactor that preserves behavior.
 
-# Rust with Python packaging
-cd plugins/rust/python-package/<slug>
-make test-all  # Runs both Rust and Python unit tests
-```
+The catalog suite uses one small mixed-language fixture, direct public function
+calls for policy, and a few real Git/CLI tests for I/O. It does not parse the
+repository's workflow scripts or plugin source. Actual repository layout is
+checked by `plugin_catalog.py validate .` in local validation and catalog CI.
 
-### Plugin-Framework Integration Tests (cpex-plugins)
+## Commands
 
-**Location**: `plugins/tests/<slug>/` for pure-Python plugins; the plugin-local `tests/` directory for Rust plugins
-
-**Scope**:
-- Python plugin entry points, including the PyO3 interface for Rust plugins
-- Plugin loading by the Python plugin framework
-- Hook dispatch through the framework layer
-- Coverage of PyO3 paths for Rust plugins (run as part of Rust coverage)
-
-**Purpose**:
-- Validate that the Rust implementation is correctly exposed through PyO3 bindings
-- Ensure the plugin framework can discover, load, and invoke the plugin
-- Keep PyO3 code paths covered without requiring a full gateway
-
-**Run Locally**:
-```bash
-cd plugins/python/<slug>  # Or plugins/rust/python-package/<slug>
-make test-integration  # Runs plugin-framework integration tests
-```
-
-The shared `plugins/tests/conftest.py` discovers selected package directories from both managed roots, checking `plugins/python/` first and then `plugins/rust/python-package/`. This Python-first lookup selects the realized package location for a slug; it does not provide a Python fallback implementation for a Rust plugin.
-
-### Gateway Integration Tests (mcp-context-forge)
-
-**Location**: `mcp-context-forge/tests/integration/`
-
-**Scope**:
-- Plugin integration with the full gateway
-- Plugin loading and initialization in gateway context
-- Hook execution within the gateway framework
-- Cross-plugin interactions
-- Plugin lifecycle management
-
-**Purpose**:
-- Validate plugin behavior within the gateway
-- Test framework-plugin contracts at the gateway level
-- Ensure plugins work together correctly
-- Test plugin configuration and registration
-
-**Run Locally**:
-```bash
-cd mcp-context-forge
-pytest tests/integration/
-```
-
-### E2E Tests (mcp-context-forge)
-
-**Location**: `mcp-context-forge/tests/e2e/`
-
-**Scope**:
-- Complete request/response workflows
-- Realistic usage scenarios
-- Multi-gateway plugin coordination
-- Performance and load testing with plugins
-
-**Purpose**:
-- Validate end-to-end functionality
-- Test real-world usage patterns
-- Ensure system-level correctness
-- Catch integration issues
-
-**Run Locally**:
-```bash
-cd mcp-context-forge
-pytest tests/e2e/
-```
-
-## Testing Layers
-
-`cpex-plugins` has three local testing layers. Gateway integration and E2E tests live in `mcp-context-forge`.
-
-### 1. Repo Contract Tests
-
-These validate monorepo conventions and are enforced in CI before plugin builds run.
+Repository tooling uses the standard library and needs no plugin builds:
 
 ```bash
-python3 -m unittest tests/test_plugin_catalog.py tests/test_install_built_wheel.py
+make plugins-validate
+# Equivalent:
 python3 tools/plugin_catalog.py validate .
+python3 -m unittest discover -s tests
 ```
 
-They verify:
-
-- managed plugin location under `plugins/rust/python-package/` or `plugins/python/`
-- plugin manifests do not exist outside the managed root
-- required files and package/module naming
-- root uv-workspace membership for every plugin and top-level Cargo-workspace membership for Rust crates
-- version consistency between the language-specific source (`Cargo.toml` or `pyproject.toml`) and `plugin-manifest.yaml`
-- manifest `kind` consistency (`module.object`) with `[project.entry-points."cpex.plugins"]` targets (`module:object`)
-- repository metadata consistency
-- changed-plugin detection for CI
-- canonical release tag resolution
-- automatic release tag and publish workflow wiring
-
-### 2. Plugin Unit Tests
-
-Rust plugins have Rust and Python binding unit tests. Pure-Python plugins have a Python unit test suite.
+For a plugin, use its existing targets:
 
 ```bash
-cd plugins/rust/python-package/rate_limiter
-uv sync --dev
-cargo install cargo-nextest --version 0.9.133 --locked
+cd plugins/rust/python-package/rate_limiter  # Or plugins/python/<slug>
+make sync
 make install
 make test-all
+make test-integration
+make ci
 ```
 
-Set `NEXTEST_PROFILE=ci` to use the repository CI profile locally. The CI profile is defined in `.config/nextest.toml`; it disables fail-fast so all Rust test failures are reported in one run.
-
-Equivalent repo-level helper:
+The repo helper runs the selected plugin's CI target:
 
 ```bash
 make plugin-test PLUGIN=rate_limiter
 ```
 
-`make plugin-test` runs the selected plugin's `make ci` target, including stub verification, build, bench compilation where configured, install, and Python tests.
+Rust tests use nextest. The `ci` profile in `.config/nextest.toml` disables
+fail-fast. Benchmarks are compiled with `cargo nextest run --benches
+-E 'kind(bench)' --no-run`; shared CI runners do not provide stable performance
+measurements. Gateway suites run from the `mcp-context-forge` repository.
 
-### 3. Plugin-Framework Integration Tests
+## Coverage and mutation checks
 
-Each plugin also has integration tests between the plugin and the Python plugin framework. Pure-Python integration tests live under `plugins/tests/<slug>/`; Rust integration tests live in the plugin's `tests/` directory alongside binding tests. They ensure the framework can discover, load, and invoke each plugin, and cover the PyO3 interface for Rust implementations.
+The existing Rust CI coverage gate remains 90% per selected plugin. It runs
+Rust tests and the Python hook suites against instrumented PyO3 extensions.
+Use coverage to find missing behavior, then add assertions that catch a real
+failure. A test that only executes a line adds no useful protection.
 
-```bash
-cd plugins/rust/python-package/rate_limiter
-make test-integration
-```
-
-These tests are distinct from gateway integration tests in `mcp-context-forge`: they exercise the plugin ↔ framework boundary within this repository, without requiring a running gateway.
-
-## 4. Rust Coverage
-
-CI enforces at least 90% line coverage for each Rust plugin selected by the plugin catalog. The coverage job instruments Rust, runs Rust unit tests, then runs each plugin's repo-level Python integration tests so PyO3 paths are counted.
-
-To run the same coverage check locally for all managed Rust plugins:
+To reproduce the coverage job, install `llvm-tools-preview`,
+`cargo-llvm-cov` 0.8.4, and `cargo-nextest` 0.9.133, then run this in Bash from
+the repository root:
 
 ```bash
-rustup component add llvm-tools-preview
-cargo install cargo-llvm-cov --version 0.8.4 --locked
-cargo install cargo-nextest --version 0.9.133 --locked
 mkdir -p coverage
 CARGO_PACKAGES="$(python3 tools/plugin_catalog.py ci-selection-field . all '' '' cargo_packages)"
 RUST_PLUGINS="$(python3 tools/plugin_catalog.py ci-selection-field . all '' '' rust_plugins)"
-mapfile -t cargo_packages < <(python3 -c 'import json, os; [print(package) for package in json.loads(os.environ["CARGO_PACKAGES"])]')
-mapfile -t rust_plugins < <(python3 -c 'import json, os; [print(plugin) for plugin in json.loads(os.environ["RUST_PLUGINS"])]')
+export CARGO_PACKAGES RUST_PLUGINS
+mapfile -t cargo_packages < <(python3 -c 'import json, os; [print(p) for p in json.loads(os.environ["CARGO_PACKAGES"])]')
+mapfile -t rust_plugins < <(python3 -c 'import json, os; [print(p) for p in json.loads(os.environ["RUST_PLUGINS"])]')
 cargo_args=()
 for package in "${cargo_packages[@]}"; do
   cargo_args+=("-p" "${package}")
@@ -190,278 +111,29 @@ export LLVM_PROFILE_FILE="${CARGO_TARGET_DIR}/cpex-plugins-%p-%10m.profraw"
 mkdir -p "${CARGO_TARGET_DIR}"
 for plugin in "${rust_plugins[@]}"; do
   (cd "plugins/rust/python-package/${plugin}" && make sync && uv run maturin develop)
-done
-for plugin in "${rust_plugins[@]}"; do
   (cd "plugins/rust/python-package/${plugin}" && make test-integration)
 done
 env -u CARGO_TARGET_DIR -u CARGO_LLVM_COV_BUILD_DIR -u CARGO_LLVM_COV_TARGET_DIR -u LLVM_PROFILE_FILE cargo llvm-cov report "${cargo_args[@]}" --cobertura --output-path coverage/cobertura.xml
 python3 tools/plugin_catalog.py coverage-check . coverage/cobertura.xml 90.00 "${RUST_PLUGINS}"
 ```
 
-Rust unit tests use `cargo nextest run`. Coverage uses `cargo llvm-cov nextest --no-report` for the Rust test phase, then runs pytest before generating the final report so PyO3 paths stay covered. CI uses the `ci` nextest profile, which disables fail-fast and prints failure output immediately and again at the end. Nextest does not run Rust doctests; this repo currently has no Rust doctest code blocks, so there is no separate doctest step.
-
-Criterion benchmarks are verified in CI with `cargo nextest run --benches -E 'kind(bench)' --no-run`, which compiles benchmark test targets without rerunning normal unit tests or collecting noisy performance measurements on shared CI runners.
-
-## 5. Mutation Testing
-
-Mutation testing runs in PR CI on Ubuntu for Rust code touched by the pull request diff. It is also available locally through cargo-mutants and runs Rust tests with nextest.
+Mutation CI checks changed Rust source, including relevant dependents of the
+framework bridge. It uses `cargo-mutants` 27.0.0 with nextest and the `mutants`
+profile. Tooling-only changes do not select mutation jobs. Local commands:
 
 ```bash
-cargo install cargo-nextest --version 0.9.133 --locked
-cargo install cargo-mutants --version 27.0.0 --locked
 make plugin-mutants-list PLUGIN=retry_with_backoff
 make plugin-mutants PLUGIN=retry_with_backoff
 ```
 
-`.cargo/mutants.toml` sets `test_tool = "nextest"`, selects the `mutants` nextest profile, and keeps `cap_lints = false` so Rust warnings are not downgraded during mutant builds. The `mutants` profile keeps fail-fast enabled because cargo-mutants only needs one failing test to mark a mutant as caught. CI installs `cargo-mutants` with `cargo install cargo-mutants --version 27.0.0 --locked` and runs `cargo mutants "${cargo_args[@]}"`, using `--in-diff cargo-mutants.diff` for Rust source changes and full-package mutation for mutation-tooling config changes.
+## CI and releases
 
-## Cross-Repository Testing Workflow
+The catalog selects affected plugins and splits Rust and Python jobs. Plugin
+changes stay scoped; shared workspace, tooling, and harness changes select all
+plugins. Repository test-only changes run the tooling suite.
 
-### Development Workflow
-
-1. **Develop Plugin in cpex-plugins**:
-   ```bash
-   cd cpex-plugins/plugins/python/<slug>  # Or plugins/rust/python-package/<slug>
-   # Implement plugin logic
-   # Write unit tests in the plugin-local tests/
-   # Write pure-Python integration tests in cpex-plugins/plugins/tests/<slug>/
-   make test-all          # Run unit tests
-   make test-integration  # Run plugin-framework integration tests
-   ```
-
-2. **Create PR in cpex-plugins**:
-   - Include unit tests and plugin-framework integration tests
-   - Ensure `make ci` passes
-   - Get PR reviewed and merged
-
-3. **Coordinate with mcp-context-forge**:
-   - Notify mcp-context-forge team of new plugin
-   - Discuss integration test requirements
-   - Plan E2E test scenarios
-
-4. **Write Integration Tests in mcp-context-forge**:
-   ```bash
-   cd mcp-context-forge
-   # Install plugin: pip install cpex-<slug>
-   # Configure in plugins/config.yaml
-   # Write tests in tests/integration/
-   pytest tests/integration/
-   ```
-
-5. **Write E2E Tests in mcp-context-forge**:
-   ```bash
-   cd mcp-context-forge
-   # Write tests in tests/e2e/
-   pytest tests/e2e/
-   ```
-
-6. **Create PR in mcp-context-forge**:
-   - Include integration and E2E tests
-   - Ensure all tests pass
-   - Get PR reviewed and merged
-
-7. **Release**:
-   - Tag plugin in cpex-plugins: `<slug>-v<version>`
-   - Update mcp-context-forge dependencies
-   - Deploy with new plugin version
-
-### Testing Coordination Guidelines
-
-**When to Write Unit Tests (cpex-plugins)**:
-- Testing plugin logic in isolation
-- Testing Rust functions and algorithms
-- Testing Python bindings
-- Testing configuration validation
-- Testing error handling and edge cases
-
-**When to Write Plugin-Framework Integration Tests (cpex-plugins)**:
-- Testing PyO3 entry points end-to-end
-- Testing plugin loading by the Python framework
-- Testing hook dispatch through the framework layer
-- Ensuring PyO3 paths are covered in Rust coverage
-
-**When to Write Gateway Integration Tests (mcp-context-forge)**:
-- Testing plugin loading and initialization in the gateway
-- Testing hook execution in the full gateway framework
-- Testing plugin interactions with gateway services
-- Testing cross-plugin behavior
-- Testing plugin lifecycle (enable/disable/reload)
-
-**When to Write E2E Tests (mcp-context-forge)**:
-- Testing complete request/response flows
-- Testing realistic usage scenarios
-- Testing performance with plugins enabled
-- Testing multi-gateway coordination
-- Testing production-like configurations
-
-### CI Coordination
-
-**cpex-plugins CI**:
-- Runs repo contract tests
-- Runs plugin unit tests
-- Runs plugin-framework integration tests (`make test-integration`)
-- Builds and packages plugins
-- Uses separate `ci-python-package.yaml` and `ci-rust-python-package.yaml` workflows fed by language-specific catalog selections
-- On `main`, creates release tags for plugin version bumps only after required checks are green
-- Invokes the release workflow for PyPI publishing after tag creation
-
-**mcp-context-forge CI**:
-- Runs integration tests with latest plugin versions
-- Runs E2E tests with plugins enabled
-- Validates plugin compatibility
-- Tests plugin upgrades
-
-### Test Coverage Expectations
-
-**Unit Tests (cpex-plugins)**:
-- Aim for >90% code coverage of plugin logic
-- Cover all public APIs and entry points
-- Test error paths and edge cases
-- Fast execution (<1 second per test)
-
-**Integration Tests (mcp-context-forge)**:
-- Cover all plugin hooks
-- Test plugin configuration variations
-- Test plugin interactions
-- Moderate execution time (<5 seconds per test)
-
-**E2E Tests (mcp-context-forge)**:
-- Cover critical user workflows
-- Test realistic scenarios
-- Test performance characteristics
-- Slower execution acceptable (seconds to minutes)
-
-## CI Behavior
-
-Repo contract tests run in their own CI workflow. Separate pure-Python and Rust plugin CI workflows use the same dual-root catalog to select affected jobs; Rust-only integration and coverage behavior remains in the Rust workflow.
-
-Per-plugin build/test jobs are then scoped by the plugin catalog:
-
-- plugin-only changes run only the affected plugin jobs
-- shared workflow, workspace, root orchestration, docs, test, and tool changes run all managed plugin jobs
-
-For pull requests with plugin version bumps, each language-specific CI workflow
-invokes its matching release workflow to build and test the target package with
-publishing disabled. On `main`, each language-specific CI workflow creates tags
-only after its required checks pass, then invokes its matching release workflow
-with PyPI publishing enabled. Rust CI retains additional security, mutation,
-coverage, and documentation gates. The matching release workflow validates the
-tag and plugin metadata before any artifact is published.
-
-## Testing Best Practices
-
-### Unit Tests
-
-- **Fast**: Each test should complete in milliseconds
-- **Isolated**: No external dependencies (network, filesystem, database)
-- **Deterministic**: Same input always produces same output
-- **Focused**: Test one thing per test
-- **Clear**: Test names describe what is being tested
-
-### Integration Tests
-
-- **Realistic**: Use actual gateway framework components
-- **Scoped**: Test specific integration points
-- **Stable**: Use test fixtures and mocks for external services
-- **Documented**: Explain what integration is being tested
-
-### E2E Tests
-
-- **Complete**: Test full workflows from start to finish
-- **Representative**: Use realistic data and scenarios
-- **Robust**: Handle timing and async operations correctly
-- **Maintainable**: Use page objects and test helpers
-
-## Running Tests
-
-### Local Development
-
-```bash
-# In cpex-plugins
-cd plugins/python/<slug>   # Or plugins/rust/python-package/<slug>
-make test-all              # Run language-appropriate unit tests
-make test-integration      # Run plugin-framework integration tests
-
-# In mcp-context-forge
-cd mcp-context-forge
-pytest tests/integration/  # Run gateway integration tests
-pytest tests/e2e/          # Run E2E tests
-```
-
-### CI Pipeline
-
-```bash
-# cpex-plugins CI
-make plugins-validate           # Validate repo structure
-make plugin-test PLUGIN=<slug>  # Run unit tests for specific plugin
-# make test-integration is run as part of the coverage job
-
-# mcp-context-forge CI
-make test                  # Run unit tests
-pytest tests/integration/  # Run gateway integration tests
-pytest tests/e2e/          # Run E2E tests
-```
-
-## Debugging Test Failures
-
-### Unit Test Failures (cpex-plugins)
-
-1. Run tests locally: `make test-all`
-2. Check Rust test output: `cargo test -- --nocapture`
-3. Check Python test output: `pytest -v`
-4. Use debugger: `rust-gdb` or `pdb`
-
-### Plugin-Framework Integration Test Failures (cpex-plugins)
-
-1. Run tests locally: `make test-integration`
-2. Check PyO3 binding output: `pytest -v tests/`
-3. Verify Rust extension is built: `make install`
-4. Check framework loading: `pytest -vv tests/`
-
-### Gateway Integration Test Failures (mcp-context-forge)
-
-1. Check plugin installation: `pip list | grep cpex`
-2. Verify plugin configuration: `cat plugins/config.yaml`
-3. Check gateway logs: `tail -f logs/gateway.log`
-4. Run with verbose output: `pytest -vv tests/integration/`
-
-### E2E Test Failures (mcp-context-forge)
-
-1. Check full system logs
-2. Verify all services are running
-3. Check network connectivity
-4. Run with debug logging: `LOG_LEVEL=DEBUG pytest tests/e2e/`
-
-## Test Documentation
-
-For detailed testing conventions in mcp-context-forge, see:
-- `mcp-context-forge/tests/AGENTS.md` - Testing conventions and workflows
-- `mcp-context-forge/plugins/AGENTS.md` - Plugin framework testing
-
-## Future: Pure Rust Testing
-
-After the plugin framework is migrated to Rust:
-
-### Unit Tests (cpex-plugins)
-
-```bash
-cd plugins/rust/<slug>
-cargo test                 # Run Rust tests
-cargo test -- --nocapture  # With output
-```
-
-### Integration Tests (mcp-context-forge)
-
-```bash
-cd mcp-context-forge
-cargo test --test integration  # Run integration tests
-```
-
-### E2E Tests (mcp-context-forge)
-
-```bash
-cd mcp-context-forge
-cargo test --test e2e      # Run E2E tests
-```
-
-Python test infrastructure will be removed after framework migration.
+Plugin CI retains formatting, linting, type checks, Rust tests, hook suites,
+security checks, coverage, and artifact builds. Version bumps on PRs invoke the
+matching release workflow with publishing disabled. On `main`, release tags
+are created after required checks pass. Release workflows validate catalog
+metadata and exercise built distributions before publishing.

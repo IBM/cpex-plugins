@@ -65,7 +65,9 @@ make plugin-test PLUGIN=pii_filter
 
 `make plugins-validate` runs the same convention checks that the repo contract CI workflow runs.
 It runs the catalog validator plus the shared repo contract test modules:
-`tests/test_plugin_catalog.py` and `tests/test_install_built_wheel.py`.
+`tests/test_plugin_catalog.py`, `tests/test_install_built_wheel.py`, and
+`tests/test_repository_policy.py`. See [TESTING.md](TESTING.md) for test ownership
+and criteria for keeping a test.
 
 ## Secret Detection
 
@@ -102,7 +104,7 @@ This interactive tool will:
 - Prompt for plugin name, description, author, and version
 - Let you select from 12 available hooks across 5 categories
 - Generate complete plugin structure with all required files
-- Create comprehensive unit tests (Python and Rust)
+- Add behavior tests for plugin decisions and Python/Rust boundary behavior
 - Set up build configuration and documentation
 
 For non-interactive mode:

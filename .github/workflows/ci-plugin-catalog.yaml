@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - "tests/test_plugin_catalog.py"
+      - "tests/test_repository_policy.py"
+      - "deny.toml"
+      - ".github/workflows/**"
+      - "Cargo.toml"
       - "tools/plugin_catalog.py"
       - "tools/validate_ci_selection.py"
       - "pyproject.toml"
@@ -13,16 +17,15 @@ on:
       - "plugins/rust/python-package/*/uv.lock"
       - "plugins/python/**"
       - "plugins/rust/python-package/*/Cargo.toml"
-      - "plugins/rust/python-package/*/plugin-manifest.yaml"
-      - ".github/workflows/ci-plugin-catalog.yaml"
-      - ".github/workflows/ci-rust-python-package.yaml"
-      - ".github/workflows/release-rust-python-package.yaml"
-      - ".github/workflows/ci-python-package.yaml"
-      - ".github/workflows/release-python-package.yaml"
+      - "plugins/rust/python-package/*/cpex_*/plugin-manifest.yaml"
   pull_request:
     branches: [main]
     paths:
       - "tests/test_plugin_catalog.py"
+      - "tests/test_repository_policy.py"
+      - "deny.toml"
+      - ".github/workflows/**"
+      - "Cargo.toml"
       - "tools/plugin_catalog.py"
       - "tools/validate_ci_selection.py"
       - "pyproject.toml"
@@ -31,12 +34,7 @@ on:
       - "plugins/rust/python-package/*/uv.lock"
       - "plugins/python/**"
       - "plugins/rust/python-package/*/Cargo.toml"
-      - "plugins/rust/python-package/*/plugin-manifest.yaml"
-      - ".github/workflows/ci-plugin-catalog.yaml"
-      - ".github/workflows/ci-rust-python-package.yaml"
-      - ".github/workflows/release-rust-python-package.yaml"
-      - ".github/workflows/ci-python-package.yaml"
-      - ".github/workflows/release-python-package.yaml"
+      - "plugins/rust/python-package/*/cpex_*/plugin-manifest.yaml"
 
 concurrency:
   group: ci-plugin-catalog-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}
@@ -55,5 +53,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Run plugin catalog tests
-        run: python3 -m unittest tests/test_plugin_catalog.py
+      - name: Validate repository catalog
+        run: python3 tools/plugin_catalog.py validate .
+
+      - name: Run catalog behavior and repository policy tests
+        run: python3 -m unittest tests/test_plugin_catalog.py tests/test_repository_policy.py
