@@ -28,7 +28,7 @@ static BIND_PARAM_DIGIT_RE: Lazy<Regex> =
 /// double-quoted identifier removal.
 static INLINE_LITERAL_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        r"''|0[xX][0-9A-Fa-f]+|-?\b\d+(?:[eE][+-]?\d+|(?:\.\d+)(?:[eE][+-]?\d+)?)\b|-?\b\d+\.\d+\b|-?\b\d+\b",
+        r"''|\b0[xX][0-9A-Fa-f]+\b|-?\b\d+(?:[eE][+-]?\d+|(?:\.\d+)(?:[eE][+-]?\d+)?)\b|-?\b\d+\.\d+\b|-?\b\d+\b",
     )
     .expect("Invalid inline literal regex")
 });
@@ -846,6 +846,16 @@ mod tests {
         let mut cfg = default_cfg();
         cfg.require_parameterization = true;
         let issues = find_issues("INSERT INTO readings VALUES (?)", &cfg);
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    #[test]
+    fn hex_prefix_inside_identifier_not_flagged() {
+        // `hash0xFF` is a column name, not a hex literal; the word boundary on
+        // INLINE_LITERAL_RE must prevent a mid-identifier match.
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("SELECT hash0xFF FROM checksums WHERE id = $1", &cfg);
         assert_eq!(issues, Vec::<String>::new());
     }
 }
