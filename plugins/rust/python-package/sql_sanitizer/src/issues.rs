@@ -42,9 +42,10 @@ static DQ_IDENT_RE: Lazy<Regex> =
 /// (paired keyword) to avoid false positives on prose fields when `fields = null`.
 /// A single keyword is not enough — "Please select option 2" contains SELECT but
 /// is not a SQL statement.
+/// `(?s)` (dot-all) lets `.` cross newlines so multi-line SQL is gated correctly.
 static SQL_CONTEXT_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        r"(?ix)
+        r"(?ixs)
         (?:
             \bSELECT\b .{0,500}? \b(?:FROM|WHERE|HAVING|GROUP\s+BY|ORDER\s+BY|UNION|LIMIT|JOIN)\b
           | \bINSERT\b \s+ INTO\b
@@ -896,6 +897,49 @@ mod tests {
             r#"UPDATE employees AS "e" SET salary = 0 WHERE id = 1"#,
             &cfg,
         );
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    // -----------------------------------------------------------------------
+    // Multiline SQL regressions (dot-all in SQL_CONTEXT_RE)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn multiline_select_with_inline_literal_is_flagged() {
+        // `.` in SQL_CONTEXT_RE must cross newlines; without (?s) this passes silently.
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("SELECT id\nFROM users\nWHERE id = 42", &cfg);
+        assert_eq!(
+            issues,
+            vec!["Inline literal values detected; use bind parameters instead"]
+        );
+    }
+
+    #[test]
+    fn multiline_select_with_bind_param_is_not_flagged() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("SELECT id\nFROM users\nWHERE id = $1", &cfg);
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    #[test]
+    fn multiline_update_with_inline_literal_is_flagged() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("UPDATE users\nSET salary = 0\nWHERE id = 42", &cfg);
+        assert_eq!(
+            issues,
+            vec!["Inline literal values detected; use bind parameters instead"]
+        );
+    }
+
+    #[test]
+    fn multiline_update_with_bind_param_is_not_flagged() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("UPDATE users\nSET salary = $1\nWHERE id = $2", &cfg);
         assert_eq!(issues, Vec::<String>::new());
     }
 }
