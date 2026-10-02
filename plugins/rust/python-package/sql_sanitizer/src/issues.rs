@@ -739,17 +739,15 @@ mod tests {
         assert_eq!(issues, Vec::<String>::new());
     }
 
-    /// `SELECT 1` is flagged because it contains a SQL keyword and a literal.
-    /// Use `fields` filtering or disable `require_parameterization` for health checks.
+    /// `SELECT 1` has no paired clause keyword (FROM/WHERE/…) so `SQL_CONTEXT_RE`
+    /// does not gate it — it is not treated as SQL and passes clean.
+    /// Use `fields` to target only SQL-bearing fields for health-check queries.
     #[test]
-    fn select_one_health_check_is_flagged_as_inline_literal() {
+    fn select_one_health_check_is_not_flagged() {
         let mut cfg = default_cfg();
         cfg.require_parameterization = true;
         let issues = find_issues("SELECT 1", &cfg);
-        assert_eq!(
-            issues,
-            vec!["Inline literal values detected; use bind parameters instead"]
-        );
+        assert_eq!(issues, Vec::<String>::new());
     }
 
     // -----------------------------------------------------------------------
@@ -886,10 +884,8 @@ mod tests {
     #[test]
     fn update_with_quoted_alias_no_where_is_blocked() {
         // UPDATE … AS "e" SET — quoted alias form must be recognised; no WHERE → block.
-        let mut cfg = default_cfg();
-        cfg.block_update_without_where = true;
-        let issues = find_issues(r#"UPDATE employees AS "e" SET salary = 0"#, &cfg);
-        assert_eq!(issues, vec!["UPDATE statement is missing a WHERE clause"]);
+        let issues = find_issues(r#"UPDATE employees AS "e" SET salary = 0"#, &default_cfg());
+        assert_eq!(issues, vec!["UPDATE without WHERE clause"]);
     }
 
     #[test]
