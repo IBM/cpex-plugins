@@ -16,44 +16,37 @@ This is a monorepo of standalone plugin packages for the ContextForge Plugin Ext
 
 ## Testing Strategy
 
-### Test Location by Type
+Keep a test when it protects an observable plugin decision, a language/framework
+boundary, a release contract, a security policy, or a concrete regression.
+Before adding one, identify the failure it should catch and check whether an
+existing test already catches it. Test behavior at the lowest layer that owns it.
 
-- **Unit tests**: Located within each plugin's own directory
-  - Python: `plugins/rust/python-package/<slug>/tests/` (current hybrid) or `plugins/python/<slug>/tests/` (pure Python)
-  - Rust: inline `mod tests` within source files (e.g., `src/lib.rs`)
-  - Test individual plugin functionality in isolation
-  - Fast, deterministic tests
-  - Run during plugin development and CI
-  - Scope: Plugin logic, Rust functions, Python bindings
+- Rust algorithms and policy decisions: inline Rust tests in the plugin crate.
+- Pure-Python logic: `plugins/python/<slug>/tests/`.
+- Python/Rust binding and hook behavior: `plugins/tests/<slug>/`. Existing
+  plugins use this shared harness; it supplies controlled hook models and is
+  not a full gateway. The scaffolder emits plugin-local Python hook smoke tests.
+- Catalog and wheel tooling behavior: `tests/`, using temporary fixture repos.
+- Repository security policies: `tests/test_repository_policy.py`.
+- Built-package installation: release workflows, outside the source tree.
+- Full gateway and cross-plugin workflows: `mcp-context-forge/tests/integration/`
+  and `mcp-context-forge/tests/e2e/`.
 
-- **Plugin-framework integration tests**: Located in `plugins/rust/python-package/<slug>/tests/` for Rust plugins and `plugins/tests/<slug>/` for pure-Python plugins
-  - Test plugin integration with the local plugin framework, including the PyO3 interface for Rust plugins
-  - Run via `make test-integration` within the plugin directory
-  - Scope: Plugin entry points (including PyO3 for Rust), loading by the Python framework, hook dispatch
+Do not add tests for exact workflow/Makefile text, documentation wording,
+private module layout, generated stub formatting, standard-library behavior,
+or generic Pydantic serialization. Build, lint, type-check, and artifact jobs
+own those checks. Never commit tests whose only outcome is `pass`, `hasattr`,
+or a constructor returning a non-null object.
 
-- **Gateway integration tests**: Located in `mcp-context-forge/tests/integration/`
-  - Test plugin integration with the full gateway
-  - Test cross-plugin interactions
-  - Test plugin lifecycle management
-  - Scope: Plugin loading in gateway context, hook execution, framework interaction
+Use table-driven cases for distinct input classes and failure policies. Avoid
+replaying a Rust algorithm's whole input matrix through Python; Python tests
+should catch conversion, payload isolation, hook results, and error mapping.
+Retain Redis failure/TLS tests and detection/redaction/privacy regressions:
+these exercise real operational and security behavior.
 
-- **E2E tests**: Located in `mcp-context-forge/tests/e2e/`
-  - Test complete workflows with plugins enabled
-  - Test plugin behavior in realistic scenarios
-  - Test multi-gateway plugin coordination
-  - Scope: Full request/response cycles, real-world usage patterns
-
-### Cross-Repository Testing Coordination
-
-When developing a plugin:
-
-1. Write unit tests in the plugin's own directory (Rust: inline `mod tests` plus binding tests; pure Python: `plugins/python/<slug>/tests/`) and plugin-framework integration tests in the Rust plugin's `tests/` directory or `plugins/tests/<slug>/` for pure Python
-2. Run local tests: `make test-all` and `make test-integration` from plugin directory
-3. After plugin PR is merged, coordinate with `mcp-context-forge` team
-4. Write gateway integration/E2E tests in `mcp-context-forge/tests/`
-5. Ensure both repositories' CI passes before release
-
-See `mcp-context-forge/tests/AGENTS.md` for integration/E2E test conventions.
+Run `make plugins-validate` for repository tooling. For plugin changes, run
+`make test-all`, `make test-integration`, and the plugin's `make ci` target as
+appropriate. See [TESTING.md](TESTING.md) for commands and the keep/remove decisions.
 
 ## Plugin Development Workflows
 
@@ -85,9 +78,9 @@ The plugin framework is currently implemented in Python (`mcpgateway/plugins/fra
    ```bash
    cd plugins/rust/python-package/<slug>
    # Add Rust unit tests inline in src/ using mod tests
-   # Add Python unit tests in tests/
-   # Add plugin-framework integration tests in tests/ (run via make test-integration)
-   make test-all          # Run Rust + Python unit tests
+   # Add Python boundary tests in plugins/tests/<slug>/
+   # Extend existing tests for changed behavior
+   make test-all          # Run Rust tests and Python hook tests
    make test-integration  # Run plugin-framework integration tests
    ```
 

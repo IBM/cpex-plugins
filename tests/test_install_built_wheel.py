@@ -1,3 +1,6 @@
+# Copyright 2026
+# SPDX-License-Identifier: Apache-2.0
+
 import importlib.util
 import os
 import subprocess
@@ -27,11 +30,6 @@ def run_install_built_wheel(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 class InstallBuiltWheelTests(unittest.TestCase):
-    def test_help_describes_compatibility_aware_selection(self) -> None:
-        result = run_install_built_wheel("--help")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("best matching compatible wheel", result.stdout)
-
     def test_prints_only_matching_wheel_when_multiple_exist(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             wheel_dir = Path(tmpdir)

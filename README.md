@@ -46,14 +46,13 @@ Rust crates are owned by the top-level workspace in `Cargo.toml`; all Python dis
 
 Testing spans two repositories:
 
-- **Unit tests**: within each plugin's own directory — pure Python in `plugins/python/<slug>/tests/`, Rust inline via `mod tests`, and Python binding tests for Rust packages under their plugin directory
-- **Plugin-framework integration tests**: `plugins/tests/<slug>/` for pure-Python plugins and the Rust plugin's own `tests/` directory — test framework discovery, loading, and hook dispatch (`make test-integration`)
+- **Core behavior tests**: pure Python in `plugins/python/<slug>/tests/`; Rust inline via `mod tests`
+- **Binding and hook tests**: `plugins/tests/<slug>/` for existing plugins; generated plugins start with local Python hook smoke tests
+- **Repository tooling tests**: `tests/` — catalog behavior, wheel installation, and security policies
 - **Gateway integration tests**: `mcp-context-forge/tests/integration/` — test plugin integration with the full gateway
 - **E2E tests**: `mcp-context-forge/tests/e2e/` — test complete workflows with plugins
 
-Unit tests live in each plugin's own directory. Plugin-framework integration tests live under `plugins/tests/<slug>/` for pure-Python plugins and in the plugin-local `tests/` directory for Rust plugins. Gateway integration and E2E tests live in `mcp-context-forge`.
-
-See [TESTING.md](TESTING.md) for detailed testing guidelines and cross-repository coordination.
+Test meaningful decisions and boundary behavior at the layer that owns them. See [TESTING.md](TESTING.md) for the keep/remove criteria and commands.
 
 ## Plugin Development
 
@@ -99,7 +98,7 @@ This interactive tool will:
   - Python package files (`__init__.py`, `plugin.py`)
   - Build configuration (`Cargo.toml`, `pyproject.toml`, `Makefile`)
   - Documentation (`README.md`)
-  - Comprehensive unit tests (Python and Rust)
+  - Rust configuration tests and Python hook smoke tests
   - Benchmark scaffolding
 
 For non-interactive mode:

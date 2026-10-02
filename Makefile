@@ -11,7 +11,7 @@ plugins-list:
 
 plugins-validate:
 	@python3 tools/plugin_catalog.py validate .
-	@python3 -m unittest tests/test_plugin_catalog.py tests/test_install_built_wheel.py
+	@python3 -m unittest discover -s tests
 
 detect-secrets-scan:  ## Regenerate secrets baseline
 	@uv tool run $(DETECT_SECRETS_SPEC) scan \
