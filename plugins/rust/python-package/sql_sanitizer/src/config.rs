@@ -39,7 +39,9 @@ pub struct SqlSanitizerConfig {
     pub block_update_without_where: bool,
     /// Strip `--` and `/* */` comments before analysis.
     pub strip_comments: bool,
-    /// Heuristic check for non-parameterized interpolation (`+`, `{…}`, `%.`).
+    /// Require parameterized queries.  Flags interpolation markers (`+`, `%s`, `{…}`)
+    /// and inline literals (`42`, `'Alice'`).  Non-SQL fields are skipped via a keyword
+    /// gate.  Most precise when `fields` names only the SQL-bearing fields.
     pub require_parameterization: bool,
     /// Return `continue_processing=False` when a violation is found.
     pub block_on_violation: bool,
