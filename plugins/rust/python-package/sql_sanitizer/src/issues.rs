@@ -38,12 +38,23 @@ static INLINE_LITERAL_RE: Lazy<Regex> = Lazy::new(|| {
 static DQ_IDENT_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#""[^"]*""#).expect("Invalid double-quote ident regex"));
 
-/// Guards `has_inline_literals`: skips non-SQL fields (HTTP codes, IDs, log lines)
-/// to avoid false positives when `fields = null`.
-/// `WITH` is intentionally omitted — it is too common in English prose.
-static SQL_KEYWORD_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)\b(?:SELECT|INSERT|UPDATE|DELETE|MERGE|REPLACE)\b")
-        .expect("Invalid SQL keyword regex")
+/// Guards `has_inline_literals`: requires a recognisable SQL statement structure
+/// (paired keyword) to avoid false positives on prose fields when `fields = null`.
+/// A single keyword is not enough — "Please select option 2" contains SELECT but
+/// is not a SQL statement.
+static SQL_CONTEXT_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?ix)
+        (?:
+            \bSELECT\b .{0,500}? \b(?:FROM|WHERE|HAVING|GROUP\s+BY|ORDER\s+BY|UNION|LIMIT|JOIN)\b
+          | \bINSERT\b \s+ INTO\b
+          | \bUPDATE\b \s+ \S+ .{0,200}? \bSET\b
+          | \bDELETE\b \s+ FROM\b
+          | \bMERGE\b  \s+ INTO\b
+          | \bREPLACE\b \s+ INTO\b
+        )",
+    )
+    .expect("Invalid SQL context regex")
 });
 
 static DELETE_FROM_RE: Lazy<Regex> = Lazy::new(|| {
@@ -61,7 +72,7 @@ static UPDATE_RE: Lazy<Regex> = Lazy::new(|| {
     // Table-name component: bare word or any quoted form (ANSI, backtick, bracket).
     // Components are dot-separated, so "hr"."employees" and schema.table are covered.
     // Optional ONLY (PostgreSQL) before the table name.
-    // Optional alias after: AS alias  or  implicit alias (bare word).
+    // Alias: AS <alias> or implicit alias — each in any quoted form (bare, ANSI, backtick, bracket).
     Regex::new(
         r#"(?ix)
         \bUPDATE\b \s+
@@ -70,7 +81,10 @@ static UPDATE_RE: Lazy<Regex> = Lazy::new(|| {
             (?:\w+ | "[^"]*" | `[^`]*` | \[[^\]]*\])
             (?:\.(?:\w+ | "[^"]*" | `[^`]*` | \[[^\]]*\]))*
         )
-        (?:\s+AS\s+\w+ | \s+\w+)?
+        (?:
+            \s+AS\s+(?:\w+ | "[^"]*" | `[^`]*` | \[[^\]]*\])
+          | \s+(?:\w+ | "[^"]*" | `[^`]*` | \[[^\]]*\])
+        )?
         \s+SET\b"#,
     )
     .expect("Invalid UPDATE regex")
@@ -255,7 +269,7 @@ fn has_brace_template(sql: &str) -> bool {
 /// Return `true` when `sql` contains a masked string literal or numeric literal.
 /// Skips non-SQL strings; strips bind params and double-quoted identifiers before matching.
 fn has_inline_literals(sql: &str) -> bool {
-    if !SQL_KEYWORD_RE.is_match(sql) {
+    if !SQL_CONTEXT_RE.is_match(sql) {
         return false;
     }
     let erased = BIND_PARAM_DIGIT_RE.replace_all(sql, "");
@@ -856,6 +870,36 @@ mod tests {
         let mut cfg = default_cfg();
         cfg.require_parameterization = true;
         let issues = find_issues("SELECT hash0xFF FROM checksums WHERE id = $1", &cfg);
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    #[test]
+    fn prose_select_with_digit_does_not_flag_parameterization() {
+        // "Please select option 2" contains SELECT but is not a SQL statement;
+        // SQL_CONTEXT_RE requires a paired structural keyword (FROM/WHERE/…).
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("Please select option 2", &cfg);
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    #[test]
+    fn update_with_quoted_alias_no_where_is_blocked() {
+        // UPDATE … AS "e" SET — quoted alias form must be recognised; no WHERE → block.
+        let mut cfg = default_cfg();
+        cfg.block_update_without_where = true;
+        let issues = find_issues(r#"UPDATE employees AS "e" SET salary = 0"#, &cfg);
+        assert_eq!(issues, vec!["UPDATE statement is missing a WHERE clause"]);
+    }
+
+    #[test]
+    fn update_with_quoted_alias_and_where_is_allowed() {
+        let mut cfg = default_cfg();
+        cfg.block_update_without_where = true;
+        let issues = find_issues(
+            r#"UPDATE employees AS "e" SET salary = 0 WHERE id = 1"#,
+            &cfg,
+        );
         assert_eq!(issues, Vec::<String>::new());
     }
 }
