@@ -750,8 +750,10 @@ mod tests {
 
     #[test]
     fn update_with_alias_with_where_is_not_blocked() {
-        let issues =
-            find_issues("UPDATE employees AS e SET salary = 0 WHERE id = 1", &default_cfg());
+        let issues = find_issues(
+            "UPDATE employees AS e SET salary = 0 WHERE id = 1",
+            &default_cfg(),
+        );
         assert_eq!(issues, Vec::<String>::new());
     }
 
@@ -769,8 +771,10 @@ mod tests {
 
     #[test]
     fn update_quoted_schema_table_with_where_is_not_blocked() {
-        let issues =
-            find_issues(r#"UPDATE "hr"."employees" SET salary = 0 WHERE id = 1"#, &default_cfg());
+        let issues = find_issues(
+            r#"UPDATE "hr"."employees" SET salary = 0 WHERE id = 1"#,
+            &default_cfg(),
+        );
         assert_eq!(issues, Vec::<String>::new());
     }
 
