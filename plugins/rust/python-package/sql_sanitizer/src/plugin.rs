@@ -923,4 +923,118 @@ def make_cow_payload(sql):
             assert!(!cp, "DROP TABLE inside nested list must be blocked");
         });
     }
+
+    /// SQL UPDATE with WHERE in one field and prose "UPDATE" in another must not be blocked.
+    #[test]
+    fn valid_update_with_where_and_prose_message_is_allowed() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let empty = PyDict::new(py);
+            let core = super::SqlSanitizerPluginCore::new(empty.as_any()).unwrap();
+            let args = PyDict::new(py);
+            args.set_item(
+                "content",
+                "UPDATE employees SET salary = 75000 WHERE employee_id = 101;",
+            )
+            .unwrap();
+            args.set_item("message", "Append UPDATE query to TC1.SQL")
+                .unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let cp: bool = result
+                .bind(py)
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(
+                cp,
+                "valid SQL UPDATE with WHERE + prose message must not be blocked"
+            );
+        });
+    }
+
+    /// WHERE-less UPDATE is blocked even when a prose field also contains "UPDATE".
+    #[test]
+    fn update_without_where_in_content_is_still_blocked() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let empty = PyDict::new(py);
+            let core = super::SqlSanitizerPluginCore::new(empty.as_any()).unwrap();
+            let args = PyDict::new(py);
+            args.set_item("content", "UPDATE employees SET salary = 75000")
+                .unwrap();
+            args.set_item("message", "Append UPDATE query to TC1.SQL")
+                .unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let cp: bool = result
+                .bind(py)
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(!cp, "WHERE-less UPDATE in content must be blocked");
+        });
+    }
+
+    /// INSERT with inline literals is blocked when `require_parameterization` is enabled.
+    #[test]
+    fn insert_with_inline_literals_is_blocked() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let cfg_dict = PyDict::new(py);
+            cfg_dict.set_item("require_parameterization", true).unwrap();
+            let core = super::SqlSanitizerPluginCore::new(cfg_dict.as_any()).unwrap();
+            let args = PyDict::new(py);
+            args.set_item("sql", "INSERT INTO employees VALUES (42, 'Alice', 75000)")
+                .unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let cp: bool = result
+                .bind(py)
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(
+                !cp,
+                "INSERT with inline literals must be blocked when require_parameterization=true"
+            );
+        });
+    }
+
+    /// INSERT with bind parameters passes when `require_parameterization` is enabled.
+    #[test]
+    fn insert_with_bind_params_is_allowed() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            install_fake_framework(py).unwrap();
+            let cfg_dict = PyDict::new(py);
+            cfg_dict.set_item("require_parameterization", true).unwrap();
+            let core = super::SqlSanitizerPluginCore::new(cfg_dict.as_any()).unwrap();
+            let args = PyDict::new(py);
+            args.set_item("sql", "INSERT INTO employees VALUES (?, ?, ?)")
+                .unwrap();
+            let payload = make_payload(py, &args).unwrap();
+            let none_val = py.None().into_bound(py);
+            let result = core.tool_pre_invoke(py, &payload, &none_val, None).unwrap();
+            let cp: bool = result
+                .bind(py)
+                .getattr("continue_processing")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert!(
+                cp,
+                "INSERT with bind parameters must be allowed when require_parameterization=true"
+            );
+        });
+    }
 }

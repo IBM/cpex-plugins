@@ -17,6 +17,47 @@ use crate::config::SqlSanitizerConfig;
 static PRINTF_FMT_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"%[sdfi]").expect("Invalid printf format regex"));
 
+/// Erases `$N`, `:N`, `@N`, `?N` bind-parameter prefixes before literal detection.
+/// `?N` covers SQLite numbered parameters (`?1`, `?2`).
+static BIND_PARAM_DIGIT_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"[$:@?]\d+").expect("Invalid bind param digit regex"));
+
+/// Matches a masked string literal (`''`) or a numeric literal in any of the
+/// forms SQL dialects allow: integer, decimal, exponent (`1e3`), hex (`0xFF`).
+/// Applied after `mask_string_literals`, `BIND_PARAM_DIGIT_RE` erasure, and
+/// double-quoted identifier removal.
+static INLINE_LITERAL_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"''|\b0[xX][0-9A-Fa-f]+\b|-?\b\d+(?:[eE][+-]?\d+|(?:\.\d+)(?:[eE][+-]?\d+)?)\b|-?\b\d+\.\d+\b|-?\b\d+\b",
+    )
+    .expect("Invalid inline literal regex")
+});
+
+/// Strips ANSI double-quoted identifiers (e.g. `"2024"`) so their content is not
+/// mistaken for a literal value during inline-literal detection.
+static DQ_IDENT_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#""[^"]*""#).expect("Invalid double-quote ident regex"));
+
+/// Guards `has_inline_literals`: requires a recognisable SQL statement structure
+/// (paired keyword) to avoid false positives on prose fields when `fields = null`.
+/// A single keyword is not enough — "Please select option 2" contains SELECT but
+/// is not a SQL statement.
+/// `(?s)` (dot-all) lets `.` cross newlines so multi-line SQL is gated correctly.
+static SQL_CONTEXT_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?ixs)
+        (?:
+            \bSELECT\b .{0,500}? \b(?:FROM|WHERE|HAVING|GROUP\s+BY|ORDER\s+BY|UNION|LIMIT|JOIN)\b
+          | \bINSERT\b \s+ INTO\b
+          | \bUPDATE\b \s+ \S+ .{0,200}? \bSET\b
+          | \bDELETE\b \s+ FROM\b
+          | \bMERGE\b  \s+ INTO\b
+          | \bREPLACE\b \s+ INTO\b
+        )",
+    )
+    .expect("Invalid SQL context regex")
+});
+
 static DELETE_FROM_RE: Lazy<Regex> = Lazy::new(|| {
     // A statement whose leading keyword is DELETE is destructive regardless of
     // the table syntax that follows.  Anchoring at the statement start covers:
@@ -28,11 +69,26 @@ static DELETE_FROM_RE: Lazy<Regex> = Lazy::new(|| {
 });
 
 static UPDATE_RE: Lazy<Regex> = Lazy::new(|| {
-    // Match UPDATE followed by a plain, double-quoted (ANSI), backtick-quoted (MySQL),
-    // or bracket-quoted (SQL Server) table name so that `UPDATE "users" SET …` is
-    // not allowed to bypass the WHERE-clause guard.
-    Regex::new(r#"(?i)\bUPDATE\b\s+(?:\w+|"[^"]*"|`[^`]*`|\[[^\]]*\])"#)
-        .expect("Invalid UPDATE regex")
+    // SET is required so prose like "Append UPDATE query to file" is not matched.
+    // Table-name component: bare word or any quoted form (ANSI, backtick, bracket).
+    // Components are dot-separated, so "hr"."employees" and schema.table are covered.
+    // Optional ONLY (PostgreSQL) before the table name.
+    // Alias: AS <alias> or implicit alias — each in any quoted form (bare, ANSI, backtick, bracket).
+    Regex::new(
+        r#"(?ix)
+        \bUPDATE\b \s+
+        (?:ONLY\s+)?
+        (?:
+            (?:\w+ | "[^"]*" | `[^`]*` | \[[^\]]*\])
+            (?:\.(?:\w+ | "[^"]*" | `[^`]*` | \[[^\]]*\]))*
+        )
+        (?:
+            \s+AS\s+(?:\w+ | "[^"]*" | `[^`]*` | \[[^\]]*\])
+          | \s+(?:\w+ | "[^"]*" | `[^`]*` | \[[^\]]*\])
+        )?
+        \s+SET\b"#,
+    )
+    .expect("Invalid UPDATE regex")
 });
 
 static WHERE_RE: Lazy<Regex> =
@@ -171,10 +227,15 @@ pub fn find_issues(sql: &str, cfg: &SqlSanitizerConfig) -> Vec<String> {
         issues.extend(find_issues_in_statement(&stmt, cfg));
     }
 
-    // Parameterization check on processed (comment-stripped), literal-masked SQL
-    // to avoid false positives from format markers inside quoted string values.
-    if cfg.require_parameterization && has_interpolation(&mask_string_literals(&processed)) {
-        issues.push("Possible non-parameterized interpolation detected".to_string());
+    // Parameterization check on comment-stripped, literal-masked SQL.
+    // Masking first prevents quoted content from spoofing or bypassing detection.
+    let masked_processed = mask_string_literals(&processed);
+    if cfg.require_parameterization {
+        if has_interpolation(&masked_processed) {
+            issues.push("Possible non-parameterized interpolation detected".to_string());
+        } else if has_inline_literals(&masked_processed) {
+            issues.push("Inline literal values detected; use bind parameters instead".to_string());
+        }
     }
 
     issues
@@ -204,6 +265,17 @@ fn has_brace_template(sql: &str) -> bool {
         return true;
     }
     false
+}
+
+/// Return `true` when `sql` contains a masked string literal or numeric literal.
+/// Skips non-SQL strings; strips bind params and double-quoted identifiers before matching.
+fn has_inline_literals(sql: &str) -> bool {
+    if !SQL_CONTEXT_RE.is_match(sql) {
+        return false;
+    }
+    let erased = BIND_PARAM_DIGIT_RE.replace_all(sql, "");
+    let erased = DQ_IDENT_RE.replace_all(&erased, "");
+    INLINE_LITERAL_RE.is_match(&erased)
 }
 
 #[cfg(test)]
@@ -360,15 +432,26 @@ mod tests {
     // Parameterization — extra coverage to catch missed mutants
     // -----------------------------------------------------------------------
 
-    /// `require_parameterization=true` + SQL with NO interpolation markers →
+    /// `require_parameterization=true` + SQL that uses bind parameters →
     /// empty issues.  Catches the mutant that replaces `has_interpolation`
     /// entirely with `true`.
     #[test]
-    fn no_issue_for_safe_sql_when_parameterization_required() {
+    fn no_issue_for_parameterized_sql_when_parameterization_required() {
         let mut cfg = default_cfg();
         cfg.require_parameterization = true;
-        // No `+`, `%.`, or `{…}` — must produce zero issues
-        let issues = find_issues("SELECT id FROM users WHERE name = 'alice'", &cfg);
+        // `?` is a positional bind parameter — no literals, no interpolation
+        let issues = find_issues("SELECT id FROM users WHERE name = ?", &cfg);
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    /// `require_parameterization=true` + SQL with a named bind parameter (`$1`)
+    /// → empty issues.  Verifies that positional parameters in PostgreSQL style
+    /// are not mistaken for literals.
+    #[test]
+    fn no_issue_for_dollar_bind_param_when_parameterization_required() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("SELECT id FROM users WHERE name = $1", &cfg);
         assert_eq!(issues, Vec::<String>::new());
     }
 
@@ -497,13 +580,366 @@ mod tests {
         assert_eq!(issues, Vec::<String>::new());
     }
 
-    /// A printf-style `%s` inside a quoted LIKE pattern must not trigger the
-    /// parameterization check.
+    /// `%s` inside a quoted literal is masked before interpolation detection runs.
     #[test]
-    fn interpolation_marker_in_string_literal_is_not_flagged() {
+    fn percent_s_inside_string_literal_is_not_flagged_as_interpolation() {
+        let issues = find_issues("SELECT * FROM t WHERE name LIKE '%s%'", &default_cfg());
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    #[test]
+    fn parameterized_like_with_bind_param_is_not_flagged() {
         let mut cfg = default_cfg();
         cfg.require_parameterization = true;
-        let issues = find_issues("SELECT * FROM t WHERE name LIKE '%s%'", &cfg);
+        let issues = find_issues("SELECT * FROM t WHERE name LIKE ?", &cfg);
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    /// Valid UPDATE with WHERE must not be blocked.
+    #[test]
+    fn valid_update_with_where_is_not_blocked() {
+        let issues = find_issues(
+            "UPDATE employees SET salary = 75000 WHERE employee_id = 101",
+            &default_cfg(),
+        );
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    /// Prose containing "UPDATE <word>" without SET must not trigger the WHERE-less UPDATE policy.
+    #[test]
+    fn prose_update_word_is_not_flagged() {
+        let issues = find_issues("Append UPDATE query to TC1.SQL", &default_cfg());
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    /// WHERE-less UPDATE must still be blocked even when a prose field also contains "UPDATE".
+    #[test]
+    fn real_update_without_where_is_still_blocked() {
+        let issues = find_issues("UPDATE employees SET salary = 75000", &default_cfg());
+        assert_eq!(issues, vec!["UPDATE without WHERE clause"]);
+    }
+
+    /// SQL UPDATE with WHERE followed by prose containing "UPDATE" — only the WHERE-less prose is checked, not flagged.
+    #[test]
+    fn mixed_sql_and_prose_update_no_false_positive() {
+        let issues = find_issues(
+            "UPDATE employees SET salary = 75000 WHERE employee_id = 101; \
+             Append UPDATE query to TC1.SQL",
+            &default_cfg(),
+        );
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    /// INSERT with inline literals is flagged when `require_parameterization` is enabled.
+    #[test]
+    fn insert_with_inline_literals_is_flagged() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("INSERT INTO employees VALUES (42, 'Alice', 75000)", &cfg);
+        assert_eq!(
+            issues,
+            vec!["Inline literal values detected; use bind parameters instead"]
+        );
+    }
+
+    /// INSERT with bind parameters passes when `require_parameterization` is enabled.
+    #[test]
+    fn insert_with_bind_params_is_allowed() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("INSERT INTO employees VALUES (?, ?, ?)", &cfg);
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    /// UPDATE with inline numeric literals is flagged when `require_parameterization` is enabled.
+    #[test]
+    fn update_with_inline_literal_where_is_flagged() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues(
+            "UPDATE employees SET salary = 75000 WHERE employee_id = 101",
+            &cfg,
+        );
+        assert_eq!(
+            issues,
+            vec!["Inline literal values detected; use bind parameters instead"]
+        );
+    }
+
+    /// UPDATE with bind parameters passes when `require_parameterization` is enabled.
+    #[test]
+    fn update_with_bind_params_is_allowed() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues(
+            "UPDATE employees SET salary = ? WHERE employee_id = ?",
+            &cfg,
+        );
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    // -----------------------------------------------------------------------
+    // Schema-qualified UPDATE regressions
+    // -----------------------------------------------------------------------
+
+    /// Regression: `\w+` stopped at the dot in `schema.table`, bypassing the guard.
+    #[test]
+    fn schema_qualified_update_without_where_is_blocked() {
+        let issues = find_issues("UPDATE hr.employees SET salary = 0", &default_cfg());
+        assert_eq!(issues, vec!["UPDATE without WHERE clause"]);
+    }
+
+    #[test]
+    fn schema_qualified_update_with_where_is_not_blocked() {
+        let issues = find_issues(
+            "UPDATE hr.employees SET salary = 0 WHERE id = 1",
+            &default_cfg(),
+        );
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    #[test]
+    fn three_part_name_update_without_where_is_blocked() {
+        let issues = find_issues("UPDATE mydb.hr.employees SET salary = 0", &default_cfg());
+        assert_eq!(issues, vec!["UPDATE without WHERE clause"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Non-SQL field regressions (fields = null + require_parameterization)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn non_sql_field_with_number_is_not_flagged() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("status: 200 OK", &cfg);
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    #[test]
+    fn tool_call_id_field_is_not_flagged() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("call_42", &cfg);
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    #[test]
+    fn version_string_is_not_flagged() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("v1.0.2", &cfg);
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    #[test]
+    fn error_code_message_is_not_flagged() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("error code 404", &cfg);
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    /// `SELECT 1` has no paired clause keyword (FROM/WHERE/…) so `SQL_CONTEXT_RE`
+    /// does not gate it — it is not treated as SQL and passes clean.
+    /// Use `fields` to target only SQL-bearing fields for health-check queries.
+    #[test]
+    fn select_one_health_check_is_not_flagged() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("SELECT 1", &cfg);
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    // -----------------------------------------------------------------------
+    // P1: UPDATE alias / ONLY / quoted schema regressions
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn update_with_alias_without_where_is_blocked() {
+        let issues = find_issues("UPDATE employees AS e SET salary = 0", &default_cfg());
+        assert_eq!(issues, vec!["UPDATE without WHERE clause"]);
+    }
+
+    #[test]
+    fn update_with_alias_with_where_is_not_blocked() {
+        let issues = find_issues(
+            "UPDATE employees AS e SET salary = 0 WHERE id = 1",
+            &default_cfg(),
+        );
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    #[test]
+    fn update_only_without_where_is_blocked() {
+        let issues = find_issues("UPDATE ONLY employees SET salary = 0", &default_cfg());
+        assert_eq!(issues, vec!["UPDATE without WHERE clause"]);
+    }
+
+    #[test]
+    fn update_quoted_schema_table_without_where_is_blocked() {
+        let issues = find_issues(r#"UPDATE "hr"."employees" SET salary = 0"#, &default_cfg());
+        assert_eq!(issues, vec!["UPDATE without WHERE clause"]);
+    }
+
+    #[test]
+    fn update_quoted_schema_table_with_where_is_not_blocked() {
+        let issues = find_issues(
+            r#"UPDATE "hr"."employees" SET salary = 0 WHERE id = 1"#,
+            &default_cfg(),
+        );
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    // -----------------------------------------------------------------------
+    // P2: WITH keyword removed from SQL context gate
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn prose_with_word_and_number_is_not_flagged() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        // "with" in English prose must not activate literal detection.
+        let issues = find_issues("Request failed with status 503", &cfg);
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    // -----------------------------------------------------------------------
+    // P2: SQLite ?N numbered bind parameters
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn sqlite_numbered_bind_param_is_not_flagged() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("SELECT id FROM users WHERE id = ?1", &cfg);
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    // -----------------------------------------------------------------------
+    // P2: double-quoted column identifier not treated as literal
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn double_quoted_column_identifier_is_not_flagged() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues(r#"SELECT "2024" FROM annual_report WHERE id = $1"#, &cfg);
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    // -----------------------------------------------------------------------
+    // P2: exponent and hexadecimal numeric literals
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn insert_with_exponent_literal_is_flagged() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("INSERT INTO readings VALUES (1e3)", &cfg);
+        assert_eq!(
+            issues,
+            vec!["Inline literal values detected; use bind parameters instead"]
+        );
+    }
+
+    #[test]
+    fn insert_with_hex_literal_is_flagged() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("INSERT INTO readings VALUES (0xFF)", &cfg);
+        assert_eq!(
+            issues,
+            vec!["Inline literal values detected; use bind parameters instead"]
+        );
+    }
+
+    #[test]
+    fn insert_with_bind_params_passes_after_hex_exponent_fix() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("INSERT INTO readings VALUES (?)", &cfg);
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    #[test]
+    fn hex_prefix_inside_identifier_not_flagged() {
+        // `hash0xFF` is a column name, not a hex literal; the word boundary on
+        // INLINE_LITERAL_RE must prevent a mid-identifier match.
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("SELECT hash0xFF FROM checksums WHERE id = $1", &cfg);
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    #[test]
+    fn prose_select_with_digit_does_not_flag_parameterization() {
+        // "Please select option 2" contains SELECT but is not a SQL statement;
+        // SQL_CONTEXT_RE requires a paired structural keyword (FROM/WHERE/…).
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("Please select option 2", &cfg);
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    #[test]
+    fn update_with_quoted_alias_no_where_is_blocked() {
+        // UPDATE … AS "e" SET — quoted alias form must be recognised; no WHERE → block.
+        let issues = find_issues(r#"UPDATE employees AS "e" SET salary = 0"#, &default_cfg());
+        assert_eq!(issues, vec!["UPDATE without WHERE clause"]);
+    }
+
+    #[test]
+    fn update_with_quoted_alias_and_where_is_allowed() {
+        let mut cfg = default_cfg();
+        cfg.block_update_without_where = true;
+        let issues = find_issues(
+            r#"UPDATE employees AS "e" SET salary = 0 WHERE id = 1"#,
+            &cfg,
+        );
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    // -----------------------------------------------------------------------
+    // Multiline SQL regressions (dot-all in SQL_CONTEXT_RE)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn multiline_select_with_inline_literal_is_flagged() {
+        // `.` in SQL_CONTEXT_RE must cross newlines; without (?s) this passes silently.
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("SELECT id\nFROM users\nWHERE id = 42", &cfg);
+        assert_eq!(
+            issues,
+            vec!["Inline literal values detected; use bind parameters instead"]
+        );
+    }
+
+    #[test]
+    fn multiline_select_with_bind_param_is_not_flagged() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("SELECT id\nFROM users\nWHERE id = $1", &cfg);
+        assert_eq!(issues, Vec::<String>::new());
+    }
+
+    #[test]
+    fn multiline_update_with_inline_literal_is_flagged() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("UPDATE users\nSET salary = 0\nWHERE id = 42", &cfg);
+        assert_eq!(
+            issues,
+            vec!["Inline literal values detected; use bind parameters instead"]
+        );
+    }
+
+    #[test]
+    fn multiline_update_with_bind_param_is_not_flagged() {
+        let mut cfg = default_cfg();
+        cfg.require_parameterization = true;
+        let issues = find_issues("UPDATE users\nSET salary = $1\nWHERE id = $2", &cfg);
         assert_eq!(issues, Vec::<String>::new());
     }
 }
