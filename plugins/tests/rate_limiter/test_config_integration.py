@@ -28,6 +28,7 @@ class TestRateLimiterPluginConfig:
     def test_module_level_config_defaults_remain_importable(self):
         config = RateLimiterConfig()
         assert config.by_user is None
+        assert config.by_user_per_server is None
         assert config.by_tenant is None
         assert config.by_tool is None
         assert config.algorithm == "fixed_window"
@@ -38,6 +39,7 @@ class TestRateLimiterPluginConfig:
     def test_top_level_package_reexports_public_compatibility_names(self):
         config = PackageRateLimiterConfig()
         assert PackageRateLimiterPlugin is RateLimiterPlugin
+        assert config.by_user_per_server is None
         assert config.algorithm == "fixed_window"
         assert package_parse_rate("60/sec") == (60, 1)
 
@@ -68,6 +70,7 @@ class TestRateLimiterPluginConfig:
     def test_all_fields_construct_successfully(self):
         plugin = RateLimiterPlugin(_config(
             by_user="60/m",
+            by_user_per_server="20/m",
             by_tenant="600/m",
             by_tool={"search": "10/s"},
             algorithm="sliding_window",
@@ -87,6 +90,10 @@ class TestRateLimiterPluginConfig:
     def test_invalid_by_user_rate_rejected(self):
         with pytest.raises(ValueError, match="by_user"):
             RateLimiterPlugin(_config(by_user="not-a-rate"))
+
+    def test_invalid_by_user_per_server_rate_rejected(self):
+        with pytest.raises(ValueError, match="by_user_per_server"):
+            RateLimiterPlugin(_config(by_user_per_server="not-a-rate"))
 
     def test_invalid_by_tenant_rate_rejected(self):
         with pytest.raises(ValueError, match="by_tenant"):

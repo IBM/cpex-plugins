@@ -79,6 +79,35 @@ impl RateLimiterEngine {
         matches!(self.backend, EngineBackend::Redis(_))
     }
 
+    /// Validate and normalize the server identifier only when a per-server
+    /// user limit is configured. Server IDs become part of backend keys, so
+    /// keep them bounded and delimiter-safe.
+    pub(crate) fn validated_server_id<'a>(
+        &self,
+        server_id: Option<&'a str>,
+    ) -> Result<Option<&'a str>, &'static str> {
+        if self.config.by_user_per_server.is_none() {
+            return Ok(None);
+        }
+
+        let server_id = server_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or("server_id is required when by_user_per_server is configured")?;
+        if server_id.len() > 128 {
+            return Err("server_id exceeds the maximum length of 128 bytes");
+        }
+        if !server_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        {
+            return Err(
+                "server_id may contain only ASCII letters, digits, hyphen, underscore, and period",
+            );
+        }
+        Ok(Some(server_id))
+    }
+
     /// Release backend-held resources. For Redis, this drops the cached
     /// multiplexed connection so the server can close the socket; in-flight
     /// requests that already cloned the handle remain valid. Memory backend
@@ -118,6 +147,9 @@ impl RateLimiterEngine {
         let _ = warn_on_unknown_config_keys(config);
 
         let by_user: Option<String> = config.get_item("by_user")?.and_then(|v| v.extract().ok());
+        let by_user_per_server: Option<String> = config
+            .get_item("by_user_per_server")?
+            .and_then(|v| v.extract().ok());
         let by_tenant: Option<String> =
             config.get_item("by_tenant")?.and_then(|v| v.extract().ok());
         let algorithm: String = config
@@ -132,6 +164,7 @@ impl RateLimiterEngine {
 
         let engine_config = EngineConfig::new(
             by_user.as_deref(),
+            by_user_per_server.as_deref(),
             by_tenant.as_deref(),
             by_tool,
             &algorithm,
@@ -211,6 +244,7 @@ impl RateLimiterEngine {
     /// The Python wrapper routes Redis to `check_async()` instead; this sync
     /// path is intended for the memory backend.  The `debug_assert` below
     /// guards against accidental misuse.
+    #[pyo3(signature = (user, tenant, tool, now_unix, include_retry_after, context_prefix, server_id=None))]
     #[allow(clippy::too_many_arguments)]
     pub fn check<'py>(
         &self,
@@ -221,13 +255,17 @@ impl RateLimiterEngine {
         now_unix: i64,
         include_retry_after: bool,
         context_prefix: Option<&str>,
+        server_id: Option<&str>,
     ) -> PyResult<(bool, Bound<'py, PyDict>, Bound<'py, PyDict>)> {
         if matches!(self.backend, EngineBackend::Redis(_)) {
             return Err(pyo3::exceptions::PyRuntimeError::new_err(
                 "check() must not be called with the Redis backend — use check_async() instead",
             ));
         }
-        let checks = self.build_checks(user, tenant, tool, context_prefix);
+        let server_id = self
+            .validated_server_id(server_id)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        let checks = self.build_checks(user, tenant, tool, context_prefix, server_id);
         if checks.is_empty() {
             let headers = PyDict::new(py);
             let meta = PyDict::new(py);
@@ -270,6 +308,7 @@ impl RateLimiterEngine {
     /// Async variant of `check()` for Redis-backed deployments.
     ///
     /// Returns an awaitable that resolves to `(allowed, headers_dict, meta_dict)`.
+    #[pyo3(signature = (user, tenant, tool, now_unix, include_retry_after, context_prefix, server_id=None))]
     #[allow(clippy::too_many_arguments)]
     pub fn check_async<'py>(
         &self,
@@ -280,8 +319,12 @@ impl RateLimiterEngine {
         now_unix: i64,
         include_retry_after: bool,
         context_prefix: Option<&str>,
+        server_id: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let checks = self.build_checks(user, tenant, tool, context_prefix);
+        let server_id = self
+            .validated_server_id(server_id)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        let checks = self.build_checks(user, tenant, tool, context_prefix, server_id);
         if checks.is_empty() {
             return future_into_py(py, async move {
                 Python::attach(|py| -> PyResult<Py<PyAny>> {
@@ -376,14 +419,23 @@ impl RateLimiterEngine {
         tenant: Option<&str>,
         tool: &str,
         context_prefix: Option<&str>,
+        server_id: Option<&str>,
     ) -> Vec<(String, u64, u64)> {
-        let mut checks = Vec::with_capacity(3);
+        let mut checks = Vec::with_capacity(4);
         let pfx = context_prefix.unwrap_or("");
         if let Some(ref rl) = self.config.by_user {
             let key = if pfx.is_empty() {
                 format!("user:{}", user)
             } else {
                 format!("{}:user:{}", pfx, user)
+            };
+            checks.push((key, rl.count, rl.window_nanos));
+        }
+        if let (Some(server_id), Some(rl)) = (server_id, &self.config.by_user_per_server) {
+            let key = if pfx.is_empty() {
+                format!("user:{}:server:{}", user, server_id)
+            } else {
+                format!("{}:user:{}:server:{}", pfx, user, server_id)
             };
             checks.push((key, rl.count, rl.window_nanos));
         }
@@ -417,6 +469,7 @@ impl RateLimiterEngine {
 fn warn_on_unknown_config_keys(config: &Bound<'_, PyDict>) -> Vec<String> {
     const KNOWN: &[&str] = &[
         "by_user",
+        "by_user_per_server",
         "by_tenant",
         "by_tool",
         "algorithm",
@@ -593,6 +646,7 @@ mod tests {
         let mut by_tool = HashMap::new();
         let cfg = EngineConfig {
             by_user: by_user.map(|s| crate::config::parse_rate(s).unwrap()),
+            by_user_per_server: None,
             by_tenant: None,
             by_tool: {
                 by_tool.insert(
@@ -613,6 +667,7 @@ mod tests {
     fn config_parsed_at_init_by_tool_normalised() {
         let cfg = EngineConfig::new(
             Some("10/s"),
+            None,
             None,
             {
                 let mut m = HashMap::new();
@@ -702,7 +757,7 @@ mod tests {
     #[test]
     fn build_checks_without_prefix_produces_unprefixed_keys() {
         let (engine, _handle) = engine_with_fake_clock(Some("10/s"), Algorithm::FixedWindow);
-        let checks = engine.build_checks("alice", Some("acme"), "search", None);
+        let checks = engine.build_checks("alice", Some("acme"), "search", None, None);
         let keys: Vec<&str> = checks.iter().map(|(k, _, _)| k.as_str()).collect();
         assert!(keys.contains(&"user:alice"));
         assert!(keys.contains(&"tool:search"));
@@ -711,7 +766,7 @@ mod tests {
     #[test]
     fn build_checks_with_prefix_prepends_to_all_keys() {
         let (engine, _handle) = engine_with_fake_clock(Some("10/s"), Algorithm::FixedWindow);
-        let checks = engine.build_checks("alice", Some("acme"), "search", Some("team_a"));
+        let checks = engine.build_checks("alice", Some("acme"), "search", Some("team_a"), None);
         let keys: Vec<&str> = checks.iter().map(|(k, _, _)| k.as_str()).collect();
         assert!(keys.contains(&"team_a:user:alice"), "keys: {:?}", keys);
         assert!(keys.contains(&"team_a:tool:search"), "keys: {:?}", keys);
@@ -723,22 +778,161 @@ mod tests {
         let (clock, _handle) = FakeClock::new(1_000_000);
         let cfg = EngineConfig {
             by_user: Some(crate::config::parse_rate("10/s").unwrap()),
+            by_user_per_server: None,
             by_tenant: Some(crate::config::parse_rate("100/s").unwrap()),
             by_tool: HashMap::new(),
             algorithm: Algorithm::FixedWindow,
         };
         let engine = RateLimiterEngine::new_with_clock(cfg, Arc::new(clock));
-        let checks = engine.build_checks("alice", Some("acme"), "search", Some("team_a"));
+        let checks = engine.build_checks("alice", Some("acme"), "search", Some("team_a"), None);
         let keys: Vec<&str> = checks.iter().map(|(k, _, _)| k.as_str()).collect();
         assert!(keys.contains(&"team_a:user:alice"), "keys: {:?}", keys);
         assert!(keys.contains(&"team_a:tenant:acme"), "keys: {:?}", keys);
     }
 
     #[test]
+    fn build_checks_adds_independent_global_and_server_user_dimensions() {
+        init_python();
+        let (clock, _handle) = FakeClock::new(1_000_000);
+        let cfg = EngineConfig {
+            by_user: Some(crate::config::parse_rate("100/m").unwrap()),
+            by_user_per_server: Some(crate::config::parse_rate("60/m").unwrap()),
+            by_tenant: None,
+            by_tool: HashMap::new(),
+            algorithm: Algorithm::FixedWindow,
+        };
+        let engine = RateLimiterEngine::new_with_clock(cfg, Arc::new(clock));
+        let server_id = engine.validated_server_id(Some("server-a")).unwrap();
+        let checks = engine.build_checks("alice", Some("acme"), "search", Some("acme"), server_id);
+        let keys: Vec<&str> = checks.iter().map(|(key, _, _)| key.as_str()).collect();
+
+        assert!(keys.contains(&"acme:user:alice"), "keys: {keys:?}");
+        assert!(
+            keys.contains(&"acme:user:alice:server:server-a"),
+            "keys: {keys:?}"
+        );
+    }
+
+    #[test]
+    fn per_server_user_limit_requires_safe_server_id() {
+        init_python();
+        let (clock, _handle) = FakeClock::new(1_000_000);
+        let cfg = EngineConfig {
+            by_user: None,
+            by_user_per_server: Some(crate::config::parse_rate("60/m").unwrap()),
+            by_tenant: None,
+            by_tool: HashMap::new(),
+            algorithm: Algorithm::FixedWindow,
+        };
+        let engine = RateLimiterEngine::new_with_clock(cfg, Arc::new(clock));
+
+        assert!(engine.validated_server_id(None).is_err());
+        assert!(engine.validated_server_id(Some("  ")).is_err());
+        assert!(engine.validated_server_id(Some("server:unsafe")).is_err());
+        assert!(engine.validated_server_id(Some(&"x".repeat(129))).is_err());
+        assert_eq!(
+            engine.validated_server_id(Some(" server-a ")).unwrap(),
+            Some("server-a")
+        );
+    }
+
+    #[test]
+    fn per_server_user_counters_are_independent_for_every_algorithm() {
+        for algorithm in [
+            Algorithm::FixedWindow,
+            Algorithm::SlidingWindow,
+            Algorithm::TokenBucket,
+        ] {
+            init_python();
+            let (clock, _handle) = FakeClock::new(1_000_000);
+            let cfg = EngineConfig {
+                by_user: None,
+                by_user_per_server: Some(crate::config::parse_rate("2/s").unwrap()),
+                by_tenant: None,
+                by_tool: HashMap::new(),
+                algorithm,
+            };
+            let engine = RateLimiterEngine::new_with_clock(cfg, Arc::new(clock));
+            let checks_for = |server_id| {
+                let server_id = engine.validated_server_id(Some(server_id)).unwrap();
+                engine.build_checks("alice", None, "search", None, server_id)
+            };
+
+            assert!(
+                engine
+                    .evaluate_many(checks_for("server-a"), 1_000_000)
+                    .unwrap()
+                    .allowed
+            );
+            assert!(
+                engine
+                    .evaluate_many(checks_for("server-a"), 1_000_000)
+                    .unwrap()
+                    .allowed
+            );
+            assert!(
+                !engine
+                    .evaluate_many(checks_for("server-a"), 1_000_000)
+                    .unwrap()
+                    .allowed
+            );
+            assert!(
+                engine
+                    .evaluate_many(checks_for("server-b"), 1_000_000)
+                    .unwrap()
+                    .allowed
+            );
+        }
+    }
+
+    #[test]
+    fn global_user_counter_caps_traffic_across_servers() {
+        init_python();
+        let (clock, _handle) = FakeClock::new(1_000_000);
+        let cfg = EngineConfig {
+            by_user: Some(crate::config::parse_rate("3/s").unwrap()),
+            by_user_per_server: Some(crate::config::parse_rate("2/s").unwrap()),
+            by_tenant: None,
+            by_tool: HashMap::new(),
+            algorithm: Algorithm::FixedWindow,
+        };
+        let engine = RateLimiterEngine::new_with_clock(cfg, Arc::new(clock));
+        let checks_for = |server_id| {
+            let server_id = engine.validated_server_id(Some(server_id)).unwrap();
+            engine.build_checks("alice", None, "search", None, server_id)
+        };
+
+        assert!(
+            engine
+                .evaluate_many(checks_for("server-a"), 1_000_000)
+                .unwrap()
+                .allowed
+        );
+        assert!(
+            engine
+                .evaluate_many(checks_for("server-a"), 1_000_000)
+                .unwrap()
+                .allowed
+        );
+        assert!(
+            engine
+                .evaluate_many(checks_for("server-b"), 1_000_000)
+                .unwrap()
+                .allowed
+        );
+        assert!(
+            !engine
+                .evaluate_many(checks_for("server-b"), 1_000_000)
+                .unwrap()
+                .allowed
+        );
+    }
+
+    #[test]
     fn different_prefixes_produce_isolated_counters() {
         let (engine, _handle) = engine_with_fake_clock(Some("2/s"), Algorithm::FixedWindow);
         // Exhaust limit for team_a
-        let checks_a = || engine.build_checks("alice", None, "search", Some("team_a"));
+        let checks_a = || engine.build_checks("alice", None, "search", Some("team_a"), None);
         let _ = engine.evaluate_many(checks_a(), 1_000_000).unwrap();
         let _ = engine.evaluate_many(checks_a(), 1_000_000).unwrap();
         let result_a = engine.evaluate_many(checks_a(), 1_000_000).unwrap();
@@ -748,7 +942,7 @@ mod tests {
         );
 
         // team_b should still be allowed — different prefix, different counters
-        let checks_b = || engine.build_checks("alice", None, "search", Some("team_b"));
+        let checks_b = || engine.build_checks("alice", None, "search", Some("team_b"), None);
         let result_b = engine.evaluate_many(checks_b(), 1_000_000).unwrap();
         assert!(
             result_b.allowed,
@@ -759,8 +953,8 @@ mod tests {
     #[test]
     fn empty_prefix_matches_no_prefix_behavior() {
         let (engine, _handle) = engine_with_fake_clock(Some("10/s"), Algorithm::FixedWindow);
-        let checks_none = engine.build_checks("alice", None, "search", None);
-        let checks_empty = engine.build_checks("alice", None, "search", Some(""));
+        let checks_none = engine.build_checks("alice", None, "search", None, None);
+        let checks_empty = engine.build_checks("alice", None, "search", Some(""), None);
         // Both should produce the same unprefixed keys
         assert_eq!(checks_none.len(), checks_empty.len());
         for ((k1, _, _), (k2, _, _)) in checks_none.iter().zip(checks_empty.iter()) {
@@ -778,6 +972,7 @@ mod tests {
             // Every key the engine recognises today, including the four TLS knobs.
             for k in [
                 "by_user",
+                "by_user_per_server",
                 "by_tenant",
                 "by_tool",
                 "algorithm",

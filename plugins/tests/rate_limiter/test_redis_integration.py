@@ -1013,20 +1013,27 @@ def redis_url_for_integration():
         subprocess.run(["docker", "stop", container_id], check=False)
 
 
-def _make_redis_plugin(redis_url: str, algorithm: str = "fixed_window", limit: str = "3/s") -> RateLimiterPlugin:
+def _make_redis_plugin(
+    redis_url: str,
+    algorithm: str = "fixed_window",
+    limit: str | None = "3/s",
+    **overrides,
+) -> RateLimiterPlugin:
     """Create a RateLimiterPlugin backed by real Redis."""
+    config = {
+        "by_user": limit,
+        "backend": "redis",
+        "redis_url": redis_url,
+        "algorithm": algorithm,
+    }
+    config.update(overrides)
     return RateLimiterPlugin(
         PluginConfig(
             name="RateLimiter",
             kind="cpex_rate_limiter.rate_limiter.RateLimiterPlugin",
             hooks=["tool_pre_invoke"],
             priority=100,
-            config={
-                "by_user": limit,
-                "backend": "redis",
-                "redis_url": redis_url,
-                "algorithm": algorithm,
-            },
+            config=config,
         )
     )
 
@@ -1114,6 +1121,45 @@ class TestRedisBackendIntegration:
 
         result = await plugin_b.tool_pre_invoke(payload, ctx)
         assert result.violation is not None, "Redis backend must share counters across plugin instances — " "instance B must be blocked after instance A exhausts the limit"
+
+    @pytest.mark.asyncio
+    async def test_redis_per_server_user_counters_are_shared_and_isolated(self, redis_url_for_integration):
+        """Replicas share one user/server bucket while different servers remain independent."""
+        await _flush_redis(redis_url_for_integration)
+
+        plugin_a = _make_redis_plugin(
+            redis_url_for_integration,
+            limit=None,
+            by_user_per_server="2/s",
+        )
+        plugin_b = _make_redis_plugin(
+            redis_url_for_integration,
+            limit=None,
+            by_user_per_server="2/s",
+        )
+        payload = ToolPreInvokePayload(name="tool", arguments={})
+        server_a = PluginContext(
+            global_context=GlobalContext(request_id="r1", user="alice", server_id="server-a")
+        )
+        server_b = PluginContext(
+            global_context=GlobalContext(request_id="r2", user="alice", server_id="server-b")
+        )
+
+        assert (await plugin_a.tool_pre_invoke(payload, server_a)).violation is None
+        assert (await plugin_a.tool_pre_invoke(payload, server_a)).violation is None
+        assert (await plugin_b.tool_pre_invoke(payload, server_a)).violation is not None
+        assert (await plugin_b.tool_pre_invoke(payload, server_b)).violation is None
+
+        keys_a = await _keys_in_redis(
+            redis_url_for_integration,
+            "rl:user:alice:server:server-a:*",
+        )
+        keys_b = await _keys_in_redis(
+            redis_url_for_integration,
+            "rl:user:alice:server:server-b:*",
+        )
+        assert keys_a == ["rl:user:alice:server:server-a:1"]
+        assert keys_b == ["rl:user:alice:server:server-b:1"]
 
     @pytest.mark.asyncio
     async def test_redis_window_resets_after_ttl(self, redis_url_for_integration):
@@ -2132,4 +2178,3 @@ class TestRedisTlsHandshake:
             "expected a counter key for user 'alice' to appear in TLS Redis "
             f"after a successful rustls handshake; got keys={keys!r}"
         )
-

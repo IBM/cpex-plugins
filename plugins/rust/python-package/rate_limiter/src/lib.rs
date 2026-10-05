@@ -26,6 +26,7 @@ pub use types::{EvalDimension, EvalResult};
 fn compat_default_config(py: Python<'_>) -> PyResult<Py<PyDict>> {
     let defaults = PyDict::new(py);
     defaults.set_item("by_user", py.None())?;
+    defaults.set_item("by_user_per_server", py.None())?;
     defaults.set_item("by_tenant", py.None())?;
     defaults.set_item("by_tool", py.None())?;
     defaults.set_item("algorithm", "fixed_window")?;

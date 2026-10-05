@@ -21,6 +21,7 @@ def _parse_rate(rate: str) -> tuple[int, int]:
 class RateLimiterConfig:
     __slots__ = (
         "by_user",
+        "by_user_per_server",
         "by_tenant",
         "by_tool",
         "algorithm",
