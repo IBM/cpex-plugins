@@ -237,5 +237,12 @@ The matching workflow validates metadata and versions, builds and tests the
 plugin's artifacts, and publishes only that plugin. PyPI publishing is allowed
 only for release tags that point at `main`.
 
+Every release job checks out the immutable workflow commit (`github.sha`).
+A supplied release tag must resolve to that same commit; it cannot select
+different code to execute within the workflow's cache scope. For a manual
+release, dispatch on the release tag (`gh workflow run <workflow> --ref <tag>
+-f tag=<tag> ...`), as the CI workflows already do. A nonexistent tag is allowed
+only for PR artifact validation with publishing disabled.
+
 Dependency refresh work is separate from the release process. Track broader
 dependency or ContextForge updates outside a plugin release PR.

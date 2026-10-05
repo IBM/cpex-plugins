@@ -7,7 +7,7 @@ on:
   workflow_call:
     inputs:
       tag:
-        description: "Release tag in the form <slug>-v<version>"
+        description: "Release tag <slug>-v<version> at the workflow commit"
         required: true
         type: string
       repository:
@@ -22,7 +22,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag in the form <slug>-v<version>"
+        description: "Release tag <slug>-v<version> at the workflow commit; dispatch on this tag"
         required: true
         type: string
       repository:
@@ -51,11 +51,12 @@ jobs:
       plugin_path: ${{ steps.resolve.outputs.plugin_path }}
       publish_env: ${{ steps.resolve.outputs.publish_env }}
       publish_enabled: ${{ steps.resolve.outputs.publish_enabled }}
-      checkout_ref: ${{ steps.resolve.outputs.checkout_ref }}
       tag_on_main: ${{ steps.resolve.outputs.tag_on_main }}
       skip: ${{ steps.resolve.outputs.skip }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -76,14 +77,16 @@ jobs:
           if [[ -n "${TAG_INPUT}" ]]; then
             tag="${TAG_INPUT}"
             repository="${REPOSITORY_INPUT}"
+            git check-ref-format "refs/tags/${tag}"
             if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
               git fetch --force origin "refs/tags/${tag}:refs/tags/${tag}"
-              git show-ref --verify --quiet "refs/tags/${tag}"
-              checkout_ref="refs/tags/${tag}"
-              tag_ref="refs/tags/${tag}"
+              tag_sha="$(git rev-parse --verify "refs/tags/${tag}^{commit}")"
+              if [[ "${tag_sha}" != "${GITHUB_SHA}" ]]; then
+                echo "Release tag ${tag} does not match workflow commit ${GITHUB_SHA}; dispatch on the release tag" >&2
+                exit 1
+              fi
             elif [[ "${GITHUB_EVENT_NAME}" == "pull_request" && "${PUBLISH_ENABLED}" == "false" ]]; then
-              checkout_ref="${GITHUB_SHA}"
-              tag_ref="${GITHUB_SHA}"
+              echo "Validating unreleased tag ${tag} at PR commit ${GITHUB_SHA}"
             else
               echo "Release tag ${tag} does not exist" >&2
               exit 1
@@ -91,11 +94,9 @@ jobs:
           else
             tag="${GITHUB_REF_NAME}"
             repository="pypi"
-            checkout_ref="${GITHUB_REF}"
-            tag_ref="${GITHUB_REF}"
           fi
 
-          if git merge-base --is-ancestor "${tag_ref}" "refs/remotes/origin/main"; then
+          if git merge-base --is-ancestor "${GITHUB_SHA}" "refs/remotes/origin/main"; then
             tag_on_main=true
           else
             tag_on_main=false
@@ -114,7 +115,6 @@ jobs:
           {
             echo "plugin=${plugin}"
             echo "plugin_path=${plugin_path}"
-            echo "checkout_ref=${checkout_ref}"
             echo "tag_on_main=${tag_on_main}"
             if [[ "${skip}" == "true" ]]; then
               echo "skip=true"
@@ -143,7 +143,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.resolve.outputs.checkout_ref }}
+          ref: ${{ github.sha }}
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -173,7 +173,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.resolve.outputs.checkout_ref }}
+          ref: ${{ github.sha }}
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -224,7 +224,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.resolve.outputs.checkout_ref }}
+          ref: ${{ github.sha }}
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
