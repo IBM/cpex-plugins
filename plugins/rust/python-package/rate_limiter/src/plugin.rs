@@ -719,7 +719,7 @@ fn log_exception(py: Python<'_>, message: &str) -> PyResult<()> {
 mod tests {
     use super::await_async_tuple;
     use super::ensure_crypto_provider;
-    use super::{RateLimiterPluginCore, read_trace_id};
+    use super::{RateLimiterPluginCore, extract_request_context, read_trace_id};
     use pyo3::prelude::*;
     use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods, PyModule};
 
@@ -801,6 +801,33 @@ class Context:
             pyo3::ffi::c_str!("rl_test_payloads.py"),
             pyo3::ffi::c_str!("rl_test_payloads"),
         )
+    }
+
+    #[test]
+    fn request_context_ignores_blank_optional_identifiers() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let module = payload_module(py)?;
+            let context = module.getattr("Context")?.call1(("alice", "  "))?;
+            context
+                .getattr("global_context")?
+                .setattr("tenant_id", "  ")?;
+
+            assert_eq!(
+                extract_request_context(&context)?,
+                ("alice".to_string(), None, None)
+            );
+
+            context
+                .getattr("global_context")?
+                .setattr("server_id", " server-a ")?;
+            assert_eq!(
+                extract_request_context(&context)?,
+                ("alice".to_string(), None, Some("server-a".to_string()))
+            );
+            Ok(())
+        })
+        .unwrap();
     }
 
     fn extensions_with_trace<'py>(py: Python<'py>, trace_id: &str) -> PyResult<Bound<'py, PyAny>> {

@@ -829,6 +829,13 @@ mod tests {
         assert!(engine.validated_server_id(None).is_err());
         assert!(engine.validated_server_id(Some("  ")).is_err());
         assert!(engine.validated_server_id(Some("server:unsafe")).is_err());
+        let max_length_server_id = "x".repeat(128);
+        assert_eq!(
+            engine
+                .validated_server_id(Some(&max_length_server_id))
+                .unwrap(),
+            Some(max_length_server_id.as_str())
+        );
         assert!(engine.validated_server_id(Some(&"x".repeat(129))).is_err());
         assert_eq!(
             engine.validated_server_id(Some(" server-a ")).unwrap(),
