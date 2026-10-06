@@ -1280,7 +1280,8 @@ class TestRedisBackendIntegration:
         """token_bucket on real Redis blocks when bucket is empty."""
         await _flush_redis(redis_url_for_integration)
 
-        plugin = _make_redis_plugin(redis_url_for_integration, algorithm="token_bucket", limit="3/s")
+        # Keep refill out of the immediate exhaustion check on slow runners.
+        plugin = _make_redis_plugin(redis_url_for_integration, algorithm="token_bucket", limit="3/m")
         ctx = PluginContext(global_context=GlobalContext(request_id="r1", user="alice"))
         payload = ToolPreInvokePayload(name="tool", arguments={})
 
@@ -1301,8 +1302,9 @@ class TestRedisBackendIntegration:
         """
         await _flush_redis(redis_url_for_integration)
 
-        plugin_a = _make_redis_plugin(redis_url_for_integration, algorithm="token_bucket", limit="3/s")
-        plugin_b = _make_redis_plugin(redis_url_for_integration, algorithm="token_bucket", limit="3/s")
+        # A slow refill avoids a wall-clock race in the cross-instance assertion.
+        plugin_a = _make_redis_plugin(redis_url_for_integration, algorithm="token_bucket", limit="3/m")
+        plugin_b = _make_redis_plugin(redis_url_for_integration, algorithm="token_bucket", limit="3/m")
         ctx = PluginContext(global_context=GlobalContext(request_id="r1", user="alice"))
         payload = ToolPreInvokePayload(name="tool", arguments={})
 
