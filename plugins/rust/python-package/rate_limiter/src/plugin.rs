@@ -87,7 +87,13 @@ impl RateLimiterPluginCore {
             .extract::<String>()?
             .trim()
             .to_ascii_lowercase();
-        let (user, tenant) = extract_request_context(context)?;
+        let (user, tenant, server_id) = extract_request_context(context)?;
+        if let Err(message) = self.engine.validated_server_id(server_id.as_deref()) {
+            warn!("rate limiter: refusing prompt request: {message}");
+            return Ok(
+                rate_limit_context_error_result(py, "PromptPrehookResult", message)?.into_bound(py),
+            );
+        }
         // Use tenant_id as the context prefix so that each team's rate limit
         // counters are isolated in Redis. Without this, all teams share keys.
         let context_prefix = tenant.as_deref();
@@ -99,6 +105,7 @@ impl RateLimiterPluginCore {
                 tenant.as_deref(),
                 &prompt,
                 context_prefix,
+                server_id.as_deref(),
             ) {
                 Ok((allowed, headers, meta)) => Ok(build_prehook_result(
                     py,
@@ -130,6 +137,7 @@ impl RateLimiterPluginCore {
                 tenant.as_deref(),
                 &prompt,
                 context_prefix_owned.as_deref(),
+                server_id.as_deref(),
             )
             .await
             {
@@ -167,7 +175,13 @@ impl RateLimiterPluginCore {
             .extract::<String>()?
             .trim()
             .to_ascii_lowercase();
-        let (user, tenant) = extract_request_context(context)?;
+        let (user, tenant, server_id) = extract_request_context(context)?;
+        if let Err(message) = self.engine.validated_server_id(server_id.as_deref()) {
+            warn!("rate limiter: refusing tool request: {message}");
+            return Ok(
+                rate_limit_context_error_result(py, "ToolPreInvokeResult", message)?.into_bound(py),
+            );
+        }
         let context_prefix = tenant.as_deref();
         let fail_closed = self.fail_closed;
         if !self.use_async {
@@ -177,6 +191,7 @@ impl RateLimiterPluginCore {
                 tenant.as_deref(),
                 &tool,
                 context_prefix,
+                server_id.as_deref(),
             ) {
                 Ok((allowed, headers, meta)) => Ok(build_prehook_result(
                     py,
@@ -208,6 +223,7 @@ impl RateLimiterPluginCore {
                 tenant.as_deref(),
                 &tool,
                 context_prefix_owned.as_deref(),
+                server_id.as_deref(),
             )
             .await
             {
@@ -320,12 +336,63 @@ fn backend_error_result(
     }
 }
 
+fn rate_limit_context_error_result(
+    py: Python<'_>,
+    class_name: &str,
+    message: &str,
+) -> PyResult<Py<PyAny>> {
+    let details = PyDict::new(py);
+    details.set_item("field", "server_id")?;
+    details.set_item("error", message)?;
+    let violation = build_framework_object(
+        py,
+        "PluginViolation",
+        [
+            (
+                "reason",
+                "Rate limit context unavailable"
+                    .into_pyobject(py)?
+                    .into_any()
+                    .unbind(),
+            ),
+            (
+                "description",
+                message.into_pyobject(py)?.into_any().unbind(),
+            ),
+            (
+                "code",
+                "RATE_LIMIT_CONTEXT_MISSING"
+                    .into_pyobject(py)?
+                    .into_any()
+                    .unbind(),
+            ),
+            ("details", details.into_any().unbind()),
+            (
+                "http_status_code",
+                503i32.into_pyobject(py)?.into_any().unbind(),
+            ),
+        ],
+    )?;
+    build_framework_object(
+        py,
+        class_name,
+        [
+            (
+                "continue_processing",
+                false.into_pyobject(py)?.to_owned().into_any().unbind(),
+            ),
+            ("violation", violation),
+        ],
+    )
+}
+
 fn evaluate_sync_request(
     engine: &RateLimiterEngine,
     user: &str,
     tenant: Option<&str>,
     tool_or_prompt: &str,
     context_prefix: Option<&str>,
+    server_id: Option<&str>,
 ) -> PyResult<(bool, Py<PyDict>, Py<PyDict>)> {
     let now_unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -341,6 +408,7 @@ fn evaluate_sync_request(
             now_unix,
             true,
             context_prefix,
+            server_id,
         )?;
         Ok((allowed, headers.unbind(), meta.unbind()))
     })
@@ -352,6 +420,7 @@ async fn evaluate_async_request(
     tenant: Option<&str>,
     tool_or_prompt: &str,
     context_prefix: Option<&str>,
+    server_id: Option<&str>,
 ) -> PyResult<(bool, Py<PyDict>, Py<PyDict>)> {
     let now_unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -367,6 +436,7 @@ async fn evaluate_async_request(
                 now_unix,
                 true,
                 context_prefix,
+                server_id,
             )
             .map(|awaitable| awaitable.unbind())
     })?;
@@ -583,21 +653,27 @@ fn build_violation(
     )
 }
 
-fn extract_request_context(context: &Bound<'_, PyAny>) -> PyResult<(String, Option<String>)> {
+fn extract_request_context(
+    context: &Bound<'_, PyAny>,
+) -> PyResult<(String, Option<String>, Option<String>)> {
     let global_context = context.getattr("global_context")?;
     let user = extract_user_identity(&global_context.getattr("user")?)?;
-    let tenant = match global_context.getattr("tenant_id") {
+    let tenant = extract_optional_string_attribute(&global_context, "tenant_id")?;
+    let server_id = extract_optional_string_attribute(&global_context, "server_id")?;
+    Ok((user, tenant, server_id))
+}
+
+fn extract_optional_string_attribute(
+    object: &Bound<'_, PyAny>,
+    name: &str,
+) -> PyResult<Option<String>> {
+    match object.getattr(name) {
         Ok(value) if !value.is_none() => {
             let trimmed = value.extract::<String>()?.trim().to_string();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed)
-            }
+            Ok((!trimmed.is_empty()).then_some(trimmed))
         }
-        _ => None,
-    };
-    Ok((user, tenant))
+        _ => Ok(None),
+    }
 }
 
 fn extract_user_identity(user: &Bound<'_, PyAny>) -> PyResult<String> {
@@ -643,7 +719,7 @@ fn log_exception(py: Python<'_>, message: &str) -> PyResult<()> {
 mod tests {
     use super::await_async_tuple;
     use super::ensure_crypto_provider;
-    use super::{RateLimiterPluginCore, read_trace_id};
+    use super::{RateLimiterPluginCore, extract_request_context, read_trace_id};
     use pyo3::prelude::*;
     use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods, PyModule};
 
@@ -712,18 +788,46 @@ class PromptPayload:
         self.prompt_id = prompt_id
 
 class GlobalContext:
-    def __init__(self, user):
+    def __init__(self, user, server_id=None):
         self.user = user
         self.tenant_id = None
+        self.server_id = server_id
 
 class Context:
-    def __init__(self, user):
-        self.global_context = GlobalContext(user)
+    def __init__(self, user, server_id=None):
+        self.global_context = GlobalContext(user, server_id)
 "#
             ),
             pyo3::ffi::c_str!("rl_test_payloads.py"),
             pyo3::ffi::c_str!("rl_test_payloads"),
         )
+    }
+
+    #[test]
+    fn request_context_ignores_blank_optional_identifiers() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            let module = payload_module(py)?;
+            let context = module.getattr("Context")?.call1(("alice", "  "))?;
+            context
+                .getattr("global_context")?
+                .setattr("tenant_id", "  ")?;
+
+            assert_eq!(
+                extract_request_context(&context)?,
+                ("alice".to_string(), None, None)
+            );
+
+            context
+                .getattr("global_context")?
+                .setattr("server_id", " server-a ")?;
+            assert_eq!(
+                extract_request_context(&context)?,
+                ("alice".to_string(), None, Some("server-a".to_string()))
+            );
+            Ok(())
+        })
+        .unwrap();
     }
 
     fn extensions_with_trace<'py>(py: Python<'py>, trace_id: &str) -> PyResult<Bound<'py, PyAny>> {
@@ -822,6 +926,36 @@ class Context:
                     .collect()
             );
 
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn tool_pre_invoke_blocks_missing_server_id_for_per_server_limit() {
+        Python::initialize();
+        Python::attach(|py| -> PyResult<()> {
+            install_framework_module(py)?;
+            let module = payload_module(py)?;
+
+            let config = PyDict::new(py);
+            config.set_item("by_user_per_server", "5/s")?;
+            config.set_item("backend", "memory")?;
+            let plugin = RateLimiterPluginCore::new(&config)?;
+            let payload = module.getattr("ToolPayload")?.call1(("search",))?;
+            let context = module.getattr("Context")?.call1(("alice",))?;
+
+            let result = plugin.tool_pre_invoke(py, &payload, &context, None)?;
+            assert!(!result.getattr("continue_processing")?.extract::<bool>()?);
+            let violation = result.getattr("violation")?;
+            assert_eq!(
+                violation.getattr("code")?.extract::<String>()?,
+                "RATE_LIMIT_CONTEXT_MISSING"
+            );
+            assert_eq!(
+                violation.getattr("http_status_code")?.extract::<i32>()?,
+                503
+            );
             Ok(())
         })
         .unwrap();

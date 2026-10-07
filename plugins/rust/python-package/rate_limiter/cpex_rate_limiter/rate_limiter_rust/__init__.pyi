@@ -114,7 +114,7 @@ class RateLimiterEngine:
         `redis_ur` instead of `redis_url`) surface visibly instead of being
         silently ignored.
         """
-    def check(self, user: builtins.str, tenant: typing.Optional[builtins.str], tool: builtins.str, now_unix: builtins.int, include_retry_after: builtins.bool, context_prefix: typing.Optional[builtins.str]) -> tuple[builtins.bool, dict, dict]:
+    def check(self, user: builtins.str, tenant: typing.Optional[builtins.str], tool: builtins.str, now_unix: builtins.int, include_retry_after: builtins.bool, context_prefix: typing.Optional[builtins.str], server_id: typing.Optional[builtins.str] = None) -> tuple[builtins.bool, dict, dict]:
         r"""
         High-level check: builds dimension keys internally, evaluates, and
         returns pre-built Python dicts for headers and metadata.
@@ -135,7 +135,7 @@ class RateLimiterEngine:
         path is intended for the memory backend.  The `debug_assert` below
         guards against accidental misuse.
         """
-    def check_async(self, user: builtins.str, tenant: typing.Optional[builtins.str], tool: builtins.str, now_unix: builtins.int, include_retry_after: builtins.bool, context_prefix: typing.Optional[builtins.str]) -> typing.Any:
+    def check_async(self, user: builtins.str, tenant: typing.Optional[builtins.str], tool: builtins.str, now_unix: builtins.int, include_retry_after: builtins.bool, context_prefix: typing.Optional[builtins.str], server_id: typing.Optional[builtins.str] = None) -> typing.Any:
         r"""
         Async variant of `check()` for Redis-backed deployments.
 

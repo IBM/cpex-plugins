@@ -108,6 +108,7 @@ impl Algorithm {
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
     pub by_user: Option<RateLimit>,
+    pub by_user_per_server: Option<RateLimit>,
     pub by_tenant: Option<RateLimit>,
     /// Normalised key → limit. Keys are already `.trim().to_lowercase()`.
     pub by_tool: HashMap<String, RateLimit>,
@@ -119,6 +120,7 @@ impl EngineConfig {
     /// that are relevant to the Rust engine — strict subset per IFACE-04).
     pub fn new(
         by_user: Option<&str>,
+        by_user_per_server: Option<&str>,
         by_tenant: Option<&str>,
         by_tool: HashMap<String, String>,
         algorithm: &str,
@@ -127,6 +129,14 @@ impl EngineConfig {
             .map(|rate| {
                 parse_rate(rate).map_err(|err| ConfigError::FieldError {
                     field: format!("by_user={rate:?}"),
+                    message: err.to_string(),
+                })
+            })
+            .transpose()?;
+        let by_user_per_server = by_user_per_server
+            .map(|rate| {
+                parse_rate(rate).map_err(|err| ConfigError::FieldError {
+                    field: format!("by_user_per_server={rate:?}"),
                     message: err.to_string(),
                 })
             })
@@ -155,6 +165,7 @@ impl EngineConfig {
             .ok_or_else(|| ConfigError::InvalidAlgorithm(algorithm.to_string()))?;
         Ok(Self {
             by_user,
+            by_user_per_server,
             by_tenant,
             by_tool,
             algorithm,
@@ -256,9 +267,17 @@ mod tests {
         by_tool.insert("Search".to_string(), "10/m".to_string());
         by_tool.insert("  Summarise  ".to_string(), "5/m".to_string());
 
-        let cfg = EngineConfig::new(Some("30/m"), Some("300/m"), by_tool, "fixed_window").unwrap();
+        let cfg = EngineConfig::new(
+            Some("30/m"),
+            Some("15/m"),
+            Some("300/m"),
+            by_tool,
+            "fixed_window",
+        )
+        .unwrap();
 
         assert_eq!(cfg.by_user.unwrap().count, 30);
+        assert_eq!(cfg.by_user_per_server.unwrap().count, 15);
         assert_eq!(cfg.by_tenant.unwrap().count, 300);
         // Keys must be normalised
         assert!(cfg.by_tool.contains_key("search"));
@@ -269,19 +288,25 @@ mod tests {
 
     #[test]
     fn engine_config_all_none_is_valid() {
-        let cfg = EngineConfig::new(None, None, HashMap::new(), "sliding_window").unwrap();
+        let cfg = EngineConfig::new(None, None, None, HashMap::new(), "sliding_window").unwrap();
         assert!(cfg.by_user.is_none());
+        assert!(cfg.by_user_per_server.is_none());
         assert!(cfg.by_tenant.is_none());
         assert!(cfg.by_tool.is_empty());
     }
 
     #[test]
     fn engine_config_invalid_rate_propagates_error() {
-        assert!(EngineConfig::new(Some("bad"), None, HashMap::new(), "fixed_window").is_err());
+        assert!(
+            EngineConfig::new(Some("bad"), None, None, HashMap::new(), "fixed_window").is_err()
+        );
+        assert!(
+            EngineConfig::new(None, Some("bad"), None, HashMap::new(), "fixed_window").is_err()
+        );
     }
 
     #[test]
     fn engine_config_invalid_algorithm_propagates_error() {
-        assert!(EngineConfig::new(None, None, HashMap::new(), "leaky_bucket").is_err());
+        assert!(EngineConfig::new(None, None, None, HashMap::new(), "leaky_bucket").is_err());
     }
 }

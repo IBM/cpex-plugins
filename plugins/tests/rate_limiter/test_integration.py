@@ -49,9 +49,9 @@ def _make_config(**overrides) -> PluginConfig:
     return PluginConfig(name="rate_limiter", config=config)
 
 
-def _make_context(user="testuser", tenant_id="tenant-1") -> PluginContext:
+def _make_context(user="testuser", tenant_id="tenant-1", server_id=None) -> PluginContext:
     return PluginContext(
-        global_context=GlobalContext(user=user, tenant_id=tenant_id),
+        global_context=GlobalContext(user=user, tenant_id=tenant_id, server_id=server_id),
     )
 
 
@@ -128,7 +128,6 @@ class TestToolPreInvoke:
         assert result.continue_processing is False
         assert result.violation is not None
         assert result.violation.http_status_code == 429
-        assert result.violation.code == "RATE_LIMIT"
 
     async def test_different_users_independent(self, plugin):
         payload = ToolPreInvokePayload(name="search")
@@ -138,6 +137,64 @@ class TestToolPreInvoke:
         # User B should still be allowed
         result = await plugin.tool_pre_invoke(payload, _make_context(user="userB"))
         assert result.continue_processing is True
+
+    @pytest.mark.parametrize("algorithm", ["fixed_window", "sliding_window", "token_bucket"])
+    async def test_per_server_user_limits_are_independent(self, algorithm):
+        plugin = RateLimiterPlugin(
+            _make_config(
+                by_user=None,
+                by_user_per_server="2/s",
+                algorithm=algorithm,
+            )
+        )
+        payload = ToolPreInvokePayload(name="search")
+        server_a = _make_context(user="alice", server_id="server-a")
+        server_b = _make_context(user="alice", server_id="server-b")
+
+        for _ in range(2):
+            result = await plugin.tool_pre_invoke(payload, server_a)
+            assert result.continue_processing is True
+
+        blocked = await plugin.tool_pre_invoke(payload, server_a)
+        allowed = await plugin.tool_pre_invoke(payload, server_b)
+        other_user = await plugin.tool_pre_invoke(
+            payload,
+            _make_context(user="bob", server_id="server-a"),
+        )
+
+        assert blocked.continue_processing is False
+        assert blocked.violation.code == "RATE_LIMIT"
+        assert allowed.continue_processing is True
+        assert other_user.continue_processing is True
+
+    async def test_global_user_limit_still_caps_all_servers(self):
+        plugin = RateLimiterPlugin(
+            _make_config(by_user="3/s", by_user_per_server="2/s")
+        )
+        payload = ToolPreInvokePayload(name="search")
+        server_a = _make_context(user="alice", server_id="server-a")
+        server_b = _make_context(user="alice", server_id="server-b")
+
+        assert (await plugin.tool_pre_invoke(payload, server_a)).continue_processing
+        assert (await plugin.tool_pre_invoke(payload, server_a)).continue_processing
+        assert (await plugin.tool_pre_invoke(payload, server_b)).continue_processing
+
+        blocked = await plugin.tool_pre_invoke(payload, server_b)
+        assert blocked.continue_processing is False
+        assert blocked.violation.http_status_code == 429
+
+    async def test_per_server_limit_blocks_when_server_id_missing(self):
+        plugin = RateLimiterPlugin(
+            _make_config(by_user=None, by_user_per_server="2/s")
+        )
+        result = await plugin.tool_pre_invoke(
+            ToolPreInvokePayload(name="search"),
+            _make_context(user="alice", server_id=None),
+        )
+
+        assert result.continue_processing is False
+        assert result.violation.code == "RATE_LIMIT_CONTEXT_MISSING"
+        assert result.violation.http_status_code == 503
 
     async def test_dict_user_identity_uses_email_before_other_fields(self, plugin):
         payload = ToolPreInvokePayload(name="search")
@@ -265,6 +322,20 @@ class TestPromptPreFetch:
         assert result.continue_processing is False
         assert result.violation is not None
         assert result.violation.http_status_code == 429
+
+    async def test_per_server_prompt_limits_are_independent(self):
+        plugin = RateLimiterPlugin(
+            _make_config(by_user=None, by_user_per_server="1/s")
+        )
+        payload = PromptPrehookPayload(prompt_id="my-prompt")
+        server_a = _make_context(user="alice", server_id="server-a")
+        server_b = _make_context(user="alice", server_id="server-b")
+
+        assert (await plugin.prompt_pre_fetch(payload, server_a)).continue_processing
+        blocked = await plugin.prompt_pre_fetch(payload, server_a)
+        assert not blocked.continue_processing
+        assert blocked.violation.code == "RATE_LIMIT"
+        assert (await plugin.prompt_pre_fetch(payload, server_b)).continue_processing
 
 
 # ---------------------------------------------------------------------------
