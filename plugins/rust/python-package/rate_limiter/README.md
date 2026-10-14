@@ -2,7 +2,7 @@
 
 > Author: ContextForge Contributors
 
-Enforces global per-user, per-user/per-server, tenant, and tool rate limits across `tool_pre_invoke` and `prompt_pre_fetch` hooks. Supports pluggable counting algorithms (fixed window, sliding window, token bucket), an in-process memory backend (single-instance), and a Redis backend (shared across all gateway instances).
+Enforces global per-user, tenant, and tool/prompt-name rate limits across `tool_pre_invoke` and `prompt_pre_fetch` hooks, with an additional per-user/per-server quota for tool invocations. Supports pluggable counting algorithms (fixed window, sliding window, token bucket), an in-process memory backend (single-instance), and a Redis backend (shared across all gateway instances).
 
 ## Runtime Requirements
 
@@ -13,7 +13,7 @@ This plugin depends on `cpex>=0.1.0,<0.2` and imports hook models from `cpex.fra
 | Hook | When it runs |
 |---|---|
 | `tool_pre_invoke` | Before every tool call — checks `by_user`, `by_user_per_server`, `by_tenant`, `by_tool` |
-| `prompt_pre_fetch` | Before every prompt fetch — checks `by_user`, `by_user_per_server`, `by_tenant`, `by_tool` |
+| `prompt_pre_fetch` | Before every prompt fetch — checks `by_user`, `by_tenant`, `by_tool` using the prompt name |
 
 If any configured dimension is exceeded, the plugin returns a violation with HTTP 429. All requests include `X-RateLimit-*` headers. The most restrictive active dimension is surfaced (e.g. if both user and tenant limits are active, the one closest to exhaustion is reported).
 
@@ -28,7 +28,7 @@ If any configured dimension is exceeded, the plugin returns a violation with HTT
   mode: enforce          # enforce | permissive | disabled
   config:
     by_user: "300/m"     # per-user limit across all servers
-    by_user_per_server: "60/m" # per-user limit for each MCP server
+    by_user_per_server: "60/m" # per-user tool limit for each upstream MCP catalog server
     by_tenant: "300/m"   # shared limit across all users in a tenant
     by_tool:             # per-tool overrides (applied on top of by_user)
       search: "10/m"
@@ -56,7 +56,7 @@ If any configured dimension is exceeded, the plugin returns a violation with HTT
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `by_user` | string | `null` | Per-user rate limit, e.g. `"60/m"` |
-| `by_user_per_server` | string | `null` | Per-user rate limit independently enforced for each MCP server, e.g. `"60/m"` |
+| `by_user_per_server` | string | `null` | Per-user tool rate limit independently enforced for each upstream MCP catalog server, e.g. `"60/m"` |
 | `by_tenant` | string | `null` | Per-tenant rate limit, e.g. `"600/m"` |
 | `by_tool` | dict | `{}` | Per-tool overrides, e.g. `{"search": "10/m"}` |
 | `algorithm` | string | `"fixed_window"` | Counting algorithm: `"fixed_window"`, `"sliding_window"`, or `"token_bucket"` |
@@ -77,7 +77,9 @@ If any configured dimension is exceeded, the plugin returns a violation with HTT
 
 **Omitting a dimension** (e.g. no `by_tenant`) means that dimension is unlimited — no counter is tracked for it.
 
-`by_user` and `by_user_per_server` are independent and may be enabled together. For example, `by_user: "300/m"` plus `by_user_per_server: "60/m"` gives each user at most 60 requests per server and 300 requests across all servers. This prevents one user from multiplying their effective quota without relying on the shared `by_tenant` ceiling. When `by_user_per_server` is configured, requests without a safe non-empty `server_id` are blocked with `RATE_LIMIT_CONTEXT_MISSING` (HTTP 503) rather than bypassing the limit.
+`by_user` and `by_user_per_server` are independent and may be enabled together. For example, `by_user: "300/m"` plus `by_user_per_server: "60/m"` gives each user at most 60 tool calls per catalog server and 300 combined tool calls and prompt fetches within the same tenant context. This prevents one user from multiplying their effective quota without relying on the shared `by_tenant` ceiling. When `by_user_per_server` is configured, tool calls without a safe non-empty `server_id` are blocked with `RATE_LIMIT_CONTEXT_MISSING` (HTTP 503) rather than bypassing the limit.
+
+Prompt fetches neither require a catalog `server_id` nor consume `by_user_per_server` counters, even when a virtual-server ID is present. They still enforce `by_user`, `by_tenant`, and prompt-name overrides in `by_tool`. These counters remain shared with tool invocations within the same tenant context.
 
 ## Response headers
 
@@ -272,6 +274,8 @@ result.metadata["rate_limiter"] = {
 **Security Note (S1):** `user_id` and `tenant_id` are never included in `result.metadata` — they stay confined to `PluginViolation.details` on the throttled path, a separate channel unaffected by this metrics addition.
 
 ## Migration Note
+
+Version `0.1.12` fixes prompt retrieval when `by_user_per_server` is enabled. The per-server quota now applies only to tool invocations; prompt fetches retain existing global and prompt-name limits. Counter keys and tool identity validation are unchanged. Upgrade every replica to `0.1.12` or later before enabling per-server tool quotas with prompt hooks registered.
 
 Version `0.1.11` adds the optional `by_user_per_server` dimension. Existing configurations and global `by_user` Redis keys remain unchanged. Enabling the new field creates fresh user/server counters; deploy `0.1.11` to every replica before enabling it so all replicas enforce the same dimensions. Use the stable catalog UUID carried in `GlobalContext.server_id`; display names or slugs can reset quotas when renamed.
 

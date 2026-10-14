@@ -323,19 +323,42 @@ class TestPromptPreFetch:
         assert result.violation is not None
         assert result.violation.http_status_code == 429
 
-    async def test_per_server_prompt_limits_are_independent(self):
+    @pytest.mark.parametrize("server_id", [None, "virtual-a", "virtual-b", "unsafe:id"])
+    async def test_prompts_do_not_consume_per_server_tool_quota(self, server_id):
         plugin = RateLimiterPlugin(
-            _make_config(by_user=None, by_user_per_server="1/s")
+            _make_config(by_user=None, by_user_per_server="1/h")
         )
         payload = PromptPrehookPayload(prompt_id="my-prompt")
-        server_a = _make_context(user="alice", server_id="server-a")
-        server_b = _make_context(user="alice", server_id="server-b")
+        context = _make_context(user="alice", server_id=server_id)
+        for _ in range(2):
+            result = await plugin.prompt_pre_fetch(payload, context)
+            assert result.continue_processing
+            assert result.violation is None
 
-        assert (await plugin.prompt_pre_fetch(payload, server_a)).continue_processing
-        blocked = await plugin.prompt_pre_fetch(payload, server_a)
+        tool = ToolPreInvokePayload(name="search")
+        catalog = _make_context(user="alice", server_id="virtual-a")
+        assert (await plugin.tool_pre_invoke(tool, catalog)).continue_processing
+        blocked = await plugin.tool_pre_invoke(tool, catalog)
         assert not blocked.continue_processing
         assert blocked.violation.code == "RATE_LIMIT"
-        assert (await plugin.prompt_pre_fetch(payload, server_b)).continue_processing
+
+    async def test_prompt_and_tool_share_global_limit_with_per_server_enabled(self):
+        plugin = RateLimiterPlugin(
+            _make_config(by_user="2/h", by_user_per_server="5/h")
+        )
+        prompt = PromptPrehookPayload(prompt_id="summary")
+        tool = ToolPreInvokePayload(name="search")
+        ordinary = _make_context(user="alice")
+        catalog = _make_context(user="alice", server_id="catalog-a")
+        assert (await plugin.prompt_pre_fetch(prompt, ordinary)).continue_processing
+        assert (await plugin.tool_pre_invoke(tool, catalog)).continue_processing
+        for hook, payload, context in [
+            (plugin.prompt_pre_fetch, prompt, ordinary),
+            (plugin.tool_pre_invoke, tool, catalog),
+        ]:
+            blocked = await hook(payload, context)
+            assert not blocked.continue_processing
+            assert blocked.violation.code == "RATE_LIMIT"
 
 
 # ---------------------------------------------------------------------------

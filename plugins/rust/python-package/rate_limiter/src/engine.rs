@@ -75,6 +75,14 @@ impl RateLimiterEngine {
         }
     }
 
+    /// Prompt policy shares all counters and backend resources with tools,
+    /// but does not require or consume an upstream catalog quota.
+    pub(crate) fn for_prompts(&self) -> Self {
+        let mut engine = self.clone();
+        engine.config.by_user_per_server = None;
+        engine
+    }
+
     pub fn uses_async_backend(&self) -> bool {
         matches!(self.backend, EngineBackend::Redis(_))
     }
@@ -811,6 +819,97 @@ mod tests {
             keys.contains(&"acme:user:alice:server:server-a"),
             "keys: {keys:?}"
         );
+    }
+
+    #[test]
+    fn prompts_do_not_consume_server_quota() {
+        init_python();
+        let (clock, _handle) = FakeClock::new(1_000_000);
+        let cfg = EngineConfig {
+            by_user: None,
+            by_user_per_server: Some(crate::config::parse_rate("1/h").unwrap()),
+            by_tenant: None,
+            by_tool: HashMap::new(),
+            algorithm: Algorithm::FixedWindow,
+        };
+        let tools = RateLimiterEngine::new_with_clock(cfg, Arc::new(clock));
+        let prompts = tools.for_prompts();
+        for identity in [
+            None,
+            Some("virtual-a"),
+            Some("virtual-b"),
+            Some("unsafe:id"),
+        ] {
+            let server = prompts.validated_server_id(identity).unwrap();
+            let checks = prompts.build_checks("alice", None, "summary", None, server);
+            assert!(checks.is_empty());
+            assert!(prompts.evaluate_many(checks, 1_000_000).unwrap().allowed);
+        }
+        let checks = tools.build_checks("alice", None, "search", None, Some("virtual-a"));
+        assert!(
+            tools
+                .evaluate_many(checks.clone(), 1_000_000)
+                .unwrap()
+                .allowed
+        );
+        assert!(!tools.evaluate_many(checks, 1_000_000).unwrap().allowed);
+        assert!(tools.validated_server_id(None).is_err());
+    }
+
+    #[test]
+    fn prompt_limits_share_counters_with_tools_for_every_algorithm() {
+        init_python();
+        for algorithm in [
+            Algorithm::FixedWindow,
+            Algorithm::SlidingWindow,
+            Algorithm::TokenBucket,
+        ] {
+            for dimension in ["user", "tenant", "name"] {
+                let (clock, _handle) = FakeClock::new(1_000_000);
+                let limit = crate::config::parse_rate("2/h").unwrap();
+                let cfg = EngineConfig {
+                    by_user: (dimension == "user").then_some(limit.clone()),
+                    by_user_per_server: Some(crate::config::parse_rate("10/h").unwrap()),
+                    by_tenant: (dimension == "tenant").then_some(limit.clone()),
+                    by_tool: if dimension == "name" {
+                        HashMap::from([("summary".to_string(), limit)])
+                    } else {
+                        HashMap::new()
+                    },
+                    algorithm,
+                };
+                let tools = RateLimiterEngine::new_with_clock(cfg, Arc::new(clock));
+                let prompts = tools.for_prompts();
+                let prompt_checks =
+                    prompts.build_checks("alice", Some("acme"), "summary", Some("acme"), None);
+                let tool_checks = tools.build_checks(
+                    "alice",
+                    Some("acme"),
+                    "summary",
+                    Some("acme"),
+                    Some("catalog-a"),
+                );
+                assert!(
+                    prompts
+                        .evaluate_many(prompt_checks.clone(), 1_000_000)
+                        .unwrap()
+                        .allowed
+                );
+                assert!(
+                    tools
+                        .evaluate_many(tool_checks.clone(), 1_000_000)
+                        .unwrap()
+                        .allowed
+                );
+                assert!(
+                    !prompts
+                        .evaluate_many(prompt_checks, 1_000_000)
+                        .unwrap()
+                        .allowed
+                );
+                assert!(!tools.evaluate_many(tool_checks, 1_000_000).unwrap().allowed);
+            }
+        }
     }
 
     #[test]

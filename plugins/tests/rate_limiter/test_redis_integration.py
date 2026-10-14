@@ -1162,6 +1162,74 @@ class TestRedisBackendIntegration:
         assert keys_b == ["rl:user:alice:server:server-b:1"]
 
     @pytest.mark.asyncio
+    async def test_redis_prompts_leave_catalog_quota_untouched(self, redis_url_for_integration):
+        """Prompts never create server keys or consume the tools' catalog quota."""
+        await _flush_redis(redis_url_for_integration)
+        plugins = [
+            _make_redis_plugin(redis_url_for_integration, limit=None, by_user_per_server="1/h")
+            for _ in range(2)
+        ]
+        try:
+            prompt = PromptPrehookPayload(prompt_id="summary", args={})
+            for server_id in [None, "catalog-a", "virtual-b", "unsafe:id"]:
+                context = PluginContext(
+                    global_context=GlobalContext(request_id="prompt", user="alice", server_id=server_id)
+                )
+                for plugin in plugins:
+                    result = await plugin.prompt_pre_fetch(prompt, context)
+                    assert result.continue_processing
+                    assert result.violation is None
+            assert await _keys_in_redis(redis_url_for_integration, "rl:*:server:*") == []
+
+            tool = ToolPreInvokePayload(name="search", arguments={})
+            catalog = PluginContext(
+                global_context=GlobalContext(request_id="tool", user="alice", server_id="catalog-a")
+            )
+            assert (await plugins[0].tool_pre_invoke(tool, catalog)).continue_processing
+            blocked = await plugins[1].tool_pre_invoke(tool, catalog)
+            assert not blocked.continue_processing
+            assert blocked.violation.code == "RATE_LIMIT"
+        finally:
+            for plugin in plugins:
+                await plugin.shutdown()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("dimension", ["user", "tenant", "prompt_name"])
+    async def test_redis_prompt_limits_share_counters_with_tools_when_per_server_enabled(
+        self, redis_url_for_integration, dimension
+    ):
+        """The prompt policy preserves existing limits across hooks and replicas."""
+        await _flush_redis(redis_url_for_integration)
+        config = {
+            "by_user": "2/h" if dimension == "user" else None,
+            "by_tenant": "2/h" if dimension == "tenant" else None,
+            "by_tool": {"summary": "2/h"} if dimension == "prompt_name" else {},
+            "by_user_per_server": "10/h",
+        }
+        plugins = [_make_redis_plugin(redis_url_for_integration, **config) for _ in range(2)]
+        try:
+            prompt = PromptPrehookPayload(prompt_id="summary", args={})
+            tool = ToolPreInvokePayload(name="summary", arguments={})
+            ordinary = PluginContext(
+                global_context=GlobalContext(request_id="prompt", user="alice", tenant_id="acme")
+            )
+            catalog = PluginContext(
+                global_context=GlobalContext(request_id="tool", user="alice", tenant_id="acme", server_id="catalog-a")
+            )
+            assert (await plugins[0].prompt_pre_fetch(prompt, ordinary)).continue_processing
+            assert (await plugins[1].tool_pre_invoke(tool, catalog)).continue_processing
+            for hook, payload, context in [
+                (plugins[1].prompt_pre_fetch, prompt, ordinary),
+                (plugins[0].tool_pre_invoke, tool, catalog),
+            ]:
+                blocked = await hook(payload, context)
+                assert not blocked.continue_processing
+                assert blocked.violation.code == "RATE_LIMIT"
+        finally:
+            for plugin in plugins:
+                await plugin.shutdown()
+
+    @pytest.mark.asyncio
     async def test_redis_window_resets_after_ttl(self, redis_url_for_integration):
         """After the rate window expires, Redis TTL resets counters and requests are allowed again."""
         await _flush_redis(redis_url_for_integration)

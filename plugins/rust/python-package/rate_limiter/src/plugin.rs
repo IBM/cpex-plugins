@@ -40,6 +40,7 @@ fn ensure_crypto_provider() {
 #[pyclass]
 pub struct RateLimiterPluginCore {
     engine: Arc<RateLimiterEngine>,
+    prompt_engine: Arc<RateLimiterEngine>,
     use_async: bool,
     /// When true, backend failures produce a BACKEND_UNAVAILABLE violation
     /// (fail-closed) instead of the default allow result (fail-open). Read
@@ -57,10 +58,12 @@ impl RateLimiterPluginCore {
         // first TLS handshake. See `ensure_crypto_provider` doc above.
         ensure_crypto_provider();
         let engine = Arc::new(RateLimiterEngine::new(config)?);
+        let prompt_engine = Arc::new(engine.for_prompts());
         let fail_closed = parse_fail_mode(config)?;
         Ok(Self {
             use_async: engine.uses_async_backend(),
             engine,
+            prompt_engine,
             fail_closed,
         })
     }
@@ -87,25 +90,19 @@ impl RateLimiterPluginCore {
             .extract::<String>()?
             .trim()
             .to_ascii_lowercase();
-        let (user, tenant, server_id) = extract_request_context(context)?;
-        if let Err(message) = self.engine.validated_server_id(server_id.as_deref()) {
-            warn!("rate limiter: refusing prompt request: {message}");
-            return Ok(
-                rate_limit_context_error_result(py, "PromptPrehookResult", message)?.into_bound(py),
-            );
-        }
+        let (user, tenant, _) = extract_request_context(context)?;
         // Use tenant_id as the context prefix so that each team's rate limit
         // counters are isolated in Redis. Without this, all teams share keys.
         let context_prefix = tenant.as_deref();
         let fail_closed = self.fail_closed;
         if !self.use_async {
             return match evaluate_sync_request(
-                &self.engine,
+                &self.prompt_engine,
                 &user,
                 tenant.as_deref(),
                 &prompt,
                 context_prefix,
-                server_id.as_deref(),
+                None,
             ) {
                 Ok((allowed, headers, meta)) => Ok(build_prehook_result(
                     py,
@@ -127,7 +124,7 @@ impl RateLimiterPluginCore {
             };
         }
 
-        let engine = Arc::clone(&self.engine);
+        let engine = Arc::clone(&self.prompt_engine);
         let context_prefix_owned = context_prefix.map(|s| s.to_string());
         let trace_id_owned = trace_id.clone();
         future_into_py(py, async move {
@@ -137,7 +134,7 @@ impl RateLimiterPluginCore {
                 tenant.as_deref(),
                 &prompt,
                 context_prefix_owned.as_deref(),
-                server_id.as_deref(),
+                None,
             )
             .await
             {
