@@ -12,7 +12,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "cpex>=0.1.4,<0.2",
-    "mcp>=2.0.0",
+    "mcp>=2.3.0",
 ]
 classifiers = [
     "Programming Language :: Rust",
