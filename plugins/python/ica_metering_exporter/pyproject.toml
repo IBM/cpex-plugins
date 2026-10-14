@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cpex-ica-metering-exporter"
-version = "0.1.2"
+version = "0.1.3"
 description = "Export MCP tool invocation metrics to ICA core-services metering endpoint"
 authors = [{ name = "ICA Team" }]
 license = { text = "Apache-2.0" }
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["cpex>=0.1.4,<0.2", "httpx>=0.27,<1", "PyJWT>=2.8,<3"]
+dependencies = ["cpex>=0.1.4,<0.2", "httpx>=0.27,<1", "PyJWT>=2.15.0,<3"]
 classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
