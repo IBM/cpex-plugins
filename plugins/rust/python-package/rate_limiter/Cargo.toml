@@ -1,6 +1,6 @@
 [package]
 name = "rate_limiter"
-version = "0.1.12"
+version = "0.1.13"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -32,7 +32,7 @@ parking_lot = "0.12.5"
 thiserror = { workspace = true }
 redis = { version = "1.2.1", features = ["aio", "tokio-comp", "tls-rustls", "tls-rustls-insecure", "tokio-rustls-comp"] }
 # Enable default features (includes tls12 for TLS 1.2 support) plus the ring provider.
-rustls = { version = "0.23.40", features = ["ring"] }
+rustls = { version = "0.23.46", features = ["ring"] }
 rustls-pki-types = "1.14"
 tokio = { version = "1.52.3", features = ["full"] }
 
