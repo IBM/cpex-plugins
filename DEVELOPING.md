@@ -186,12 +186,24 @@ new version of an existing managed plugin to PyPI.
    `Cargo.toml` version bumps and `.github/workflows/ci-python-package.yaml`
    detects pure-Python `pyproject.toml` version bumps. After each language's
    required checks are green, the matching CI workflow creates the release tag
-   at the merge commit and invokes `release-rust-python-package.yaml` or
-   `release-python-package.yaml` with PyPI publishing enabled.
+   at the merge commit. The tag push starts `release-rust-python-package.yaml`
+   or `release-python-package.yaml` with PyPI publishing enabled.
 
-   The workflow uses `GITHUB_TOKEN` to push release tags. Repository tag
-   protection or rulesets for release tag patterns must allow that token, or
-   the workflow must be updated to use an approved GitHub App or PAT token.
+   Release tagging uses a short-lived GitHub App installation token scoped to
+   this repository. A repository or organization admin must configure it before
+   enabling automatic releases:
+
+   - Install an approved GitHub App on `IBM/cpex-plugins` with repository
+     **Contents: read and write** and **Workflows: read and write** permissions.
+   - Set the Actions variable `RELEASE_APP_CLIENT_ID` to the App's client ID.
+   - Set the Actions secret `RELEASE_APP_PRIVATE_KEY` to the App's private key.
+   - If release tag rulesets restrict tag creation, allow the release App.
+
+   The token is passed to `actions/checkout`, which supplies Git's push
+   credentials. The built-in `GITHUB_TOKEN` cannot grant workflow-file write
+   permission, which GitHub can require when tagging an older commit after
+   workflows have changed on `main`. The token action is pinned to a commit
+   and revokes its installation token at the end of the tagging job.
 
    Release tags use the hyphenated plugin slug, not the directory/module
    underscore form. CI creates tags in this form:
@@ -229,9 +241,10 @@ new version of an existing managed plugin to PyPI.
    The release page should also exist at
    `https://pypi.org/project/cpex-rate-limiter/0.0.5/`.
 
-The CI workflows create tags only after their required checks pass. They call
-the matching release workflow directly for publishing rather than relying on a
-bot-created tag push. Both release workflows resolve every catalog tag, then
+The CI workflows create tags only after their required checks pass. Their
+App-authenticated tag pushes trigger the release workflows; CI does not also
+dispatch a release workflow, which would create a duplicate release run.
+Both release workflows resolve every catalog tag, then
 language guards skip all post-resolution jobs in the wrong-language workflow.
 The matching workflow validates metadata and versions, builds and tests the
 plugin's artifacts, and publishes only that plugin. PyPI publishing is allowed
@@ -241,7 +254,9 @@ Every release job checks out the immutable workflow commit (`github.sha`).
 A supplied release tag must resolve to that same commit; it cannot select
 different code to execute within the workflow's cache scope. For a manual
 release, dispatch on the release tag (`gh workflow run <workflow> --ref <tag>
--f tag=<tag> ...`), as the CI workflows already do. A nonexistent tag is allowed
+-f tag=<tag> ...`). To retry a release for an existing tag, rerun its failed
+release jobs or dispatch on that tag; rerunning the tagging job does not push
+an existing tag again. A nonexistent tag is allowed
 only for PR artifact validation with publishing disabled.
 
 Dependency refresh work is separate from the release process. Track broader

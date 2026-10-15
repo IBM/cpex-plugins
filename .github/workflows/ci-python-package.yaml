@@ -150,16 +150,24 @@ jobs:
       }}
     runs-on: ubuntu-latest
     permissions:
-      actions: write
-      contents: write
+      contents: read
     steps:
+      - name: Create release App token
+        id: release-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-workflows: write
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          token: ${{ steps.release-token.outputs.token }}
 
       - name: Create release tags for bumped plugin versions
         env:
-          GH_TOKEN: ${{ github.token }}
           RELEASE_TAGS: ${{ needs.validate-and-detect.outputs.python_release_validation_tags }}
         run: |
           set -euo pipefail
@@ -196,11 +204,4 @@ jobs:
                 fi
               }
             fi
-            gh workflow run release-python-package.yaml \
-              --ref "${tag}" \
-              -f "tag=${tag}" \
-              -f repository=pypi \
-              -f publish_enabled=true
-            release_run_url="$(gh run list -w release-python-package.yaml --limit 1 --json url --jq '.[0].url')"
-            echo "Dispatched PyPI release workflow for ${tag}: ${release_run_url}"
           done < <(python3 -c 'import json, os; [print(tag) for tag in json.loads(os.environ["RELEASE_TAGS"])]')
