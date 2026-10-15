@@ -512,7 +512,7 @@ dev = [
 
 [[package]]
 name = "cpex-ica-metering-exporter"
-version = "0.1.2"
+version = "0.1.3"
 source = { editable = "plugins/python/ica_metering_exporter" }
 dependencies = [
     { name = "cpex" },
@@ -532,7 +532,7 @@ dev = [
 requires-dist = [
     { name = "cpex", specifier = ">=0.1.4,<0.2" },
     { name = "httpx", specifier = ">=0.27,<1" },
-    { name = "pyjwt", specifier = ">=2.8,<3" },
+    { name = "pyjwt", specifier = ">=2.15.0,<3" },
 ]
 
 [package.metadata.requires-dev]
