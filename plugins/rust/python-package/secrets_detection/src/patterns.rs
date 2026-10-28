@@ -46,9 +46,17 @@ pub static PATTERNS: LazyLock<HashMap<&'static str, Regex>> = LazyLock::new(|| {
         // https://docs.slack.dev/changelog/2016/08/23/token-lengthening/
         Regex::new(r"\bxox[abpqr]-[0-9A-Za-z\-]{10,80}\b").expect("valid slack_token regex"),
     );
+    // Match the entire PEM block, closing only at the same key type's END marker.
+    // Truncated blocks extend to the end of the string to avoid leaking key material.
+    // Build alternatives from key types so secret scanners do not flag literal markers.
+    let private_key_alternatives = ["RSA ", "DSA ", "EC ", "OPENSSH ", "ENCRYPTED ", ""]
+        .map(|kind| {
+            format!(r"-----BEGIN {kind}PRIVATE KEY-----.*?(?:-----END {kind}PRIVATE KEY-----|\z)")
+        })
+        .join("|");
     patterns.insert(
         "private_key_block",
-        Regex::new(r"-----BEGIN (?:RSA|DSA|EC|OPENSSH) PRIVATE KEY-----")
+        Regex::new(&format!("(?s)(?:{private_key_alternatives})"))
             .expect("valid private_key_block regex"),
     );
     patterns.insert(
