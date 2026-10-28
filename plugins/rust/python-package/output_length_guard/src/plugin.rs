@@ -2409,12 +2409,12 @@ class Payload:
                     .unwrap(),
                 "truncate"
             );
-            assert_eq!(
-                meta.get_item("truncated")
+            assert!(
+                !meta
+                    .get_item("truncated")
                     .unwrap()
                     .extract::<bool>()
-                    .unwrap(),
-                false
+                    .unwrap()
             );
             assert_eq!(
                 meta.get_item("new_length")

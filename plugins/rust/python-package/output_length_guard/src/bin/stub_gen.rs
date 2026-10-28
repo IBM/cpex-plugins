@@ -6,10 +6,9 @@
 #[cfg(feature = "stub-gen")]
 fn main() {
     use output_length_guard_rust::stub_info;
-    use pyo3_stub_gen::generate;
 
-    let stub = stub_info();
-    generate(&stub).unwrap();
+    let stub = stub_info().expect("Failed to get stub info");
+    stub.generate().expect("Failed to generate stub file");
 }
 
 #[cfg(not(feature = "stub-gen"))]

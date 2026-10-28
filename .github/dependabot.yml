@@ -9,33 +9,36 @@ updates:
       time: "08:00"
       timezone: UTC
     groups:
-      # Group all minor/patch bumps into one PR; major versions open individually
-      rust-minor-patch:
-        update-types:
-          - minor
-          - patch
+      # Keep each ecosystem in a single update PR, including 0.x minor bumps.
+      rust-dependencies:
+        patterns:
+          - "*"
     labels:
       - dependencies
       - rust
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 1
 
   # Python dependencies — root uv workspace (all plugins via pyproject.toml)
   - package-ecosystem: uv
     directory: /
+    # Match tool.uv.exclude-newer in pyproject.toml.
+    cooldown:
+      default-days: 10
+      exclude:
+        - certifi
     schedule:
       interval: weekly
       day: monday
       time: "08:00"
       timezone: UTC
     groups:
-      python-minor-patch:
-        update-types:
-          - minor
-          - patch
+      python-dependencies:
+        patterns:
+          - "*"
     labels:
       - dependencies
       - "python:uv"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 1
 
   # GitHub Actions pinned-SHA bumps
   - package-ecosystem: github-actions
@@ -46,10 +49,9 @@ updates:
       time: "08:00"
       timezone: UTC
     groups:
-      actions-minor-patch:
-        update-types:
-          - minor
-          - patch
+      actions-dependencies:
+        patterns:
+          - "*"
     labels:
       - dependencies
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 1

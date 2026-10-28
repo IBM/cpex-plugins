@@ -868,9 +868,9 @@ mod tests {
                 let (clock, _handle) = FakeClock::new(1_000_000);
                 let limit = crate::config::parse_rate("2/h").unwrap();
                 let cfg = EngineConfig {
-                    by_user: (dimension == "user").then_some(limit.clone()),
+                    by_user: (dimension == "user").then_some(limit),
                     by_user_per_server: Some(crate::config::parse_rate("10/h").unwrap()),
-                    by_tenant: (dimension == "tenant").then_some(limit.clone()),
+                    by_tenant: (dimension == "tenant").then_some(limit),
                     by_tool: if dimension == "name" {
                         HashMap::from([("summary".to_string(), limit)])
                     } else {
