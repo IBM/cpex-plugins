@@ -62,6 +62,112 @@ mod tests {
 
     const SECRET_FIXTURE: &str = "FAKESecretAccessKeyForTestingEXAMPLE0000"; // pragma: allowlist secret
 
+    fn private_key_config() -> SecretsDetectionConfig {
+        SecretsDetectionConfig {
+            enabled: std::collections::HashMap::from([("private_key_block".to_string(), true)]),
+            redact: true,
+            redaction_text: "[REDACTED]".to_string(),
+            ..Default::default()
+        }
+    }
+
+    // Assemble markers so secret scanners do not flag the placeholder fixtures.
+    fn pem_marker(boundary: &str, kind: &str) -> String {
+        format!("-----{boundary} {kind}PRIVATE KEY-----")
+    }
+
+    #[test]
+    fn redacts_full_pem_private_key_blocks() {
+        let config = private_key_config();
+
+        for kind in ["RSA ", "DSA ", "EC ", "OPENSSH ", "ENCRYPTED ", ""] {
+            for newline in ["\n", "\r\n", ""] {
+                let text = format!(
+                    "before {}{newline}FAKE_BODY_1{newline}FAKE_BODY_2=={newline}{} after",
+                    pem_marker("BEGIN", kind),
+                    pem_marker("END", kind)
+                );
+                let (findings, redacted) = detect_and_redact(&text, &config);
+
+                assert_eq!(findings.len(), 1, "{kind:?}/{newline:?}: {findings:?}");
+                assert_eq!(findings[0].pii_type, "private_key_block");
+                assert_eq!(redacted, "before [REDACTED] after", "{kind:?}/{newline:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn redacts_each_pem_private_key_block_separately() {
+        let config = private_key_config();
+
+        for second_kind in ["RSA ", "EC "] {
+            let text = format!(
+                "before\n{}\nFAKE_A\n{}\nmiddle\n{}\nFAKE_B\n{}\nafter",
+                pem_marker("BEGIN", "RSA "),
+                pem_marker("END", "RSA "),
+                pem_marker("BEGIN", second_kind),
+                pem_marker("END", second_kind)
+            );
+            let (findings, redacted) = detect_and_redact(&text, &config);
+
+            assert_eq!(findings.len(), 2, "{second_kind:?}: {findings:?}");
+            assert_eq!(redacted, "before\n[REDACTED]\nmiddle\n[REDACTED]\nafter");
+        }
+    }
+
+    #[test]
+    fn redacts_truncated_pem_private_key_blocks_to_end_of_text() {
+        let config = private_key_config();
+
+        for kind in ["RSA ", "DSA ", "EC ", "OPENSSH ", "ENCRYPTED ", ""] {
+            let text = format!("before\n{}\nFAKE_TRUNCATED_BODY", pem_marker("BEGIN", kind));
+            let (findings, redacted) = detect_and_redact(&text, &config);
+
+            assert_eq!(findings.len(), 1, "{kind:?}: {findings:?}");
+            assert_eq!(redacted, "before\n[REDACTED]", "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn pem_private_key_blocks_require_a_matching_end_marker() {
+        let config = private_key_config();
+        let kinds = ["RSA ", "DSA ", "EC ", "OPENSSH ", "ENCRYPTED ", ""];
+
+        for begin_kind in kinds {
+            for end_kind in kinds.into_iter().filter(|kind| *kind != begin_kind) {
+                let text = format!(
+                    "before\n{}\nFAKE_BODY_1\n{}\nFAKE_BODY_2",
+                    pem_marker("BEGIN", begin_kind),
+                    pem_marker("END", end_kind)
+                );
+                let (findings, redacted) = detect_and_redact(&text, &config);
+
+                assert_eq!(
+                    findings.len(),
+                    1,
+                    "{begin_kind:?}/{end_kind:?}: {findings:?}"
+                );
+                assert_eq!(
+                    redacted, "before\n[REDACTED]",
+                    "{begin_kind:?}/{end_kind:?}"
+                );
+
+                let text = format!("{text}\n{}\nafter", pem_marker("END", begin_kind));
+                let (findings, redacted) = detect_and_redact(&text, &config);
+
+                assert_eq!(
+                    findings.len(),
+                    1,
+                    "{begin_kind:?}/{end_kind:?}: {findings:?}"
+                );
+                assert_eq!(
+                    redacted, "before\n[REDACTED]\nafter",
+                    "{begin_kind:?}/{end_kind:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn detects_aws_secret_access_key() {
         let config = SecretsDetectionConfig::default();
@@ -267,7 +373,12 @@ mod tests {
             ),
             (
                 "private_key_block",
-                "private_key_block=-----BEGIN RSA PRIVATE KEY-----".to_string(),
+                format!(
+                    "private_key_block={}\n{}\n{}",
+                    pem_marker("BEGIN", "RSA "),
+                    "A".repeat(64),
+                    pem_marker("END", "RSA ")
+                ),
                 "private_key_block=[TESTING-REDACTED]".to_string(),
             ),
             (

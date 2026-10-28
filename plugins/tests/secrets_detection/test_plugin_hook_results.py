@@ -1,3 +1,6 @@
+# Copyright 2026
+# SPDX-License-Identifier: Apache-2.0
+
 import pytest
 
 from cpex.framework.extensions import Extensions, RequestExtension
@@ -62,6 +65,38 @@ class TestPluginHookResults:
         )
         assert result.modified_payload.result["isError"] is False
         # No extensions/trace_id passed => gated, no metadata write at all.
+        assert result.metadata == {}
+
+    @pytest.mark.parametrize("kind", ["", "ENCRYPTED "])
+    @pytest.mark.parametrize("redact", [True, False])
+    async def test_tool_post_invoke_handles_pem_private_key_blocks(self, kind, redact):
+        plugin = SecretsDetectionPlugin(
+            make_config(block_on_detection=not redact, redact=redact)
+        )
+        begin = "".join(("-----", "BEGIN ", kind, "PRIVATE KEY", "-----"))
+        end = "".join(("-----", "END ", kind, "PRIVATE KEY", "-----"))
+        text = f"before\n{begin}\nFAKE_BODY_1\nFAKE_BODY_2==\n{end}\nafter"
+        payload = ToolPostInvokePayload(
+            name="get_file_contents",
+            result={"content": [{"type": "text", "text": text}], "isError": False},
+        )
+
+        result = await plugin.tool_post_invoke(payload, make_context())
+
+        assert payload.result["content"][0]["text"] == text
+        if redact:
+            assert result.continue_processing is True
+            assert result.violation is None
+            assert result.modified_payload is not None
+            assert result.modified_payload.result["content"][0]["text"] == (
+                "before\n[REDACTED]\nafter"
+            )
+            assert result.modified_payload.result["isError"] is False
+        else:
+            assert result.continue_processing is False
+            assert result.violation is not None
+            assert result.violation.code == "SECRETS_DETECTED"
+            assert "FAKE_BODY" not in str(result.violation)
         assert result.metadata == {}
 
     @pytest.mark.parametrize("assignment", AWS_SECRET_ASSIGNMENTS)

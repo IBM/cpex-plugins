@@ -132,6 +132,8 @@ config:
 
 - Redaction preserves payload shape where possible instead of flattening everything to plain dicts.
 - `aws_secret_access_key` recognizes `=` and `:` assignments with optional single or double quotes around the value.
+- `private_key_block` detects whole PEM private key blocks for RSA, DSA, EC, OpenSSH, encrypted, and generic PKCS#8 keys. Redaction replaces the opening marker, key body, and matching closing marker with one replacement.
+- A private key block closes only at an end marker of the same key type. If that marker is missing, redaction extends to the end of the string. Blocks split across separate string values are not scanned as one block.
 - `aws_secret_access_key`, `generic_api_key_assignment`, and `base64_24` use capture-group redaction so only the detected secret span is replaced; assignment labels, separators, quotes, and leading non-base64 boundary characters are preserved.
 - Broad detectors remain opt-in to reduce noisy matches on ordinary identifiers.
 - Binary resource bodies are not scanned; `resource_post_fetch` only scans text content exposed as `payload.content.text`.
