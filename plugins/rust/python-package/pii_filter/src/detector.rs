@@ -52,6 +52,12 @@ fn collect_detections(
                     continue;
                 }
 
+                if pattern.pii_type == PIIType::CreditCard
+                    && is_decimal_number_fragment(text, start, end)
+                {
+                    continue;
+                }
+
                 candidates.push(CandidateDetection {
                     pii_type: pattern.pii_type,
                     value,
@@ -787,6 +793,18 @@ fn is_valid_detection(pii_type: PIIType, value: &str) -> bool {
     }
 }
 
+/// Reports whether `text[start..end]` is the integer or fractional part of a decimal number.
+///
+/// The `regex` crate has no lookaround, and `\b` matches next to `.`, so the credit-card
+/// pattern also matches the digits on either side of a decimal point (`92.4319567256144805`).
+/// Masking such a run corrupts numeric payloads, for example JSON tool results.
+fn is_decimal_number_fragment(text: &str, start: usize, end: usize) -> bool {
+    let bytes = text.as_bytes();
+    let is_fractional_part = matches!(&bytes[..start], [.., digit, b'.'] if digit.is_ascii_digit());
+    let is_integer_part = matches!(&bytes[end..], [b'.', digit, ..] if digit.is_ascii_digit());
+    is_fractional_part || is_integer_part
+}
+
 fn required_detection_field<'py, T>(dict: &Bound<'py, PyDict>, field: &str) -> PyResult<T>
 where
     T: for<'a, 'py2> pyo3::FromPyObject<'a, 'py2>,
@@ -1060,6 +1078,64 @@ mod tests {
             !detector
                 .detect_internal("Card 0000-0000-0000-0000")
                 .contains_key(&PIIType::CreditCard)
+        );
+    }
+
+    #[test]
+    fn test_credit_card_ignores_digit_runs_inside_decimal_numbers() {
+        let config = PIIConfig {
+            detect_credit_card: true,
+            detect_ssn: false,
+            detect_email: false,
+            detect_phone: false,
+            detect_ip_address: false,
+            detect_date_of_birth: false,
+            detect_passport: false,
+            detect_driver_license: false,
+            detect_bank_account: false,
+            detect_medical_record: false,
+            detect_bsn: false,
+            default_mask_strategy: MaskingStrategy::Partial,
+            ..Default::default()
+        };
+        let patterns = compile_patterns(&config).unwrap();
+        let detector = PIIDetectorRust { patterns, config };
+
+        // 4319567256144805 and 4111111111111111 both pass Luhn with a Visa prefix.
+        let numeric_payloads = [
+            r#"{"lat": 92.4319567256144805}"#,
+            r#"{"lat": -0.4111111111111111, "lon": 4111111111111111.25}"#,
+            "ratio=3.4111111111111111",
+        ];
+        for text in numeric_payloads {
+            let detections = detector.detect_internal(text);
+            assert!(
+                !detections.contains_key(&PIIType::CreditCard),
+                "decimal number was detected as a credit card: {text}"
+            );
+            let masked = masking::mask_pii(text, &detections, &detector.config).unwrap();
+            assert_eq!(masked, text);
+        }
+
+        let card_texts = [
+            "Card 4111111111111111.",
+            "Card 4111111111111111. Expires 12/29",
+            "Paid 12.50 with 4111-1111-1111-1111",
+            "Cards: 4111111111111111, 4319567256144805.",
+        ];
+        for text in card_texts {
+            assert!(
+                detector
+                    .detect_internal(text)
+                    .contains_key(&PIIType::CreditCard),
+                "credit card next to punctuation was not detected: {text}"
+            );
+        }
+        assert_eq!(
+            detector.detect_internal("Cards: 4111111111111111, 4319567256144805.")
+                [&PIIType::CreditCard]
+                .len(),
+            2
         );
     }
 

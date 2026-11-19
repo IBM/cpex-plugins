@@ -134,6 +134,7 @@ This section describes the current Rust detector behavior so users know what is 
 **Does not cover**
 - Numbers that fail Luhn validation
 - Arbitrary long digit strings that do not match a recognized card-prefix family
+- Digit runs that are the integer or fractional part of a decimal number, such as `92.4319567256144805`
 - Full issuer-specific business rules beyond prefix and Luhn checks
 
 ### Email Addresses
