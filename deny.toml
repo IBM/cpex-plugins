@@ -11,6 +11,7 @@ ignore = [
     "RUSTSEC-2025-0090", # unic-emoji-char via rustpython-parser
     "RUSTSEC-2025-0098", # unic-ucd-version via rustpython-parser
     "RUSTSEC-2025-0100", # unic-ucd-ident via rustpython-parser
+    { id = "RUSTSEC-2026-0543", reason = "Only used during optional stub generation. Exception expires 2027-01-15" },
 ]
 
 [bans.workspace-dependencies]
