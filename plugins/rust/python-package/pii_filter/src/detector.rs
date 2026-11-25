@@ -798,8 +798,14 @@ fn is_valid_detection(pii_type: PIIType, value: &str) -> bool {
 /// The `regex` crate has no lookaround, and `\b` matches next to `.`, so the credit-card
 /// pattern also matches the digits on either side of a decimal point (`92.4319567256144805`).
 /// Masking such a run corrupts numeric payloads, for example JSON tool results.
+///
+/// A decimal number holds no `-` or space separators, so a grouped match
+/// (`4111-1111-1111-1111.12/29`) is never a fragment and stays detected.
 fn is_decimal_number_fragment(text: &str, start: usize, end: usize) -> bool {
     let bytes = text.as_bytes();
+    if !bytes[start..end].iter().all(u8::is_ascii_digit) {
+        return false;
+    }
     let is_fractional_part = matches!(&bytes[..start], [.., digit, b'.'] if digit.is_ascii_digit());
     let is_integer_part = matches!(&bytes[end..], [b'.', digit, ..] if digit.is_ascii_digit());
     is_fractional_part || is_integer_part
@@ -1122,6 +1128,10 @@ mod tests {
             "Card 4111111111111111. Expires 12/29",
             "Paid 12.50 with 4111-1111-1111-1111",
             "Cards: 4111111111111111, 4319567256144805.",
+            // Grouped cards are never decimal fragments, even when a decimal point follows.
+            "Card 4111-1111-1111-1111.12/29",
+            "Card 4111 1111 1111 1111.12/29",
+            "Ref 0.4111-1111-1111-1111",
         ];
         for text in card_texts {
             assert!(
