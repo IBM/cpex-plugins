@@ -8,7 +8,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList, PyMapping, PySet, PyString, PyTuple};
 #[cfg(feature = "stub-gen")]
 use pyo3_stub_gen::derive::*;
+use regex::bytes::Regex;
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use super::config::{MaskingStrategy, PIIConfig, PIIType};
 use super::masking;
@@ -49,6 +51,12 @@ fn collect_detections(
                 }
 
                 if !is_valid_detection(pattern.pii_type, &value) {
+                    continue;
+                }
+
+                if pattern.pii_type == PIIType::CreditCard
+                    && is_decimal_number_fragment(text, start, end)
+                {
                     continue;
                 }
 
@@ -787,6 +795,43 @@ fn is_valid_detection(pii_type: PIIType, value: &str) -> bool {
     }
 }
 
+// A period can separate a card from a day/month date or a month/year expiry.
+const DAY_MONTH: &str = concat!(
+    r"(?:0?[1-9]|[12][0-9])/(?:0?[1-9]|1[0-2])",
+    r"|30/(?:0?[13-9]|1[0-2])",
+    r"|31/(?:0?[13578]|1[02])",
+);
+const MONTH_YEAR: &str = r"(?:0?[1-9]|1[0-2])/(?:[0-9]{2}|[0-9]{4})";
+// The extra byte distinguishes sentence punctuation from a decimal point outside the date.
+const DATE_CONTEXT_LEN: usize = b" .12/2029.".len();
+static DATE_BEFORE_CARD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(
+        r"(?-u)(?:\A|[^0-9.]|(?:\A|[^0-9])\.)(?:{DAY_MONTH}|{MONTH_YEAR})\.\z"
+    ))
+    .expect("valid date before card pattern")
+});
+static DATE_AFTER_CARD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(
+        r"(?-u)\A\.(?:{DAY_MONTH}|{MONTH_YEAR})(?:\z|[^0-9.]|\.(?:\z|[^0-9]))"
+    ))
+    .expect("valid date after card pattern")
+});
+
+/// Reports whether a decimal point joins the card candidate to another numeric component.
+fn is_decimal_number_fragment(text: &str, start: usize, end: usize) -> bool {
+    let bytes = text.as_bytes();
+    if !bytes[start..end].iter().all(u8::is_ascii_digit) {
+        return false;
+    }
+    let before = &bytes[start.saturating_sub(DATE_CONTEXT_LEN)..start];
+    let after = &bytes[end..end.saturating_add(DATE_CONTEXT_LEN).min(bytes.len())];
+    let is_fractional_part = matches!(before, [.., digit, b'.'] if digit.is_ascii_digit())
+        && !DATE_BEFORE_CARD.is_match(before);
+    let is_integer_part = matches!(after, [b'.', digit, ..] if digit.is_ascii_digit())
+        && !DATE_AFTER_CARD.is_match(after);
+    is_fractional_part || is_integer_part
+}
+
 fn required_detection_field<'py, T>(dict: &Bound<'py, PyDict>, field: &str) -> PyResult<T>
 where
     T: for<'a, 'py2> pyo3::FromPyObject<'a, 'py2>,
@@ -1061,6 +1106,114 @@ mod tests {
                 .detect_internal("Card 0000-0000-0000-0000")
                 .contains_key(&PIIType::CreditCard)
         );
+    }
+
+    #[test]
+    fn test_credit_card_ignores_digit_runs_inside_decimal_numbers() {
+        let config = PIIConfig {
+            detect_credit_card: true,
+            detect_ssn: false,
+            detect_email: false,
+            detect_phone: false,
+            detect_ip_address: false,
+            detect_date_of_birth: false,
+            detect_passport: false,
+            detect_driver_license: false,
+            detect_bank_account: false,
+            detect_medical_record: false,
+            detect_bsn: false,
+            default_mask_strategy: MaskingStrategy::Partial,
+            ..Default::default()
+        };
+        let patterns = compile_patterns(&config).unwrap();
+        let detector = PIIDetectorRust { patterns, config };
+
+        // 4319567256144805 and 4111111111111111 both pass Luhn with a Visa prefix.
+        let numeric_payloads = [
+            r#"{"lat": 92.4319567256144805}"#,
+            r#"{"lat": -0.4111111111111111, "lon": 4111111111111111.25}"#,
+            "ratio=3.4111111111111111",
+        ];
+        for text in numeric_payloads {
+            let detections = detector.detect_internal(text);
+            assert!(
+                !detections.contains_key(&PIIType::CreditCard),
+                "decimal number was detected as a credit card: {text}"
+            );
+            let masked = masking::mask_pii(text, &detections, &detector.config).unwrap();
+            assert_eq!(masked, text);
+        }
+
+        let card_texts = [
+            "Card 4111111111111111.",
+            "Card 4111111111111111. Expires 12/29",
+            "Paid 12.50 with 4111-1111-1111-1111",
+            "Cards: 4111111111111111, 4319567256144805.",
+            // Grouped cards are never decimal fragments, even when a decimal point follows.
+            "Card 4111-1111-1111-1111.12/29",
+            "Card 4111 1111 1111 1111.12/29",
+            "Ref 0.4111-1111-1111-1111",
+        ];
+        for text in card_texts {
+            assert!(
+                detector
+                    .detect_internal(text)
+                    .contains_key(&PIIType::CreditCard),
+                "credit card next to punctuation was not detected: {text}"
+            );
+        }
+        assert_eq!(
+            detector.detect_internal("Cards: 4111111111111111, 4319567256144805.")
+                [&PIIType::CreditCard]
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn test_credit_card_masking_next_to_slash_dates() {
+        let config = PIIConfig {
+            detect_credit_card: true,
+            default_mask_strategy: MaskingStrategy::Partial,
+            ..Default::default()
+        };
+        let patterns = compile_patterns(&config).unwrap();
+        let detector = PIIDetectorRust { patterns, config };
+
+        for (text, expected) in [
+            (
+                "Card 4111111111111111.12/29",
+                "Card ****-****-****-1111.12/29",
+            ),
+            ("29/12.4111111111111111", "29/12.****-****-****-1111"),
+            ("9/2.4111111111111111", "9/2.****-****-****-1111"),
+            ("29/2.4111111111111111", "29/2.****-****-****-1111"),
+            (
+                "Card 4111111111111111.12/29.",
+                "Card ****-****-****-1111.12/29.",
+            ),
+            ("«12/2029.4111111111111111", "«12/2029.****-****-****-1111"),
+            (
+                "Card 4111111111111111.12/2029»",
+                "Card ****-****-****-1111.12/2029»",
+            ),
+        ] {
+            let detections = detector.detect_internal(text);
+            let masked = masking::mask_pii(text, &detections, &detector.config).unwrap();
+            assert_eq!(masked, expected, "{text}");
+        }
+        for text in [
+            "ratio=123/92.4319567256144805",
+            "ratio=4111111111111111.25/100",
+            "ratio=4111111111111111.12/12345",
+            "ratio=0.25/10.4319567256144805",
+            "ratio=4111111111111111.12/29.5",
+            "ratio=31/4.4319567256144805",
+        ] {
+            let detections = detector.detect_internal(text);
+            let masked = masking::mask_pii(text, &detections, &detector.config).unwrap();
+            assert_eq!(masked, text);
+        }
     }
 
     #[test]

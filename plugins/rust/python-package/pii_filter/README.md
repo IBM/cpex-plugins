@@ -130,10 +130,12 @@ This section describes the current Rust detector behavior so users know what is 
 **Covers**
 - Common 13-19 digit card numbers with spaces or dashes
 - Luhn-valid numbers from the major issuer families currently recognized by the detector, including Visa, Mastercard, American Express, Discover, Diners Club, JCB, UnionPay, and Maestro
+- Card numbers separated by a period from a day/month date or a month/year expiry, such as `29/12.<card>` or `<card>.12/2029`. If an arithmetic expression has the same form, the detector masks the card candidate.
 
 **Does not cover**
 - Numbers that fail Luhn validation
 - Arbitrary long digit strings that do not match a recognized card-prefix family
+- Digit runs that are the integer or fractional part of a decimal number, such as `92.4319567256144805`
 - Full issuer-specific business rules beyond prefix and Luhn checks
 
 ### Email Addresses
