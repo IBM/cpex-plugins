@@ -796,16 +796,25 @@ fn is_valid_detection(pii_type: PIIType, value: &str) -> bool {
 }
 
 // A period can separate a card from a day/month date or a month/year expiry.
-const SLASH_DATE: &str =
-    r"(?:(?:0?[1-9]|[12][0-9]|3[01])/(?:0?[1-9]|1[0-2])|(?:0?[1-9]|1[0-2])/(?:[0-9]{2}|[0-9]{4}))";
-const DATE_CONTEXT_LEN: usize = b" 12/2029.".len();
+const DAY_MONTH: &str = concat!(
+    r"(?:0?[1-9]|[12][0-9])/(?:0?[1-9]|1[0-2])",
+    r"|30/(?:0?[13-9]|1[0-2])",
+    r"|31/(?:0?[13578]|1[02])",
+);
+const MONTH_YEAR: &str = r"(?:0?[1-9]|1[0-2])/(?:[0-9]{2}|[0-9]{4})";
+// The extra byte distinguishes sentence punctuation from a decimal point outside the date.
+const DATE_CONTEXT_LEN: usize = b" .12/2029.".len();
 static DATE_BEFORE_CARD: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!(r"(?-u)(?:\A|[^0-9]){SLASH_DATE}\.\z"))
-        .expect("valid date before card pattern")
+    Regex::new(&format!(
+        r"(?-u)(?:\A|[^0-9.]|(?:\A|[^0-9])\.)(?:{DAY_MONTH}|{MONTH_YEAR})\.\z"
+    ))
+    .expect("valid date before card pattern")
 });
 static DATE_AFTER_CARD: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!(r"(?-u)\A\.{SLASH_DATE}(?:\z|[^0-9])"))
-        .expect("valid date after card pattern")
+    Regex::new(&format!(
+        r"(?-u)\A\.(?:{DAY_MONTH}|{MONTH_YEAR})(?:\z|[^0-9.]|\.(?:\z|[^0-9]))"
+    ))
+    .expect("valid date after card pattern")
 });
 
 /// Reports whether a decimal point joins the card candidate to another numeric component.
@@ -1178,27 +1187,32 @@ mod tests {
             ),
             ("29/12.4111111111111111", "29/12.****-****-****-1111"),
             ("9/2.4111111111111111", "9/2.****-****-****-1111"),
+            ("29/2.4111111111111111", "29/2.****-****-****-1111"),
+            (
+                "Card 4111111111111111.12/29.",
+                "Card ****-****-****-1111.12/29.",
+            ),
             ("«12/2029.4111111111111111", "«12/2029.****-****-****-1111"),
             (
                 "Card 4111111111111111.12/2029»",
                 "Card ****-****-****-1111.12/2029»",
             ),
-            (
-                "ratio=123/92.4319567256144805",
-                "ratio=123/92.4319567256144805",
-            ),
-            (
-                "ratio=4111111111111111.25/100",
-                "ratio=4111111111111111.25/100",
-            ),
-            (
-                "ratio=4111111111111111.12/12345",
-                "ratio=4111111111111111.12/12345",
-            ),
         ] {
             let detections = detector.detect_internal(text);
             let masked = masking::mask_pii(text, &detections, &detector.config).unwrap();
             assert_eq!(masked, expected, "{text}");
+        }
+        for text in [
+            "ratio=123/92.4319567256144805",
+            "ratio=4111111111111111.25/100",
+            "ratio=4111111111111111.12/12345",
+            "ratio=0.25/10.4319567256144805",
+            "ratio=4111111111111111.12/29.5",
+            "ratio=31/4.4319567256144805",
+        ] {
+            let detections = detector.detect_internal(text);
+            let masked = masking::mask_pii(text, &detections, &detector.config).unwrap();
+            assert_eq!(masked, text);
         }
     }
 
