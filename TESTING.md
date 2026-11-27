@@ -88,7 +88,7 @@ Use coverage to find missing behavior, then add assertions that catch a real
 failure. A test that only executes a line adds no useful protection.
 
 To reproduce the coverage job, install `llvm-tools-preview`,
-`cargo-llvm-cov` 0.8.4, and `cargo-nextest` 0.9.133, then run this in Bash from
+`cargo-llvm-cov` 0.9.2, and `cargo-nextest` 0.9.133, then run this in Bash from
 the repository root:
 
 ```bash

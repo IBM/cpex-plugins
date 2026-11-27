@@ -13,7 +13,7 @@ STUB_FILES := cpex_retry_with_backoff/__init__.pyi cpex_retry_with_backoff/retry
 WHEEL_DIR := ../../../../target/wheels
 COVERAGE_REPORT := coverage/cobertura.xml
 COVERAGE_MIN := 90.00
-CARGO_LLVM_COV_VERSION := 0.8.4
+CARGO_LLVM_COV_VERSION := 0.9.2
 
 GREEN := \033[0;32m
 YELLOW := \033[0;33m
@@ -124,7 +124,8 @@ ci-build: check-all verify-stubs build install-wheel
 coverage:
 	@echo "$(GREEN)Generating Rust coverage...$(NC)"
 	rustup component add llvm-tools-preview
-	cargo llvm-cov --version >/dev/null 2>&1 || cargo install cargo-llvm-cov --version $(CARGO_LLVM_COV_VERSION) --locked
+	cargo llvm-cov --version 2>/dev/null | grep -Fxq "cargo-llvm-cov $(CARGO_LLVM_COV_VERSION)" || \
+		cargo install cargo-llvm-cov --version $(CARGO_LLVM_COV_VERSION) --locked
 	cargo llvm-cov clean --workspace
 	mkdir -p $(REPO_ROOT)/coverage
 	$(CARGO) llvm-cov nextest --no-report -p $(CARGO_PACKAGE) -P $(NEXTEST_PROFILE)
