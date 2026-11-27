@@ -8,7 +8,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList, PyMapping, PySet, PyString, PyTuple};
 #[cfg(feature = "stub-gen")]
 use pyo3_stub_gen::derive::*;
+use regex::bytes::Regex;
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use super::config::{MaskingStrategy, PIIConfig, PIIType};
 use super::masking;
@@ -793,21 +795,31 @@ fn is_valid_detection(pii_type: PIIType, value: &str) -> bool {
     }
 }
 
-/// Reports whether `text[start..end]` is the integer or fractional part of a decimal number.
-///
-/// The `regex` crate has no lookaround, and `\b` matches next to `.`, so the credit-card
-/// pattern also matches the digits on either side of a decimal point (`92.4319567256144805`).
-/// Masking such a run corrupts numeric payloads, for example JSON tool results.
-///
-/// A decimal number holds no `-` or space separators, so a grouped match
-/// (`4111-1111-1111-1111.12/29`) is never a fragment and stays detected.
+// A period can separate a card from a day/month date or a month/year expiry.
+const SLASH_DATE: &str =
+    r"(?:(?:0?[1-9]|[12][0-9]|3[01])/(?:0?[1-9]|1[0-2])|(?:0?[1-9]|1[0-2])/(?:[0-9]{2}|[0-9]{4}))";
+const DATE_CONTEXT_LEN: usize = b" 12/2029.".len();
+static DATE_BEFORE_CARD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(r"(?-u)(?:\A|[^0-9]){SLASH_DATE}\.\z"))
+        .expect("valid date before card pattern")
+});
+static DATE_AFTER_CARD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(r"(?-u)\A\.{SLASH_DATE}(?:\z|[^0-9])"))
+        .expect("valid date after card pattern")
+});
+
+/// Reports whether a decimal point joins the card candidate to another numeric component.
 fn is_decimal_number_fragment(text: &str, start: usize, end: usize) -> bool {
     let bytes = text.as_bytes();
     if !bytes[start..end].iter().all(u8::is_ascii_digit) {
         return false;
     }
-    let is_fractional_part = matches!(&bytes[..start], [.., digit, b'.'] if digit.is_ascii_digit());
-    let is_integer_part = matches!(&bytes[end..], [b'.', digit, ..] if digit.is_ascii_digit());
+    let before = &bytes[start.saturating_sub(DATE_CONTEXT_LEN)..start];
+    let after = &bytes[end..end.saturating_add(DATE_CONTEXT_LEN).min(bytes.len())];
+    let is_fractional_part = matches!(before, [.., digit, b'.'] if digit.is_ascii_digit())
+        && !DATE_BEFORE_CARD.is_match(before);
+    let is_integer_part = matches!(after, [b'.', digit, ..] if digit.is_ascii_digit())
+        && !DATE_AFTER_CARD.is_match(after);
     is_fractional_part || is_integer_part
 }
 
@@ -1147,6 +1159,47 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+    #[test]
+    fn test_credit_card_masking_next_to_slash_dates() {
+        let config = PIIConfig {
+            detect_credit_card: true,
+            default_mask_strategy: MaskingStrategy::Partial,
+            ..Default::default()
+        };
+        let patterns = compile_patterns(&config).unwrap();
+        let detector = PIIDetectorRust { patterns, config };
+
+        for (text, expected) in [
+            (
+                "Card 4111111111111111.12/29",
+                "Card ****-****-****-1111.12/29",
+            ),
+            ("29/12.4111111111111111", "29/12.****-****-****-1111"),
+            ("9/2.4111111111111111", "9/2.****-****-****-1111"),
+            ("«12/2029.4111111111111111", "«12/2029.****-****-****-1111"),
+            (
+                "Card 4111111111111111.12/2029»",
+                "Card ****-****-****-1111.12/2029»",
+            ),
+            (
+                "ratio=123/92.4319567256144805",
+                "ratio=123/92.4319567256144805",
+            ),
+            (
+                "ratio=4111111111111111.25/100",
+                "ratio=4111111111111111.25/100",
+            ),
+            (
+                "ratio=4111111111111111.12/12345",
+                "ratio=4111111111111111.12/12345",
+            ),
+        ] {
+            let detections = detector.detect_internal(text);
+            let masked = masking::mask_pii(text, &detections, &detector.config).unwrap();
+            assert_eq!(masked, expected, "{text}");
+        }
     }
 
     #[test]
